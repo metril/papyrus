@@ -4,16 +4,19 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 
+from app.auth.oidc import setup_oauth
 from app.config import settings
 from app.routers import auth, cloud, copy, email, jobs, printer, scanner, smb, system
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: ensure storage directories exist
+    # Startup
     os.makedirs(settings.scan_dir, exist_ok=True)
     os.makedirs(settings.upload_dir, exist_ok=True)
+    setup_oauth()
     yield
     # Shutdown: cleanup if needed
 
@@ -24,6 +27,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Session middleware for OIDC (must be added before CORS)
+app.add_middleware(SessionMiddleware, secret_key=settings.session_secret)
 
 app.add_middleware(
     CORSMiddleware,
