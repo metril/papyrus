@@ -43,7 +43,7 @@ cp .env.example .env
 # Edit .env with your printer IP, OIDC settings, etc.
 
 # Start the application
-docker compose -f docker/docker-compose.yml up --build
+docker compose -f docker/compose.yaml up --build
 ```
 
 The web UI will be available at `http://localhost:8080`.

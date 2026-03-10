@@ -30,7 +30,7 @@ Papyrus is a web-based print and scan server for network-connected Brother DCP-L
   - `hooks/` — Custom React hooks
   - `pages/` — Route pages
   - `store/` — Zustand state stores
-- `docker/` — Dockerfile, docker-compose.yml, entrypoint, CUPS/SANE configs
+- `docker/` — Dockerfile, compose.yaml, entrypoint, CUPS/SANE configs
 
 ## Key Commands
 ```bash
@@ -47,8 +47,8 @@ cd backend && alembic upgrade head
 cd backend && alembic revision --autogenerate -m "description"
 
 # Docker
-docker compose -f docker/docker-compose.yml up --build
-docker compose -f docker/docker-compose.yml down
+docker compose -f docker/compose.yaml up --build
+docker compose -f docker/compose.yaml down
 
 # Tests
 cd backend && pytest

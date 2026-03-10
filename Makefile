@@ -9,16 +9,16 @@ dev-frontend:
 
 # Docker
 build:
-	docker compose -f docker/docker-compose.yml build
+	docker compose -f docker/compose.yaml build
 
 up:
-	docker compose -f docker/docker-compose.yml up -d
+	docker compose -f docker/compose.yaml up -d
 
 down:
-	docker compose -f docker/docker-compose.yml down
+	docker compose -f docker/compose.yaml down
 
 logs:
-	docker compose -f docker/docker-compose.yml logs -f
+	docker compose -f docker/compose.yaml logs -f
 
 # Testing
 test-backend:
@@ -29,5 +29,5 @@ test-frontend:
 
 # Cleanup
 clean:
-	docker compose -f docker/docker-compose.yml down -v
+	docker compose -f docker/compose.yaml down -v
 	rm -rf frontend/dist frontend/node_modules backend/__pycache__
