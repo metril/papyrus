@@ -14,7 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cups \
     cups-client \
-    printer-driver-brlaser \
     libcups2-dev \
     sane-utils \
     sane-airscan \

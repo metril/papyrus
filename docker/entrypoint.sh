@@ -12,7 +12,7 @@ if ! lpstat -p "${PAPYRUS_PRINTER_NAME:-Brother_DCP_L2540DW}" 2>/dev/null; then
     echo "Configuring printer ${PAPYRUS_PRINTER_NAME:-Brother_DCP_L2540DW}..."
     lpadmin -p "${PAPYRUS_PRINTER_NAME:-Brother_DCP_L2540DW}" \
         -v "${PAPYRUS_PRINTER_URI:-ipp://192.168.1.100/ipp}" \
-        -m drv:///brlaser.drv/brl2540dw.ppd \
+        -m everywhere \
         -E
     cupsenable "${PAPYRUS_PRINTER_NAME:-Brother_DCP_L2540DW}"
     cupsaccept "${PAPYRUS_PRINTER_NAME:-Brother_DCP_L2540DW}"
