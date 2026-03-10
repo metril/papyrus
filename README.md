@@ -1,0 +1,85 @@
+# Papyrus
+
+A web-based print and scan server for network-connected multifunction printers. Provides a responsive web UI for managing print jobs, scanning documents, copying, and integrating with SMB shares, email, and cloud storage.
+
+## Features
+
+- **Print Management**: Upload documents, hold-release print queue, job history
+- **Document Conversion**: Automatically converts DOCX, ODT, XLSX, PPTX to PDF for printing (via LibreOffice)
+- **Scanning**: Initiate scans from the web UI with configurable resolution, color mode, and format
+- **Multi-page ADF Scanning**: Batch scan from the automatic document feeder into a single PDF
+- **Copy**: One-click scan-then-print workflow
+- **SMB Integration**: Browse and print from network shares, save scans to shares
+- **Email**: Send scanned documents as email attachments
+- **Cloud Storage**: Upload scans to Google Drive or Dropbox
+- **Real-time Updates**: WebSocket-based live job status and scan progress
+- **Responsive Design**: Works on phones, tablets, and desktops
+- **Authentication**: OIDC (Authentik/Keycloak) for users, API tokens for programmatic access
+
+## Supported Hardware
+
+- Brother DCP-L2540DW (primary target)
+- Other CUPS/SANE-compatible printers and scanners may work with configuration
+
+## Tech Stack
+
+- **Backend**: Python 3.12, FastAPI, SQLAlchemy (async), PostgreSQL
+- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS
+- **Printing**: CUPS with brlaser driver
+- **Scanning**: SANE via scanimage (sane-airscan for WSD)
+- **Deployment**: Docker with multi-stage build, behind Traefik
+
+## Quick Start
+
+### Docker (Recommended)
+
+```bash
+# Clone the repository
+git clone <repo-url> papyrus
+cd papyrus
+
+# Copy and edit environment configuration
+cp .env.example .env
+# Edit .env with your printer IP, OIDC settings, etc.
+
+# Start the application
+docker compose -f docker/docker-compose.yml up --build
+```
+
+The web UI will be available at `http://localhost:8080`.
+
+### Development Setup
+
+```bash
+# Backend
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+alembic upgrade head
+uvicorn app.main:app --reload --port 8000
+
+# Frontend (in another terminal)
+cd frontend
+npm install
+npm run dev
+```
+
+## Configuration
+
+All configuration is via environment variables with the `PAPYRUS_` prefix. See [.env.example](.env.example) for all available options.
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `PAPYRUS_DB_URL` | PostgreSQL connection URL | Yes |
+| `PAPYRUS_OIDC_ISSUER` | OIDC provider issuer URL | Yes |
+| `PAPYRUS_OIDC_CLIENT_ID` | OIDC client ID | Yes |
+| `PAPYRUS_OIDC_CLIENT_SECRET` | OIDC client secret | Yes |
+| `PAPYRUS_PRINTER_URI` | Printer IPP URI (e.g., `ipp://192.168.1.100/ipp`) | Yes |
+| `PAPYRUS_SCANNER_DEVICE` | SANE scanner device string | Yes |
+| `PAPYRUS_ENCRYPTION_KEY` | Fernet key for encrypting secrets at rest | Yes |
+| `PAPYRUS_BASE_URL` | Public URL for OAuth callbacks | Yes |
+
+## License
+
+TBD
