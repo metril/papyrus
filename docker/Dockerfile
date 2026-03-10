@@ -37,7 +37,7 @@ RUN pip install --no-cache-dir ".[cloud]"
 COPY backend/ ./backend/
 
 # Copy built frontend
-COPY --from=frontend-build /app/frontend/dist ./static/
+COPY --from=frontend-build /app/frontend/dist ./backend/static/
 
 # Copy CUPS and SANE configuration
 COPY docker/cups/cupsd.conf /etc/cups/cupsd.conf
