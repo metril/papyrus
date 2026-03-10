@@ -11,6 +11,7 @@ FROM python:3.12-slim-bookworm
 
 # Install system dependencies: CUPS, SANE, brlaser, sane-airscan, LibreOffice, smbclient
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     cups \
     cups-client \
     printer-driver-brlaser \
