@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     # Security
     encryption_key: str = ""  # Fernet key for encrypting secrets at rest
 
+    # Development
+    dev_mode: bool = False
+
     # Application
     base_url: str = "http://localhost:8080"
     host: str = "0.0.0.0"

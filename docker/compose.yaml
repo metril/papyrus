@@ -19,6 +19,7 @@ services:
       - PAPYRUS_ENCRYPTION_KEY=${PAPYRUS_ENCRYPTION_KEY}
       - PAPYRUS_SESSION_SECRET=${PAPYRUS_SESSION_SECRET}
       - PAPYRUS_BASE_URL=${PAPYRUS_BASE_URL:-http://localhost:8080}
+      - PAPYRUS_DEV_MODE=${PAPYRUS_DEV_MODE:-false}
     labels:
       - traefik.enable=true
       - traefik.http.routers.papyrus.rule=Host(`${PAPYRUS_HOSTNAME:-papyrus.localhost}`)

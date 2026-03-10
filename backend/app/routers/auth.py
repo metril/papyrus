@@ -5,7 +5,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user, require_admin
+from app.auth.dependencies import DEV_OIDC_SUB, get_current_user, require_admin
 from app.auth.oidc import oauth
 from app.auth.tokens import generate_token
 from app.config import settings
@@ -22,9 +22,25 @@ router = APIRouter()
 
 
 @router.get("/login")
-async def login(request: Request):
+async def login(request: Request, db: AsyncSession = Depends(get_db)):
     """Redirect to OIDC provider for authentication."""
     if not settings.oidc_issuer:
+        if settings.dev_mode:
+            # Auto-login as dev admin
+            result = await db.execute(select(User).where(User.oidc_sub == DEV_OIDC_SUB))
+            user = result.scalar_one_or_none()
+            if user is None:
+                user = User(
+                    oidc_sub=DEV_OIDC_SUB,
+                    email="dev@papyrus.local",
+                    display_name="Dev Admin",
+                    role="admin",
+                )
+                db.add(user)
+                await db.commit()
+                await db.refresh(user)
+            request.session["user_id"] = str(user.id)
+            return RedirectResponse(url="/", status_code=302)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="OIDC not configured",
