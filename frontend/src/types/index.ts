@@ -33,7 +33,7 @@ export interface PrintJob {
   copies: number;
   duplex: boolean;
   media: string;
-  source_type: 'upload' | 'smb';
+  source_type: 'upload' | 'smb' | 'cloud' | 'email';
   error_message: string | null;
   created_at: string;
   updated_at: string;
@@ -99,6 +99,23 @@ export interface SMBFileEntry {
   is_directory: boolean;
   size: number;
   modified_at: string | null;
+}
+
+// --- Cloud ---
+
+export interface CloudProvider {
+  id: number;
+  provider: 'gdrive' | 'dropbox';
+  connected_at: string;
+}
+
+export interface CloudFileEntry {
+  name: string;
+  id: string;
+  is_directory: boolean;
+  size: number | null;
+  modified_at: string | null;
+  mime_type: string | null;
 }
 
 // --- Printer ---

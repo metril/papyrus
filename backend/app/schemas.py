@@ -151,6 +151,26 @@ class SMBFileEntry(BaseModel):
     modified_at: datetime | None
 
 
+# --- Cloud ---
+
+
+class CloudProviderResponse(BaseModel):
+    id: int
+    provider: str
+    connected_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CloudFileEntry(BaseModel):
+    name: str
+    id: str
+    is_directory: bool
+    size: int | None
+    modified_at: datetime | None
+    mime_type: str | None = None
+
+
 # --- Email ---
 
 

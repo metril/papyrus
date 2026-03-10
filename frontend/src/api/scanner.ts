@@ -57,3 +57,13 @@ export async function saveScanToSmb(
     params: { share_id: shareId, remote_path: remotePath },
   });
 }
+
+export async function saveScanToCloud(
+  scanId: string,
+  providerId: number,
+): Promise<{ message: string }> {
+  const { data } = await api.post(`/scanner/scans/${scanId}/cloud`, null, {
+    params: { provider_id: providerId },
+  });
+  return data;
+}

@@ -65,7 +65,7 @@ class PrintJob(Base):
     copies: Mapped[int] = mapped_column(Integer, default=1)
     duplex: Mapped[bool] = mapped_column(Boolean, default=False)
     media: Mapped[str] = mapped_column(String(50), default="A4")
-    source_type: Mapped[str] = mapped_column(String(20), default="upload")  # upload, smb
+    source_type: Mapped[str] = mapped_column(String(20), default="upload")  # upload, smb, cloud, email
     options_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -124,6 +124,7 @@ class CloudProvider(Base):
     provider: Mapped[str] = mapped_column(String(20), nullable=False)  # gdrive, dropbox
     access_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    token_expiry: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     connected_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

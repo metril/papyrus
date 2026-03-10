@@ -1,8 +1,10 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useScanStore } from '../../store/scanStore';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
 import { getScanDownloadUrl } from '../../api/scanner';
+import EmailScanDialog from './EmailScanDialog';
+import CloudSaveDialog from './CloudSaveDialog';
 
 function formatSize(bytes: number | null): string {
   if (!bytes) return '';
@@ -13,6 +15,8 @@ function formatSize(bytes: number | null): string {
 
 export default function ScanList() {
   const { scans, loading, fetchScans, deleteScan } = useScanStore();
+  const [emailScanId, setEmailScanId] = useState<string | null>(null);
+  const [cloudScanId, setCloudScanId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchScans();
@@ -27,6 +31,7 @@ export default function ScanList() {
   }
 
   return (
+    <>
     <div className="space-y-3">
       {scans.map((scan) => (
         <div
@@ -50,9 +55,17 @@ export default function ScanList() {
 
           <div className="flex gap-2 ml-4">
             {scan.status === 'completed' && (
-              <a href={getScanDownloadUrl(scan.scan_id)} download>
-                <Button size="sm" variant="secondary">Download</Button>
-              </a>
+              <>
+                <a href={getScanDownloadUrl(scan.scan_id)} download>
+                  <Button size="sm" variant="secondary">Download</Button>
+                </a>
+                <Button size="sm" variant="secondary" onClick={() => setEmailScanId(scan.scan_id)}>
+                  Email
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => setCloudScanId(scan.scan_id)}>
+                  Cloud
+                </Button>
+              </>
             )}
             <Button size="sm" variant="ghost" onClick={() => deleteScan(scan.scan_id)}>
               Delete
@@ -61,5 +74,13 @@ export default function ScanList() {
         </div>
       ))}
     </div>
+
+    {emailScanId && (
+      <EmailScanDialog scanId={emailScanId} onClose={() => setEmailScanId(null)} />
+    )}
+    {cloudScanId && (
+      <CloudSaveDialog scanId={cloudScanId} onClose={() => setCloudScanId(null)} />
+    )}
+    </>
   );
 }

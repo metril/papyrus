@@ -2,7 +2,13 @@ import { useState, useEffect } from 'react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import api from '../api/client';
-import type { APIToken } from '../types';
+import { listProviders, disconnectProvider, getAuthorizeUrl } from '../api/cloud';
+import type { APIToken, CloudProvider } from '../types';
+
+const providerLabels: Record<string, string> = {
+  gdrive: 'Google Drive',
+  dropbox: 'Dropbox',
+};
 
 export default function SettingsPage() {
   const [printerStatus, setPrinterStatus] = useState<Record<string, unknown> | null>(null);
@@ -14,6 +20,9 @@ export default function SettingsPage() {
   const [smtpUser, setSmtpUser] = useState('');
   const [smtpPassword, setSmtpPassword] = useState('');
   const [smtpFrom, setSmtpFrom] = useState('');
+  const [cloudProviders, setCloudProviders] = useState<CloudProvider[]>([]);
+  const [webhookInfo, setWebhookInfo] = useState<{ webhook_url: string; configured: boolean } | null>(null);
+  const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
 
   useEffect(() => {
     api.get('/printer/status').then(({ data }) => setPrinterStatus(data)).catch(() => {});
@@ -22,6 +31,8 @@ export default function SettingsPage() {
       if (data.smtp_host) setSmtpHost(data.smtp_host);
       if (data.smtp_from) setSmtpFrom(data.smtp_from);
     }).catch(() => {});
+    listProviders().then(setCloudProviders).catch(() => {});
+    api.get('/email/webhook-info').then(({ data }) => setWebhookInfo(data)).catch(() => {});
   }, []);
 
   const createToken = async () => {
@@ -70,6 +81,25 @@ export default function SettingsPage() {
       alert('SMTP connection successful');
     } catch {
       alert('SMTP connection failed');
+    }
+  };
+
+  const handleDisconnectCloud = async (id: number) => {
+    try {
+      await disconnectProvider(id);
+      setCloudProviders(cloudProviders.filter((p) => p.id !== id));
+    } catch {
+      alert('Failed to disconnect provider');
+    }
+  };
+
+  const generateWebhookSecret = async () => {
+    try {
+      const { data } = await api.post('/email/webhook-secret');
+      setWebhookSecret(data.secret);
+      setWebhookInfo({ webhook_url: data.webhook_url, configured: true });
+    } catch {
+      alert('Failed to generate webhook secret');
     }
   };
 
@@ -160,6 +190,43 @@ export default function SettingsPage() {
         </div>
       </Card>
 
+      {/* Cloud Storage */}
+      <Card title="Cloud Storage">
+        <div className="space-y-4">
+          {cloudProviders.length > 0 && (
+            <div className="space-y-2">
+              {cloudProviders.map((p) => (
+                <div
+                  key={p.id}
+                  className="flex items-center justify-between p-3 rounded-lg border border-gray-200"
+                >
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">
+                      {providerLabels[p.provider] || p.provider}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Connected {new Date(p.connected_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <Button size="sm" variant="danger" onClick={() => handleDisconnectCloud(p.id)}>
+                    Disconnect
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            <a href={getAuthorizeUrl('gdrive')}>
+              <Button size="sm" variant="secondary">Connect Google Drive</Button>
+            </a>
+            <a href={getAuthorizeUrl('dropbox')}>
+              <Button size="sm" variant="secondary">Connect Dropbox</Button>
+            </a>
+          </div>
+        </div>
+      </Card>
+
       {/* Email / SMTP */}
       <Card title="Email (SMTP)">
         <div className="space-y-3">
@@ -215,6 +282,54 @@ export default function SettingsPage() {
           <div className="flex gap-2">
             <Button onClick={saveSmtp}>Save</Button>
             <Button variant="secondary" onClick={testSmtp}>Test Connection</Button>
+          </div>
+        </div>
+      </Card>
+
+      {/* Email Webhook */}
+      <Card title="Email Webhook">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">
+            External services can forward email attachments to Papyrus for automatic printing.
+          </p>
+
+          {webhookInfo && (
+            <div className="space-y-2">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Webhook URL</label>
+                <code className="block text-xs bg-gray-100 p-2 rounded break-all">
+                  {webhookInfo.webhook_url}
+                </code>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">Secret configured:</span>
+                <span className={`text-sm font-medium ${webhookInfo.configured ? 'text-green-600' : 'text-red-600'}`}>
+                  {webhookInfo.configured ? 'Yes' : 'No'}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {webhookSecret && (
+            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+              <p className="text-sm text-yellow-800 font-medium">
+                Webhook secret generated! Copy it now &mdash; it won't be shown again:
+              </p>
+              <code className="text-xs break-all block mt-1 bg-yellow-100 p-2 rounded">
+                {webhookSecret}
+              </code>
+            </div>
+          )}
+
+          <Button size="sm" onClick={generateWebhookSecret}>
+            {webhookInfo?.configured ? 'Regenerate Secret' : 'Generate Secret'}
+          </Button>
+
+          <div className="text-xs text-gray-500 space-y-1">
+            <p>Usage example:</p>
+            <code className="block bg-gray-100 p-2 rounded break-all">
+              curl -F &quot;token=YOUR_SECRET&quot; -F &quot;file=@document.pdf&quot; {webhookInfo?.webhook_url || 'https://papyrus.example.com/api/email/receive'}
+            </code>
           </div>
         </div>
       </Card>

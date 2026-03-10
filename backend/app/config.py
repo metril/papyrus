@@ -41,6 +41,16 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
 
+    # Cloud Storage OAuth
+    gdrive_client_id: str = ""
+    gdrive_client_secret: str = ""
+    dropbox_app_key: str = ""
+    dropbox_app_secret: str = ""
+
+    # Email Webhook
+    email_webhook_secret: str = ""
+    email_webhook_rate_limit: int = 10  # max requests per minute per IP
+
     model_config = {"env_prefix": "PAPYRUS_"}
 
 

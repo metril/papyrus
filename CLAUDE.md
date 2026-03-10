@@ -1,7 +1,7 @@
 # Papyrus - Development Guide
 
 ## Project Overview
-Papyrus is a web-based print and scan server for network-connected Brother DCP-L2540DW (and potentially other devices). It provides a responsive web UI for managing print jobs (hold-release), scanning, copying, SMB share integration, email, and cloud storage uploads.
+Papyrus is a web-based print and scan server for network-connected Brother DCP-L2540DW (and potentially other devices). It provides a responsive web UI for managing print jobs (hold-release), scanning, copying, SMB share integration, bidirectional email (send + webhook receive), and bidirectional cloud storage (Google Drive/Dropbox with OAuth2 browse/download/upload).
 
 ## Tech Stack
 - **Backend**: Python 3.12, FastAPI, Uvicorn, SQLAlchemy async (asyncpg), Alembic
@@ -58,6 +58,8 @@ cd frontend && npm test
 ## Environment Variables
 All backend config uses `PAPYRUS_` prefix. See `backend/app/config.py` for full list.
 Key vars: `PAPYRUS_DB_URL`, `PAPYRUS_OIDC_ISSUER`, `PAPYRUS_OIDC_CLIENT_ID`, `PAPYRUS_OIDC_CLIENT_SECRET`, `PAPYRUS_PRINTER_URI`, `PAPYRUS_SCANNER_DEVICE`, `PAPYRUS_ENCRYPTION_KEY`, `PAPYRUS_BASE_URL`
+Cloud OAuth: `PAPYRUS_GDRIVE_CLIENT_ID`, `PAPYRUS_GDRIVE_CLIENT_SECRET`, `PAPYRUS_DROPBOX_APP_KEY`, `PAPYRUS_DROPBOX_APP_SECRET`
+Email webhook: `PAPYRUS_EMAIL_WEBHOOK_SECRET`, `PAPYRUS_EMAIL_WEBHOOK_RATE_LIMIT`
 
 ## Development Rules
 - **Commits**: Commit frequently as work progresses. Never mention AI assistants in commit messages.

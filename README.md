@@ -10,8 +10,8 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Multi-page ADF Scanning**: Batch scan from the automatic document feeder into a single PDF
 - **Copy**: One-click scan-then-print workflow
 - **SMB Integration**: Browse and print from network shares, save scans to shares
-- **Email**: Send scanned documents as email attachments
-- **Cloud Storage**: Upload scans to Google Drive or Dropbox
+- **Email**: Send scanned documents as email attachments, receive attachments for printing via webhook
+- **Cloud Storage**: Browse, download, and print files from Google Drive and Dropbox; upload scans to cloud (OAuth2 connect flow)
 - **Real-time Updates**: WebSocket-based live job status and scan progress
 - **Responsive Design**: Works on phones, tablets, and desktops
 - **Authentication**: OIDC (Authentik/Keycloak) for users, API tokens for programmatic access
