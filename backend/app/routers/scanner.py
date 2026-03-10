@@ -8,10 +8,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_permission
 from app.database import get_db
-from app.models import ScanJob, User
-from app.schemas import ScanBatchRequest, ScanList, ScanRequest, ScanResponse
+from app.models import CloudProvider, ScanJob, SMBShare, User
+from app.schemas import EmailSendRequest, ScanBatchRequest, ScanList, ScanRequest, ScanResponse
+from app.services.cloud_service import CloudError, cloud_service
+from app.services.email_service import EmailError, email_service
 from app.services.file_service import cleanup_file
 from app.services.scan_service import ScanError, scan_service
+from app.services.smb_service import SMBError, smb_service
 from app.services.ws_manager import ws_manager
 
 router = APIRouter()
@@ -180,6 +183,129 @@ async def download_scan(
         filename=f"scan_{scan_id}.{job.format}",
         media_type=f"application/{job.format}" if job.format == "pdf" else f"image/{job.format}",
     )
+
+
+@router.post("/scans/{scan_id}/email")
+async def email_scan(
+    scan_id: str,
+    data: EmailSendRequest,
+    user: User = Depends(require_permission("scan")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Email a scan as an attachment."""
+    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if job.status != "completed" or not job.filepath:
+        raise HTTPException(status_code=400, detail="Scan is not available")
+
+    # Load SMTP config from DB
+    from app.routers.email import _get_smtp_config
+    db_config = await _get_smtp_config(db)
+
+    try:
+        await email_service.send_scan(
+            to=data.to,
+            subject=data.subject,
+            body=data.body,
+            filepath=job.filepath,
+            filename=f"scan_{scan_id}.{job.format}",
+            db_config=db_config,
+        )
+    except EmailError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    return {"message": f"Scan emailed to {data.to}"}
+
+
+@router.post("/scans/{scan_id}/cloud")
+async def upload_scan_to_cloud(
+    scan_id: str,
+    provider_id: int,
+    user: User = Depends(require_permission("scan")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload a scan to a connected cloud storage provider."""
+    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if job.status != "completed" or not job.filepath:
+        raise HTTPException(status_code=400, detail="Scan is not available")
+
+    # Get cloud provider
+    provider_result = await db.execute(
+        select(CloudProvider).where(
+            CloudProvider.id == provider_id,
+            CloudProvider.user_id == user.id,
+        )
+    )
+    provider = provider_result.scalar_one_or_none()
+    if provider is None:
+        raise HTTPException(status_code=404, detail="Cloud provider not found")
+
+    filename = f"scan_{scan_id}.{job.format}"
+
+    try:
+        if provider.provider == "gdrive":
+            file_id = await cloud_service.upload_to_gdrive(
+                filepath=job.filepath,
+                filename=filename,
+                access_token_encrypted=provider.access_token_encrypted,
+            )
+            return {"message": "Uploaded to Google Drive", "file_id": file_id}
+        elif provider.provider == "dropbox":
+            path = await cloud_service.upload_to_dropbox(
+                filepath=job.filepath,
+                filename=filename,
+                access_token_encrypted=provider.access_token_encrypted,
+            )
+            return {"message": "Uploaded to Dropbox", "path": path}
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown provider: {provider.provider}")
+    except CloudError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.post("/scans/{scan_id}/smb")
+async def save_scan_to_smb(
+    scan_id: str,
+    share_id: int,
+    remote_path: str = "/",
+    user: User = Depends(require_permission("scan")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save a scan to an SMB network share."""
+    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if job.status != "completed" or not job.filepath:
+        raise HTTPException(status_code=400, detail="Scan is not available")
+
+    share_result = await db.execute(select(SMBShare).where(SMBShare.id == share_id))
+    share = share_result.scalar_one_or_none()
+    if share is None:
+        raise HTTPException(status_code=404, detail="Share not found")
+
+    filename = f"scan_{scan_id}.{job.format}"
+    dest_path = f"{remote_path.rstrip('/')}/{filename}"
+
+    try:
+        smb_service.upload(
+            server=share.server,
+            share_name=share.share_name,
+            remote_path=dest_path,
+            local_path=job.filepath,
+            username=share.username,
+            password_encrypted=share.password_encrypted,
+            domain=share.domain,
+        )
+    except SMBError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+    return {"message": f"Scan saved to {share.name}:{dest_path}"}
 
 
 @router.delete("/scans/{scan_id}", status_code=204)
