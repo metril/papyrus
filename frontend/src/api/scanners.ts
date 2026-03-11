@@ -34,9 +34,24 @@ export interface ProbeResult {
   reachable: boolean;
   device: string;
   make_model: string | null;
+  error: string | null;
 }
 
 export async function probeScanner(ip: string): Promise<ProbeResult> {
   const { data } = await api.get('/scanners/probe', { params: { ip } });
+  return data;
+}
+
+export interface ScannerTestResult {
+  device: string;
+  escl_ok: boolean;
+  escl_error: string | null;
+  sane_ok: boolean;
+  sane_error: string | null;
+  make_model: string | null;
+}
+
+export async function testScanner(id: number): Promise<ScannerTestResult> {
+  const { data } = await api.get(`/scanners/${id}/test`);
   return data;
 }

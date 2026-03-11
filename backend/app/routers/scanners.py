@@ -56,7 +56,6 @@ async def probe_scanner_ip(
     _user: User = Depends(require_admin),
 ) -> dict:
     """Probe a scanner at the given IP address via eSCL and return connection info."""
-    import re
     import xml.etree.ElementTree as ET
     from urllib.request import urlopen
     from urllib.error import URLError
@@ -66,7 +65,6 @@ async def probe_scanner_ip(
     make_model = None
 
     try:
-        # Run the blocking urllib call in a thread pool to avoid blocking the event loop
         loop = asyncio.get_event_loop()
 
         def _fetch() -> bytes:
@@ -82,12 +80,92 @@ async def probe_scanner_ip(
                     break
         except ET.ParseError:
             pass
-        # Use make_model as label in device string if available
         label = make_model or f"Scanner_{ip.replace('.', '_')}"
         device = f"airscan:e:{label}:http://{ip}/eSCL"
-        return {"reachable": True, "device": device, "make_model": make_model}
-    except (URLError, OSError, TimeoutError):
-        return {"reachable": False, "device": device, "make_model": None}
+        return {"reachable": True, "device": device, "make_model": make_model, "error": None}
+    except TimeoutError:
+        error = "Connection timed out after 3s"
+    except URLError as exc:
+        error = str(exc.reason)
+    except OSError as exc:
+        error = str(exc)
+    except Exception as exc:
+        error = str(exc)
+    return {"reachable": False, "device": device, "make_model": None, "error": error}
+
+
+@router.get("/{scanner_id}/test")
+async def test_scanner(
+    scanner_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_admin),
+) -> dict:
+    """Test an already-saved scanner: eSCL HTTP check + SANE device check."""
+    import re
+    import xml.etree.ElementTree as ET
+    from urllib.request import urlopen
+
+    scanner = await db.get(Scanner, scanner_id)
+    if not scanner:
+        raise HTTPException(status_code=404, detail="Scanner not found")
+
+    device = scanner.device
+    escl_ok = False
+    escl_error: str | None = None
+    sane_ok = False
+    sane_error: str | None = None
+    make_model: str | None = None
+
+    # 1. eSCL HTTP check for airscan:e: or any device with an embedded URL
+    m = re.search(r'(https?://[^\s:]+/eSCL)', device)
+    if m:
+        capabilities_url = m.group(1) + "/ScannerCapabilities"
+        try:
+            loop = asyncio.get_event_loop()
+
+            def _fetch() -> bytes:
+                with urlopen(capabilities_url, timeout=5) as r:
+                    return r.read()
+
+            raw = await loop.run_in_executor(None, _fetch)
+            try:
+                root = ET.fromstring(raw)
+                for elem in root.iter():
+                    if elem.tag.endswith("}MakeAndModel") or elem.tag == "MakeAndModel":
+                        make_model = elem.text
+                        break
+            except ET.ParseError:
+                pass
+            escl_ok = True
+        except Exception as exc:
+            escl_error = str(exc)
+
+    # 2. SANE connectivity check via scanimage -d {device} -A (lists device options)
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "scanimage", "-d", device, "-A",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+        sane_ok = proc.returncode == 0
+        if not sane_ok:
+            sane_error = stderr.decode().strip()[:400]
+    except asyncio.TimeoutError:
+        sane_error = "scanimage timed out after 10s"
+    except FileNotFoundError:
+        sane_error = "scanimage not found — is SANE installed in the container?"
+    except Exception as exc:
+        sane_error = str(exc)
+
+    return {
+        "device": device,
+        "escl_ok": escl_ok,
+        "escl_error": escl_error,
+        "sane_ok": sane_ok,
+        "sane_error": sane_error,
+        "make_model": make_model,
+    }
 
 
 @router.get("/discover")

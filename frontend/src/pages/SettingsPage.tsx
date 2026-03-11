@@ -19,7 +19,9 @@ import {
   setDefaultScanner,
   discoverScanners,
   probeScanner,
+  testScanner,
 } from '../api/scanners';
+import type { ScannerTestResult } from '../api/scanners';
 import type { APIToken, CloudProvider, ManagedPrinter, ManagedScanner, DiscoveredDevice } from '../types';
 
 const providerLabels: Record<string, string> = {
@@ -275,6 +277,9 @@ function ScannersCard() {
   // IP mode state
   const [ipAddress, setIpAddress] = useState('');
   const [probeStatus, setProbeStatus] = useState<'idle' | 'probing' | 'reachable' | 'unreachable'>('idle');
+  const [probeError, setProbeError] = useState<string | null>(null);
+  // Test existing scanner state
+  const [testResults, setTestResults] = useState<Record<number, ScannerTestResult | 'testing' | 'error'>>({});
 
   const load = () => listScanners().then(setScanners).catch(() => {});
 
@@ -289,6 +294,7 @@ function ScannersCard() {
   const handleProbe = async () => {
     if (!ipAddress) return;
     setProbeStatus('probing');
+    setProbeError(null);
     try {
       const result = await probeScanner(ipAddress);
       if (result.reachable) {
@@ -298,9 +304,20 @@ function ScannersCard() {
         }
       } else {
         setProbeStatus('unreachable');
+        setProbeError(result.error ?? null);
       }
     } catch {
       setProbeStatus('unreachable');
+    }
+  };
+
+  const handleTestScanner = async (id: number) => {
+    setTestResults((r) => ({ ...r, [id]: 'testing' }));
+    try {
+      const result = await testScanner(id);
+      setTestResults((r) => ({ ...r, [id]: result }));
+    } catch {
+      setTestResults((r) => ({ ...r, [id]: 'error' }));
     }
   };
 
@@ -354,6 +371,7 @@ function ScannersCard() {
     setDiscovered([]);
     setIpAddress('');
     setProbeStatus('idle');
+    setProbeError(null);
     setForm({ name: '', device: '', description: '', auto_deliver: false });
   };
 
@@ -380,24 +398,65 @@ function ScannersCard() {
                 </div>
               </div>
             ) : (
-              <div className="flex items-start justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{s.name}</span>
-                    {s.is_default && <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 px-1.5 py-0.5 rounded-full font-medium">Default</span>}
-                    {s.auto_deliver && <span className="text-xs bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400 px-1.5 py-0.5 rounded-full font-medium">Auto-deliver</span>}
+              <>
+                <div className="flex items-start justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{s.name}</span>
+                      {s.is_default && <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 px-1.5 py-0.5 rounded-full font-medium">Default</span>}
+                      {s.auto_deliver && <span className="text-xs bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400 px-1.5 py-0.5 rounded-full font-medium">Auto-deliver</span>}
+                    </div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-mono">{s.device}</div>
+                    {s.description && <div className="text-xs text-gray-400 dark:text-gray-500">{s.description}</div>}
                   </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-mono">{s.device}</div>
-                  {s.description && <div className="text-xs text-gray-400 dark:text-gray-500">{s.description}</div>}
+                  <div className="flex gap-1 ml-2 flex-shrink-0">
+                    {!s.is_default && (
+                      <Button size="sm" variant="ghost" onClick={() => handleDefault(s.id)}>Set Default</Button>
+                    )}
+                    <Button size="sm" variant="ghost" onClick={() => handleTestScanner(s.id)}>
+                      {testResults[s.id] === 'testing' ? '…' : 'Test'}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => startEdit(s)}>Edit</Button>
+                    <Button size="sm" variant="danger" onClick={() => handleDelete(s.id)}>Delete</Button>
+                  </div>
                 </div>
-                <div className="flex gap-1 ml-2 flex-shrink-0">
-                  {!s.is_default && (
-                    <Button size="sm" variant="ghost" onClick={() => handleDefault(s.id)}>Set Default</Button>
-                  )}
-                  <Button size="sm" variant="ghost" onClick={() => startEdit(s)}>Edit</Button>
-                  <Button size="sm" variant="danger" onClick={() => handleDelete(s.id)}>Delete</Button>
-                </div>
-              </div>
+                {testResults[s.id] && testResults[s.id] !== 'testing' && (
+                  <div className="mt-1 text-xs space-y-0.5 border-t border-gray-100 dark:border-gray-800 pt-1.5">
+                    {testResults[s.id] === 'error' ? (
+                      <span className="text-red-600 dark:text-red-400">Test request failed</span>
+                    ) : (
+                      <>
+                        {(() => {
+                          const r = testResults[s.id] as ScannerTestResult;
+                          return (
+                            <>
+                              <div className="flex items-center gap-1.5">
+                                <span className={r.escl_ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
+                                  {r.escl_ok ? '✓' : '✗'} eSCL
+                                </span>
+                                {!r.escl_ok && r.escl_error && (
+                                  <span className="text-gray-500 dark:text-gray-400 truncate">{r.escl_error}</span>
+                                )}
+                                {r.escl_ok && r.make_model && (
+                                  <span className="text-gray-500 dark:text-gray-400">— {r.make_model}</span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <span className={r.sane_ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
+                                  {r.sane_ok ? '✓' : '✗'} SANE
+                                </span>
+                                {!r.sane_ok && r.sane_error && (
+                                  <span className="text-gray-500 dark:text-gray-400 truncate">{r.sane_error}</span>
+                                )}
+                              </div>
+                            </>
+                          );
+                        })()}
+                      </>
+                    )}
+                  </div>
+                )}
+              </>
             )}
           </div>
         ))}
@@ -435,7 +494,11 @@ function ScannersCard() {
                       </Button>
                     </div>
                     {probeStatus === 'reachable' && <p className="text-xs text-green-600 dark:text-green-400 mt-0.5">Scanner reachable</p>}
-                    {probeStatus === 'unreachable' && <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">Not reachable — check IP and network</p>}
+                    {probeStatus === 'unreachable' && (
+                      <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">
+                        Not reachable{probeError ? `: ${probeError}` : ' — check IP and network'}
+                      </p>
+                    )}
                   </div>
                   <SettingField label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="Brother DCP-L2540DW" />
                 </div>
