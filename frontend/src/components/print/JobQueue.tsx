@@ -36,7 +36,7 @@ export default function JobQueue() {
   const { jobs, loading, fetchJobs, releaseJob, cancelJob, deleteJob } = useJobStore();
   const [previewJob, setPreviewJob] = useState<PrintJob | null>(null);
 
-  const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const debouncedFetch = useCallback((_msg: unknown) => {
     clearTimeout(fetchTimeoutRef.current);
     fetchTimeoutRef.current = setTimeout(() => fetchJobs(), 300);
