@@ -48,6 +48,7 @@ COPY docker/cups/cupsd.conf /etc/cups/cupsd.conf
 COPY docker/sane/ /etc/sane.d/
 COPY docker/avahi/avahi-daemon.conf /etc/avahi/avahi-daemon.conf
 COPY docker/avahi/escl.service /etc/avahi/services/escl.service
+COPY docker/avahi/airprint.service /etc/avahi/services/airprint.service
 COPY docker/cups/papyrus-backend /usr/lib/cups/backend/papyrus
 RUN chmod 700 /usr/lib/cups/backend/papyrus
 
