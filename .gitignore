@@ -38,8 +38,8 @@ data/
 *.db
 *.sqlite3
 
-# Docker
-docker/cups/*.ppd
+# Docker (allow papyrus.ppd, ignore generated PPDs)
+docker/cups/*-generated.ppd
 
 # Alembic
 backend/alembic/versions/__pycache__/

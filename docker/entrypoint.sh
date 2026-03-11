@@ -29,7 +29,7 @@ if ! lpstat -p "$NETWORK_PRINTER" 2>/dev/null; then
     echo "Configuring network printer queue '$NETWORK_PRINTER'..."
     lpadmin -p "$NETWORK_PRINTER" \
         -v papyrus:/ \
-        -m raw \
+        -P /etc/cups/ppd/papyrus.ppd \
         -o printer-is-shared=true \
         -E
     cupsenable "$NETWORK_PRINTER"
