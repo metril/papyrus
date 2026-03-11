@@ -33,7 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Brother brscan4 network scanner driver
-RUN curl -fsSL "https://download.brother.com/welcome/dlfp100208/brscan4-0.4.11-1.amd64.deb" \
+RUN curl -fsSL "https://download.brother.com/welcome/dlf105200/brscan4-0.4.11-1.amd64.deb" \
       -o /tmp/brscan4.deb \
     && dpkg -i /tmp/brscan4.deb \
     && rm /tmp/brscan4.deb
