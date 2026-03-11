@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     email_webhook_secret: str = ""
     email_webhook_rate_limit: int = 10  # max requests per minute per IP
 
+    # Network Services
+    network_printer_enabled: bool = True
+    network_printer_name: str = "Papyrus"
+    escl_enabled: bool = True
+
     model_config = {"env_prefix": "PAPYRUS_"}
 
 

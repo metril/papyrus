@@ -3,18 +3,18 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    ports:
-      - "8080:8080"
+    network_mode: host
     volumes:
       - papyrus_data:/app/data
       - cups_spool:/var/spool/cups
     environment:
-      - PAPYRUS_DB_URL=postgresql+asyncpg://papyrus:${POSTGRES_PASSWORD:-secret}@db:5432/papyrus
+      - PAPYRUS_DB_URL=postgresql+asyncpg://papyrus:${POSTGRES_PASSWORD:-secret}@localhost:5432/papyrus
       - PAPYRUS_OIDC_ISSUER=${PAPYRUS_OIDC_ISSUER}
       - PAPYRUS_OIDC_CLIENT_ID=${PAPYRUS_OIDC_CLIENT_ID}
       - PAPYRUS_OIDC_CLIENT_SECRET=${PAPYRUS_OIDC_CLIENT_SECRET}
       - PAPYRUS_PRINTER_URI=${PAPYRUS_PRINTER_URI:-ipp://192.168.1.100/ipp}
       - PAPYRUS_PRINTER_NAME=${PAPYRUS_PRINTER_NAME:-Brother_DCP_L2540DW}
+      - PAPYRUS_NETWORK_PRINTER_NAME=${PAPYRUS_NETWORK_PRINTER_NAME:-Papyrus}
       - PAPYRUS_SCANNER_DEVICE=${PAPYRUS_SCANNER_DEVICE:-airscan:w:Brother DCP-L2540DW}
       - PAPYRUS_ENCRYPTION_KEY=${PAPYRUS_ENCRYPTION_KEY}
       - PAPYRUS_SESSION_SECRET=${PAPYRUS_SESSION_SECRET}
@@ -33,6 +33,8 @@ services:
 
   db:
     image: postgres:16-alpine
+    ports:
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     environment:

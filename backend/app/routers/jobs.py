@@ -1,7 +1,7 @@
 import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -129,6 +129,60 @@ async def _process_job(job: PrintJob, db: AsyncSession):
             "type": "job_updated",
             "data": {"id": job.id, "status": "failed", "error": str(e)},
         })
+
+
+@router.post("/internal/ingest", response_model=PrintJobResponse, status_code=201)
+async def ingest_network_job(
+    request: Request,
+    file: UploadFile = File(...),
+    title: str = Form(default="Untitled"),
+    username: str = Form(default="unknown"),
+    copies: int = Form(default=1),
+    duplex: bool = Form(default=False),
+    media: str = Form(default="A4"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Internal endpoint for the CUPS backend to submit network print jobs.
+
+    Only accessible from localhost (called by the papyrus CUPS backend script).
+    """
+    client_host = request.client.host if request.client else ""
+    if client_host not in ("127.0.0.1", "::1"):
+        raise HTTPException(status_code=403, detail="Internal endpoint only")
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    upload_path = get_upload_path(file.filename)
+    with open(upload_path, "wb") as f:
+        f.write(content)
+
+    job = PrintJob(
+        title=sanitize_filename(title),
+        filename=sanitize_filename(file.filename),
+        filepath=upload_path,
+        file_size=len(content),
+        mime_type=detect_mime_type(file.filename),
+        status="held",
+        copies=copies,
+        duplex=duplex,
+        media=media,
+        source_type="network",
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    await ws_manager.broadcast("jobs", {
+        "type": "job_created",
+        "data": {"id": job.id, "title": job.title, "status": "held", "source_type": "network"},
+    })
+
+    return job
 
 
 @router.get("", response_model=PrintJobList)

@@ -1,0 +1,16 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">Papyrus Scanner</name>
+  <service>
+    <type>_uscan._tcp</type>
+    <port>8080</port>
+    <txt-record>txtvers=1</txt-record>
+    <txt-record>vers=2.6</txt-record>
+    <txt-record>rs=eSCL</txt-record>
+    <txt-record>ty=Papyrus Network Scanner</txt-record>
+    <txt-record>cs=color,grayscale,binary</txt-record>
+    <txt-record>is=platen</txt-record>
+    <txt-record>duplex=F</txt-record>
+  </service>
+</service-group>

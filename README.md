@@ -12,6 +12,8 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **SMB Integration**: Browse and print from network shares, save scans to shares
 - **Email**: Send scanned documents as email attachments, receive attachments for printing via webhook
 - **Cloud Storage**: Browse, download, and print files from Google Drive and Dropbox; upload scans to cloud (OAuth2 connect flow)
+- **Network Printer**: Appears as an AirPrint/IPP printer on the LAN; network print jobs enter the hold-release queue
+- **Network Scanner**: Appears as an eSCL/AirScan scanner on the LAN; devices can scan directly via the eSCL protocol
 - **Real-time Updates**: WebSocket-based live job status and scan progress
 - **Responsive Design**: Works on phones, tablets, and desktops
 - **Authentication**: OIDC (Authentik/Keycloak) for users, API tokens for programmatic access
@@ -25,9 +27,9 @@ A web-based print and scan server for network-connected multifunction printers. 
 
 - **Backend**: Python 3.12, FastAPI, SQLAlchemy (async), PostgreSQL
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS
-- **Printing**: CUPS with brlaser driver
-- **Scanning**: SANE via scanimage (sane-airscan for WSD)
-- **Deployment**: Docker with multi-stage build, behind Traefik
+- **Printing**: CUPS (driverless/IPP Everywhere), AirPrint via Avahi mDNS
+- **Scanning**: SANE via scanimage (sane-airscan for WSD), eSCL server for network scanning
+- **Deployment**: Docker with multi-stage build (`network_mode: host` for mDNS), behind Traefik
 
 ## Quick Start
 

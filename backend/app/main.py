@@ -8,7 +8,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.auth.oidc import setup_oauth
 from app.config import settings
-from app.routers import auth, cloud, copy, email, jobs, printer, scanner, smb, system
+from app.routers import auth, cloud, copy, email, escl, jobs, printer, scanner, smb, system
 
 
 @asynccontextmanager
@@ -49,6 +49,9 @@ app.include_router(copy.router, prefix="/api/copy", tags=["copy"])
 app.include_router(smb.router, prefix="/api/smb", tags=["smb"])
 app.include_router(email.router, prefix="/api/email", tags=["email"])
 app.include_router(cloud.router, prefix="/api/cloud", tags=["cloud"])
+
+# eSCL scanner protocol (no /api prefix — clients expect /eSCL/ at root)
+app.include_router(escl.router, tags=["escl"])
 
 # Serve frontend static files (built React app)
 static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")

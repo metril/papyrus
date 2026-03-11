@@ -13,6 +13,21 @@ function formatTime(dateStr: string): string {
   return new Date(dateStr).toLocaleString();
 }
 
+const sourceLabels: Record<string, string> = {
+  upload: 'Upload',
+  smb: 'SMB',
+  cloud: 'Cloud',
+  email: 'Email',
+  network: 'Network',
+};
+
+const sourceColors: Record<string, string> = {
+  network: 'bg-blue-100 text-blue-700',
+  email: 'bg-purple-100 text-purple-700',
+  cloud: 'bg-cyan-100 text-cyan-700',
+  smb: 'bg-orange-100 text-orange-700',
+};
+
 export default function JobQueue() {
   const { jobs, loading, fetchJobs, releaseJob, cancelJob, deleteJob } = useJobStore();
 
@@ -39,6 +54,11 @@ export default function JobQueue() {
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-gray-900 truncate">{job.filename}</span>
               <StatusBadge status={job.status} />
+              {job.source_type && job.source_type !== 'upload' && (
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${sourceColors[job.source_type] || 'bg-gray-100 text-gray-600'}`}>
+                  {sourceLabels[job.source_type] || job.source_type}
+                </span>
+              )}
             </div>
             <div className="text-xs text-gray-500 mt-1">
               {formatSize(job.file_size)} &middot; {job.copies} cop{job.copies > 1 ? 'ies' : 'y'}

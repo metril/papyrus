@@ -139,6 +139,32 @@ export default function SettingsPage() {
         )}
       </Card>
 
+      {/* Network Services */}
+      <Card title="Network Services">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">
+            Papyrus appears as a network printer and scanner on the LAN via mDNS/Bonjour.
+          </p>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-gray-600">Network Printer</span>
+              <span className="font-medium text-green-600">Shared (AirPrint)</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Network Scanner</span>
+              <span className="font-medium text-green-600">Shared (eSCL/AirScan)</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Discovery</span>
+              <span className="font-medium">mDNS / Bonjour</span>
+            </div>
+          </div>
+          <p className="text-xs text-gray-500">
+            Network print jobs appear in the queue as &ldquo;held&rdquo; and must be released from the web UI.
+          </p>
+        </div>
+      </Card>
+
       {/* API Tokens */}
       <Card title="API Tokens">
         <div className="space-y-4">

@@ -26,6 +26,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice-impress \
     smbclient \
     libsmbclient-dev \
+    avahi-daemon \
+    avahi-utils \
+    libnss-mdns \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Python dependencies
@@ -39,9 +43,13 @@ COPY backend/ ./backend/
 # Copy built frontend
 COPY --from=frontend-build /app/frontend/dist ./backend/static/
 
-# Copy CUPS and SANE configuration
+# Copy CUPS, SANE, and Avahi configuration
 COPY docker/cups/cupsd.conf /etc/cups/cupsd.conf
 COPY docker/sane/ /etc/sane.d/
+COPY docker/avahi/avahi-daemon.conf /etc/avahi/avahi-daemon.conf
+COPY docker/avahi/escl.service /etc/avahi/services/escl.service
+COPY docker/cups/papyrus-backend /usr/lib/cups/backend/papyrus
+RUN chmod 700 /usr/lib/cups/backend/papyrus
 
 # Create data directories
 RUN mkdir -p /app/data/scans /app/data/uploads

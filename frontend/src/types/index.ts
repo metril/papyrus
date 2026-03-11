@@ -33,7 +33,7 @@ export interface PrintJob {
   copies: number;
   duplex: boolean;
   media: string;
-  source_type: 'upload' | 'smb' | 'cloud' | 'email';
+  source_type: 'upload' | 'smb' | 'cloud' | 'email' | 'network';
   error_message: string | null;
   created_at: string;
   updated_at: string;

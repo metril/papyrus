@@ -1,0 +1,79 @@
+#!/bin/bash
+# CUPS backend for Papyrus network print server
+# Installed at /usr/lib/cups/backend/papyrus
+#
+# When called with no arguments, outputs device discovery line.
+# When called with job arguments, saves the print data and POSTs
+# it to the Papyrus API as a held print job.
+#
+# CUPS backend protocol:
+#   backend                          (discover devices)
+#   backend job-id user title copies options [file]
+
+PAPYRUS_API="http://localhost:8080/api/jobs/internal/ingest"
+UPLOAD_DIR="${PAPYRUS_UPLOAD_DIR:-/app/data/uploads}"
+
+# Device discovery mode (no arguments)
+if [ $# -eq 0 ]; then
+    echo "network papyrus \"Unknown\" \"Papyrus Network Printer\" \"\" \"\""
+    exit 0
+fi
+
+# Print job mode
+JOB_ID="$1"
+USER="$2"
+TITLE="$3"
+COPIES="$4"
+OPTIONS="$5"
+FILE="$6"
+
+# Parse options for duplex and media
+DUPLEX="false"
+MEDIA="A4"
+
+case "$OPTIONS" in
+    *sides=two-sided*) DUPLEX="true" ;;
+esac
+
+for opt in $OPTIONS; do
+    case "$opt" in
+        media=*) MEDIA="${opt#media=}" ;;
+    esac
+done
+
+# Save job data to a temp file
+TMPFILE="${UPLOAD_DIR}/network_${JOB_ID}_$(date +%s).pdf"
+
+if [ -n "$FILE" ]; then
+    cp "$FILE" "$TMPFILE"
+else
+    cat > "$TMPFILE"
+fi
+
+if [ ! -s "$TMPFILE" ]; then
+    echo "ERROR: Empty job data" >&2
+    rm -f "$TMPFILE"
+    exit 1
+fi
+
+# POST to Papyrus API
+HTTP_CODE=$(curl -s -o /dev/stderr -w "%{http_code}" \
+    -X POST "$PAPYRUS_API" \
+    -F "file=@${TMPFILE};filename=${TITLE:-Untitled}.pdf" \
+    -F "title=${TITLE:-Untitled}" \
+    -F "username=${USER:-unknown}" \
+    -F "copies=${COPIES:-1}" \
+    -F "duplex=${DUPLEX}" \
+    -F "media=${MEDIA}" \
+    2>/dev/null)
+
+if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+    echo "INFO: Job submitted to Papyrus (HTTP $HTTP_CODE)" >&2
+    rm -f "$TMPFILE"
+    exit 0
+else
+    echo "ERROR: Papyrus API returned HTTP $HTTP_CODE" >&2
+    # Keep the file for debugging, but still report success to avoid
+    # CUPS retrying endlessly
+    exit 0
+fi
