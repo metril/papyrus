@@ -1,3 +1,4 @@
+import asyncio
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -64,6 +65,51 @@ async def list_printers(
 ) -> list[dict]:
     result = await db.execute(select(Printer).order_by(Printer.id))
     return [_printer_response(p) for p in result.scalars()]
+
+
+@router.get("/probe")
+async def probe_printer_ip(
+    ip: str,
+    _user: User = Depends(require_admin),
+) -> dict:
+    """Probe a printer at the given IP address and return connection info."""
+    from urllib.request import urlopen
+    from urllib.error import URLError
+
+    uri = f"ipp://{ip}/ipp"
+
+    async def _try(url: str) -> bool:
+        loop = asyncio.get_event_loop()
+        def _fetch():
+            try:
+                with urlopen(url, timeout=3):
+                    pass
+                return True
+            except Exception:
+                return True  # Any response (even error) means host is reachable
+        try:
+            await loop.run_in_executor(None, _fetch)
+            return True
+        except Exception:
+            return False
+
+    # Try CUPS/IPP port 631 first, then port 80
+    reachable = False
+    for port in (631, 80):
+        loop = asyncio.get_event_loop()
+        def _check(p=port):
+            import socket
+            try:
+                s = socket.create_connection((ip, p), timeout=3)
+                s.close()
+                return True
+            except OSError:
+                return False
+        if await loop.run_in_executor(None, _check):
+            reachable = True
+            break
+
+    return {"reachable": reachable, "uri": uri}
 
 
 @router.post("", status_code=201)
