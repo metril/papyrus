@@ -93,19 +93,18 @@ async def _enable_queue(name: str) -> None:
 
 
 async def enable_queue(name: str) -> None:
-    """Enable (unpause) a CUPS printer queue using pycups. Raises RuntimeError on failure."""
-    import cups
-    loop = asyncio.get_event_loop()
-
-    def _do() -> None:
-        conn = cups.Connection()
-        conn.enablePrinter(name)
-        conn.acceptJobs(name)
-
-    try:
-        await loop.run_in_executor(None, _do)
-    except Exception as exc:
-        raise RuntimeError(f"Failed to enable CUPS queue '{name}': {exc}") from exc
+    """Enable (unpause) a CUPS printer queue. Raises RuntimeError on failure."""
+    for cmd in [["cupsenable", name], ["cupsaccept", name]]:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"{cmd[0]} '{name}' failed: {stderr.decode().strip()}"
+            )
 
 
 async def add_physical_printer(cups_name: str, display_name: str, uri: str) -> None:
