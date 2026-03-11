@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import FileResponse
 
 from app.auth.oidc import setup_oauth
 from app.config import settings
@@ -53,7 +54,16 @@ app.include_router(cloud.router, prefix="/api/cloud", tags=["cloud"])
 # eSCL scanner protocol (no /api prefix — clients expect /eSCL/ at root)
 app.include_router(escl.router, tags=["escl"])
 
-# Serve frontend static files (built React app)
+# Serve frontend static files (built React app) with SPA fallback
 static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 if os.path.isdir(static_dir):
-    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+    assets_dir = os.path.join(static_dir, "assets")
+    if os.path.isdir(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="static-assets")
+
+    @app.get("/{path:path}")
+    async def spa_fallback(path: str):
+        file_path = os.path.join(static_dir, path)
+        if path and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(static_dir, "index.html"))
