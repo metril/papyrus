@@ -92,6 +92,22 @@ async def _enable_queue(name: str) -> None:
     await _run(["cupsaccept", name], ignore_errors=True)
 
 
+async def enable_queue(name: str) -> None:
+    """Enable (unpause) a CUPS printer queue using pycups. Raises RuntimeError on failure."""
+    import cups
+    loop = asyncio.get_event_loop()
+
+    def _do() -> None:
+        conn = cups.Connection()
+        conn.enablePrinter(name)
+        conn.acceptJobs(name)
+
+    try:
+        await loop.run_in_executor(None, _do)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to enable CUPS queue '{name}': {exc}") from exc
+
+
 async def add_physical_printer(cups_name: str, display_name: str, uri: str) -> None:
     """Create hold queue (papyrus backend) + release queue (IPP) and advertise on Avahi."""
     # Hold queue — receives network/AirPrint jobs via papyrus backend

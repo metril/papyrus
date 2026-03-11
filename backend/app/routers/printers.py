@@ -228,9 +228,12 @@ async def resume_printer(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ) -> dict:
-    """Re-enable a stopped CUPS printer queue (cupsenable + cupsaccept)."""
+    """Re-enable a stopped CUPS printer queue via pycups."""
     printer = await db.get(Printer, printer_id)
     if not printer:
         raise HTTPException(status_code=404, detail="Printer not found")
-    await cups_admin._enable_queue(printer.cups_name)
+    try:
+        await cups_admin.enable_queue(printer.cups_name)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     return _printer_response(printer)
