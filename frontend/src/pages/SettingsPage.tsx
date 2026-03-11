@@ -10,6 +10,7 @@ import {
   deletePrinter,
   setDefaultPrinter,
   probePrinter,
+  resumePrinter,
 } from '../api/printers';
 import {
   listScanners,
@@ -130,6 +131,10 @@ function PrintersCard() {
     try { await setDefaultPrinter(id); load(); } catch { alert('Failed to set default'); }
   };
 
+  const handleResume = async (id: number) => {
+    try { await resumePrinter(id); load(); } catch { alert('Failed to resume printer'); }
+  };
+
   const startEdit = (p: ManagedPrinter) => {
     setEditId(p.id);
     setEditForm({ display_name: p.display_name, uri: p.uri, description: p.description || '', auto_release: p.auto_release });
@@ -180,6 +185,9 @@ function PrintersCard() {
                   {p.description && <div className="text-xs text-gray-400 dark:text-gray-500">{p.description}</div>}
                 </div>
                 <div className="flex gap-1 ml-2 flex-shrink-0">
+                  {p.cups_status.state === 5 && (
+                    <Button size="sm" variant="secondary" onClick={() => handleResume(p.id)}>Resume</Button>
+                  )}
                   {!p.is_default && !p.is_network_queue && (
                     <Button size="sm" variant="ghost" onClick={() => handleDefault(p.id)}>Set Default</Button>
                   )}

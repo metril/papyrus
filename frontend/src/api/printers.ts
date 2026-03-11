@@ -38,3 +38,8 @@ export async function probePrinter(ip: string): Promise<PrinterProbeResult> {
   const { data } = await api.get('/printers/probe', { params: { ip } });
   return data;
 }
+
+export async function resumePrinter(id: number): Promise<ManagedPrinter> {
+  const { data } = await api.post(`/printers/${id}/resume`);
+  return data;
+}

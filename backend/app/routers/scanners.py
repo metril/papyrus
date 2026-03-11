@@ -55,43 +55,53 @@ async def probe_scanner_ip(
     ip: str,
     _user: User = Depends(require_admin),
 ) -> dict:
-    """Probe a scanner at the given IP address via eSCL and return connection info."""
+    """Probe a scanner at the given IP address via eSCL.
+
+    Tries port 80, 54921 (Brother/standard AirScan), and 8080 in order,
+    returning the first URL that yields a valid eSCL ScannerCapabilities response.
+    """
     import xml.etree.ElementTree as ET
     from urllib.request import urlopen
     from urllib.error import URLError
 
-    url = f"http://{ip}/eSCL/ScannerCapabilities"
-    device = f"airscan:e:Scanner_{ip.replace('.', '_')}:http://{ip}/eSCL"
-    make_model = None
+    fallback_device = f"airscan:e:Scanner_{ip.replace('.', '_')}:http://{ip}/eSCL"
+    loop = asyncio.get_event_loop()
+    last_error: str = "No eSCL endpoint responded on ports 80, 54921, or 8080"
 
-    try:
-        loop = asyncio.get_event_loop()
-
-        def _fetch() -> bytes:
-            with urlopen(url, timeout=3) as resp:
-                return resp.read()
-
-        raw = await loop.run_in_executor(None, _fetch)
+    for base_url in [
+        f"http://{ip}/eSCL",
+        f"http://{ip}:54921/eSCL",
+        f"http://{ip}:8080/eSCL",
+    ]:
+        capabilities_url = base_url + "/ScannerCapabilities"
         try:
-            root = ET.fromstring(raw)
-            for elem in root.iter():
-                if elem.tag.endswith("}MakeAndModel") or elem.tag == "MakeAndModel":
-                    make_model = elem.text
-                    break
-        except ET.ParseError:
-            pass
-        label = make_model or f"Scanner_{ip.replace('.', '_')}"
-        device = f"airscan:e:{label}:http://{ip}/eSCL"
-        return {"reachable": True, "device": device, "make_model": make_model, "error": None}
-    except TimeoutError:
-        error = "Connection timed out after 3s"
-    except URLError as exc:
-        error = str(exc.reason)
-    except OSError as exc:
-        error = str(exc)
-    except Exception as exc:
-        error = str(exc)
-    return {"reachable": False, "device": device, "make_model": None, "error": error}
+            def _fetch(u: str = capabilities_url) -> bytes:
+                with urlopen(u, timeout=3) as resp:
+                    return resp.read()
+
+            raw = await loop.run_in_executor(None, _fetch)
+            make_model = None
+            try:
+                root = ET.fromstring(raw)
+                for elem in root.iter():
+                    if elem.tag.endswith("}MakeAndModel") or elem.tag == "MakeAndModel":
+                        make_model = elem.text
+                        break
+            except ET.ParseError:
+                pass
+            label = make_model or f"Scanner_{ip.replace('.', '_')}"
+            device = f"airscan:e:{label}:{base_url}"
+            return {"reachable": True, "device": device, "make_model": make_model, "error": None}
+        except TimeoutError:
+            last_error = f"{base_url}: timed out"
+        except URLError as exc:
+            last_error = f"{base_url}: {exc.reason}"
+        except OSError as exc:
+            last_error = f"{base_url}: {exc}"
+        except Exception as exc:
+            last_error = f"{base_url}: {exc}"
+
+    return {"reachable": False, "device": fallback_device, "make_model": None, "error": last_error}
 
 
 @router.get("/{scanner_id}/test")
@@ -117,7 +127,7 @@ async def test_scanner(
     make_model: str | None = None
 
     # 1. eSCL HTTP check for airscan:e: or any device with an embedded URL
-    m = re.search(r'(https?://[^\s:]+/eSCL)', device)
+    m = re.search(r"(https?://[^\s'\"]+/eSCL)", device)
     if m:
         capabilities_url = m.group(1) + "/ScannerCapabilities"
         try:

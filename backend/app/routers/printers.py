@@ -220,3 +220,17 @@ async def set_default_printer(
     await db.commit()
     await db.refresh(printer)
     return _printer_response(printer)
+
+
+@router.post("/{printer_id}/resume", status_code=200)
+async def resume_printer(
+    printer_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_admin),
+) -> dict:
+    """Re-enable a stopped CUPS printer queue (cupsenable + cupsaccept)."""
+    printer = await db.get(Printer, printer_id)
+    if not printer:
+        raise HTTPException(status_code=404, detail="Printer not found")
+    await cups_admin._enable_queue(printer.cups_name)
+    return _printer_response(printer)
