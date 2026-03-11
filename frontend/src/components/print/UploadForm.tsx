@@ -55,27 +55,27 @@ export default function UploadForm() {
       <div
         {...getRootProps()}
         className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors
-          ${isDragActive ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}`}
+          ${isDragActive ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/50' : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'}`}
       >
         <input {...getInputProps()} />
         {isDragActive ? (
-          <p className="text-blue-600 font-medium">Drop files here...</p>
+          <p className="text-blue-600 dark:text-blue-400 font-medium">Drop files here...</p>
         ) : (
           <div>
-            <p className="text-gray-600">Drag & drop files here, or click to browse</p>
-            <p className="text-sm text-gray-400 mt-1">PDF, images, DOCX, ODT, XLSX, PPTX</p>
+            <p className="text-gray-600 dark:text-gray-400">Drag & drop files here, or click to browse</p>
+            <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">PDF, images, DOCX, ODT, XLSX, PPTX</p>
           </div>
         )}
       </div>
 
       {files.length > 0 && (
         <div className="space-y-3">
-          <div className="text-sm text-gray-600">
+          <div className="text-sm text-gray-600 dark:text-gray-400">
             {files.length} file{files.length > 1 ? 's' : ''} selected:
           </div>
           <ul className="text-sm space-y-1">
             {files.map((f) => (
-              <li key={f.name} className="text-gray-700">
+              <li key={f.name} className="text-gray-700 dark:text-gray-300">
                 {f.name} ({(f.size / 1024).toFixed(1)} KB)
               </li>
             ))}
@@ -83,22 +83,22 @@ export default function UploadForm() {
 
           <div className="grid grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Copies</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Copies</label>
               <input
                 type="number"
                 min={1}
                 max={99}
                 value={copies}
                 onChange={(e) => setCopies(Number(e.target.value))}
-                className="w-full rounded-lg border-gray-300 shadow-sm text-sm p-2 border"
+                className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Paper</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Paper</label>
               <select
                 value={media}
                 onChange={(e) => setMedia(e.target.value)}
-                className="w-full rounded-lg border-gray-300 shadow-sm text-sm p-2 border"
+                className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
               >
                 <option value="A4">A4</option>
                 <option value="Letter">Letter</option>
@@ -106,7 +106,7 @@ export default function UploadForm() {
               </select>
             </div>
             <div className="flex items-end">
-              <label className="flex items-center gap-2 text-sm text-gray-700">
+              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                 <input
                   type="checkbox"
                   checked={duplex}

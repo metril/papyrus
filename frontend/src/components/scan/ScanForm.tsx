@@ -55,12 +55,12 @@ export default function ScanForm() {
     <div className="space-y-4">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Resolution</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Resolution</label>
           <select
             value={resolution}
             onChange={(e) => setResolution(Number(e.target.value))}
             disabled={scanning}
-            className="w-full rounded-lg border-gray-300 shadow-sm text-sm p-2 border"
+            className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
           >
             {[75, 100, 150, 200, 300, 600].map((r) => (
               <option key={r} value={r}>{r} DPI</option>
@@ -68,12 +68,12 @@ export default function ScanForm() {
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Color Mode</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Color Mode</label>
           <select
             value={mode}
             onChange={(e) => setMode(e.target.value)}
             disabled={scanning}
-            className="w-full rounded-lg border-gray-300 shadow-sm text-sm p-2 border"
+            className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
           >
             <option value="Color">Color</option>
             <option value="Gray">Grayscale</option>
@@ -81,12 +81,12 @@ export default function ScanForm() {
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Format</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Format</label>
           <select
             value={format}
             onChange={(e) => setFormat(e.target.value)}
             disabled={scanning}
-            className="w-full rounded-lg border-gray-300 shadow-sm text-sm p-2 border"
+            className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
           >
             <option value="pdf">PDF</option>
             <option value="png">PNG</option>
@@ -95,12 +95,12 @@ export default function ScanForm() {
           </select>
         </div>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">Source</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Source</label>
           <select
             value={source}
             onChange={(e) => setSource(e.target.value)}
             disabled={scanning}
-            className="w-full rounded-lg border-gray-300 shadow-sm text-sm p-2 border"
+            className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
           >
             <option value="Flatbed">Flatbed</option>
             <option value="ADF">ADF</option>
@@ -113,11 +113,11 @@ export default function ScanForm() {
       {error && <p className="text-sm text-red-600">{error}</p>}
 
       {result && result.status === 'completed' && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-          <p className="text-green-800 text-sm font-medium">Scan completed!</p>
+        <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg p-4">
+          <p className="text-green-800 dark:text-green-400 text-sm font-medium">Scan completed!</p>
           <a
             href={getScanDownloadUrl(result.scan_id)}
-            className="text-blue-600 hover:underline text-sm"
+            className="text-blue-600 dark:text-blue-400 hover:underline text-sm"
             download
           >
             Download scan

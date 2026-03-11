@@ -48,10 +48,10 @@ export default function CloudSaveDialog({ scanId, onClose }: CloudSaveDialogProp
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <div
-        className="bg-white rounded-xl shadow-xl w-full max-w-sm mx-4 p-6"
+        className="bg-white dark:bg-gray-900 rounded-xl shadow-xl w-full max-w-sm mx-4 p-6"
         onClick={(e) => e.stopPropagation()}
       >
-        <h3 className="text-lg font-semibold text-gray-900 mb-4">Save to Cloud</h3>
+        <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Save to Cloud</h3>
 
         {loading ? (
           <p className="text-sm text-gray-500">Loading providers...</p>
@@ -61,18 +61,18 @@ export default function CloudSaveDialog({ scanId, onClose }: CloudSaveDialogProp
           </p>
         ) : (
           <div className="space-y-2">
-            <p className="text-sm text-gray-600 mb-3">Select a provider:</p>
+            <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">Select a provider:</p>
             {providers.map((p) => (
               <button
                 key={p.id}
                 onClick={() => handleSave(p.id)}
                 disabled={saving}
-                className="w-full text-left p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors disabled:opacity-50"
+                className="w-full text-left p-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
               >
-                <div className="text-sm font-medium text-gray-900">
+                <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
                   {providerLabels[p.provider] || p.provider}
                 </div>
-                <div className="text-xs text-gray-500">
+                <div className="text-xs text-gray-500 dark:text-gray-400">
                   Connected {new Date(p.connected_at).toLocaleDateString()}
                 </div>
               </button>

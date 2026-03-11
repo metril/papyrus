@@ -64,7 +64,7 @@ export default function HistoryPage() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900">History</h2>
+      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">History</h2>
 
       <div className="flex gap-2">
         {(['all', 'print', 'scan'] as const).map((t) => (
@@ -72,7 +72,7 @@ export default function HistoryPage() {
             key={t}
             onClick={() => setTab(t)}
             className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              tab === t ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'
+              tab === t ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
             }`}
           >
             {t.charAt(0).toUpperCase() + t.slice(1)}
@@ -90,17 +90,17 @@ export default function HistoryPage() {
             {filtered.map((item) => (
               <div
                 key={item.id}
-                className="flex items-center justify-between p-3 rounded-lg border border-gray-100"
+                className="flex items-center justify-between p-3 rounded-lg border border-gray-100 dark:border-gray-800"
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold uppercase text-gray-400">
+                    <span className="text-xs font-semibold uppercase text-gray-400 dark:text-gray-500">
                       {item.type}
                     </span>
-                    <span className="text-sm text-gray-900 truncate">{item.label}</span>
+                    <span className="text-sm text-gray-900 dark:text-gray-100 truncate">{item.label}</span>
                     <StatusBadge status={item.status} />
                   </div>
-                  <div className="text-xs text-gray-500 mt-1">
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
                     {item.detail} &middot; {new Date(item.time).toLocaleString()}
                   </div>
                 </div>

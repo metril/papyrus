@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import AppShell from './components/layout/AppShell';
 import PrintPage from './pages/PrintPage';
@@ -6,8 +7,23 @@ import CopyPage from './pages/CopyPage';
 import FilesPage from './pages/FilesPage';
 import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
+import { useThemeStore } from './store/themeStore';
 
 export default function App() {
+  const { theme } = useThemeStore();
+
+  useEffect(() => {
+    const apply = (dark: boolean) => document.documentElement.classList.toggle('dark', dark);
+    if (theme === 'system') {
+      const mq = window.matchMedia('(prefers-color-scheme: dark)');
+      apply(mq.matches);
+      const listener = (e: MediaQueryListEvent) => apply(e.matches);
+      mq.addEventListener('change', listener);
+      return () => mq.removeEventListener('change', listener);
+    }
+    apply(theme === 'dark');
+  }, [theme]);
+
   return (
     <BrowserRouter>
       <Routes>

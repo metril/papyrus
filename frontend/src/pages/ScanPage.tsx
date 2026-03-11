@@ -5,7 +5,7 @@ import ScanList from '../components/scan/ScanList';
 export default function ScanPage() {
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900">Scan</h2>
+      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Scan</h2>
 
       <Card title="New Scan">
         <ScanForm />

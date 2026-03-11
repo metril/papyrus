@@ -5,7 +5,7 @@ import JobQueue from '../components/print/JobQueue';
 export default function PrintPage() {
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900">Print</h2>
+      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Print</h2>
 
       <Card title="Upload Document">
         <UploadForm />

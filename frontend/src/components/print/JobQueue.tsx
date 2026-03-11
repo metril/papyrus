@@ -27,10 +27,10 @@ const sourceLabels: Record<string, string> = {
 };
 
 const sourceColors: Record<string, string> = {
-  network: 'bg-blue-100 text-blue-700',
-  email: 'bg-purple-100 text-purple-700',
-  cloud: 'bg-cyan-100 text-cyan-700',
-  smb: 'bg-orange-100 text-orange-700',
+  network: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+  email: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400',
+  cloud: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-400',
+  smb: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400',
 };
 
 function PrinterSelector({ job, printers, onAssigned }: { job: PrintJob; printers: ManagedPrinter[]; onAssigned: () => void }) {
@@ -56,7 +56,7 @@ function PrinterSelector({ job, printers, onAssigned }: { job: PrintJob; printer
       <select
         value={selected}
         onChange={(e) => setSelected(e.target.value ? Number(e.target.value) : '')}
-        className="text-xs rounded border border-gray-300 py-0.5 px-1"
+        className="text-xs rounded border border-gray-300 dark:border-gray-600 py-0.5 px-1 bg-white dark:bg-gray-800 dark:text-gray-100"
       >
         <option value="">— printer —</option>
         {physicalPrinters.map((p) => (
@@ -108,24 +108,24 @@ export default function JobQueue() {
       {jobs.map((job) => (
         <div
           key={job.id}
-          className="flex items-center justify-between p-4 bg-white rounded-lg border border-gray-200"
+          className="flex items-center justify-between p-4 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700"
         >
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setPreviewJob(job)}
-                className="text-sm font-medium text-blue-600 hover:underline truncate text-left"
+                className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline truncate text-left"
               >
                 {job.filename}
               </button>
               <StatusBadge status={job.status} />
               {job.source_type && job.source_type !== 'upload' && (
-                <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${sourceColors[job.source_type] || 'bg-gray-100 text-gray-600'}`}>
+                <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${sourceColors[job.source_type] || 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}>
                   {sourceLabels[job.source_type] || job.source_type}
                 </span>
               )}
             </div>
-            <div className="text-xs text-gray-500 mt-1">
+            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               {formatSize(job.file_size)} &middot; {job.copies} cop{job.copies > 1 ? 'ies' : 'y'}
               {job.duplex && ' \u00b7 Duplex'}
               {' \u00b7 '}{job.media}

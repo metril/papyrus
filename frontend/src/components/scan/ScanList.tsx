@@ -57,19 +57,19 @@ export default function ScanList() {
       {scans.map((scan) => (
         <div
           key={scan.scan_id}
-          className="flex items-center justify-between p-4 bg-white rounded-lg border border-gray-200"
+          className="flex items-center justify-between p-4 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700"
         >
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <button
                 onClick={() => scan.status === 'completed' && setPreviewScan(scan)}
-                className={`text-sm font-medium truncate text-left ${scan.status === 'completed' ? 'text-blue-600 hover:underline cursor-pointer' : 'text-gray-900'}`}
+                className={`text-sm font-medium truncate text-left ${scan.status === 'completed' ? 'text-blue-600 dark:text-blue-400 hover:underline cursor-pointer' : 'text-gray-900 dark:text-gray-100'}`}
               >
                 {scan.format.toUpperCase()} &middot; {scan.resolution} DPI &middot; {scan.mode}
               </button>
               <StatusBadge status={scan.status} />
             </div>
-            <div className="text-xs text-gray-500 mt-1">
+            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               {scan.source}
               {scan.page_count > 1 && ` \u00b7 ${scan.page_count} pages`}
               {scan.file_size && ` \u00b7 ${formatSize(scan.file_size)}`}

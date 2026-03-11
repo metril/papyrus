@@ -13,14 +13,14 @@ export default function FilesPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <h2 className="text-2xl font-bold text-gray-900">Files</h2>
-        <div className="flex gap-1 bg-gray-100 rounded-lg p-1">
+        <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Files</h2>
+        <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
           <button
             onClick={() => setActiveTab('network')}
             className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
               activeTab === 'network'
-                ? 'bg-white text-gray-900 shadow-sm'
-                : 'text-gray-600 hover:text-gray-900'
+                ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
             }`}
           >
             Network
@@ -29,8 +29,8 @@ export default function FilesPage() {
             onClick={() => setActiveTab('cloud')}
             className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
               activeTab === 'cloud'
-                ? 'bg-white text-gray-900 shadow-sm'
-                : 'text-gray-600 hover:text-gray-900'
+                ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
             }`}
           >
             Cloud
@@ -126,12 +126,12 @@ function NetworkBrowser() {
               <button
                 key={share.id}
                 onClick={() => browse(share, '/')}
-                className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 border border-gray-200 text-left"
+                className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-700 text-left"
               >
                 <span className="text-lg">&#128193;</span>
                 <div>
-                  <div className="font-medium text-gray-900">{share.name}</div>
-                  <div className="text-xs text-gray-500">
+                  <div className="font-medium text-gray-900 dark:text-gray-100">{share.name}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">
                     \\{share.server}\{share.share_name}
                   </div>
                 </div>
@@ -163,7 +163,7 @@ function NetworkBrowser() {
         {files.map((entry) => (
           <div
             key={entry.name}
-            className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 border border-gray-200"
+            className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-700"
           >
             <button
               onClick={() => navigateTo(entry)}
@@ -171,7 +171,7 @@ function NetworkBrowser() {
               disabled={!entry.is_directory}
             >
               <span>{entry.is_directory ? '\u{1F4C1}' : '\u{1F4C4}'}</span>
-              <span className="text-sm text-gray-900 truncate">{entry.name}</span>
+              <span className="text-sm text-gray-900 dark:text-gray-100 truncate">{entry.name}</span>
               {!entry.is_directory && (
                 <span className="text-xs text-gray-500">
                   {(entry.size / 1024).toFixed(1)} KB
@@ -308,14 +308,14 @@ function CloudBrowser() {
                   setFolderStack([]);
                   browseFolder(p);
                 }}
-                className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 border border-gray-200 text-left"
+                className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-700 text-left"
               >
                 <span className="text-lg">{p.provider === 'gdrive' ? '\u{2601}' : '\u{1F4E6}'}</span>
                 <div>
-                  <div className="font-medium text-gray-900">
+                  <div className="font-medium text-gray-900 dark:text-gray-100">
                     {providerLabels[p.provider] || p.provider}
                   </div>
-                  <div className="text-xs text-gray-500">
+                  <div className="text-xs text-gray-500 dark:text-gray-400">
                     Connected {new Date(p.connected_at).toLocaleDateString()}
                   </div>
                 </div>
@@ -351,7 +351,7 @@ function CloudBrowser() {
         {files.map((entry) => (
           <div
             key={entry.id}
-            className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 border border-gray-200"
+            className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-700"
           >
             <button
               onClick={() => openFolder(entry)}
@@ -359,7 +359,7 @@ function CloudBrowser() {
               disabled={!entry.is_directory}
             >
               <span>{entry.is_directory ? '\u{1F4C1}' : '\u{1F4C4}'}</span>
-              <span className="text-sm text-gray-900 truncate">{entry.name}</span>
+              <span className="text-sm text-gray-900 dark:text-gray-100 truncate">{entry.name}</span>
               {!entry.is_directory && entry.size && (
                 <span className="text-xs text-gray-500">{formatSize(entry.size)}</span>
               )}

@@ -23,12 +23,12 @@ export default function FilePreviewModal({ url, filename, mimeType, onClose }: F
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <div
-        className="bg-white rounded-xl shadow-xl w-full max-w-4xl mx-4 flex flex-col"
+        className="bg-white dark:bg-gray-900 rounded-xl shadow-xl w-full max-w-4xl mx-4 flex flex-col"
         style={{ height: '80vh' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-          <h3 className="text-sm font-semibold text-gray-900 truncate">{filename}</h3>
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">{filename}</h3>
           <div className="flex items-center gap-2">
             <a href={url} download>
               <Button size="sm" variant="secondary">Download</Button>
@@ -37,16 +37,16 @@ export default function FilePreviewModal({ url, filename, mimeType, onClose }: F
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-gray-50">
+        <div className="flex-1 overflow-auto p-4 flex items-center justify-center bg-gray-50 dark:bg-gray-950">
           {isPdf && (
-            <iframe src={url} className="w-full h-full rounded border border-gray-200" title={filename} />
+            <iframe src={url} className="w-full h-full rounded border border-gray-200 dark:border-gray-700" title={filename} />
           )}
           {isImage && (
             <img src={url} alt={filename} className="max-w-full max-h-full object-contain" />
           )}
           {!isPdf && !isImage && (
             <div className="text-center">
-              <p className="text-gray-600 mb-3">Preview not available for this file type.</p>
+              <p className="text-gray-600 dark:text-gray-400 mb-3">Preview not available for this file type.</p>
               <a href={url} download>
                 <Button>Download {filename}</Button>
               </a>

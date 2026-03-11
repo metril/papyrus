@@ -33,22 +33,22 @@ export default function CopyPage() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900">Copy</h2>
+      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Copy</h2>
 
       <Card title="Quick Copy">
         <div className="space-y-4">
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-gray-600 dark:text-gray-400">
             Scan a document and print it immediately.
           </p>
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Resolution</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Resolution</label>
               <select
                 value={resolution}
                 onChange={(e) => setResolution(Number(e.target.value))}
                 disabled={copying}
-                className="w-full rounded-lg border-gray-300 shadow-sm text-sm p-2 border"
+                className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
               >
                 {[150, 300, 600].map((r) => (
                   <option key={r} value={r}>{r} DPI</option>
@@ -56,12 +56,12 @@ export default function CopyPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Color</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Color</label>
               <select
                 value={mode}
                 onChange={(e) => setMode(e.target.value)}
                 disabled={copying}
-                className="w-full rounded-lg border-gray-300 shadow-sm text-sm p-2 border"
+                className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
               >
                 <option value="Color">Color</option>
                 <option value="Gray">Grayscale</option>
@@ -69,19 +69,19 @@ export default function CopyPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Source</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Source</label>
               <select
                 value={source}
                 onChange={(e) => setSource(e.target.value)}
                 disabled={copying}
-                className="w-full rounded-lg border-gray-300 shadow-sm text-sm p-2 border"
+                className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
               >
                 <option value="Flatbed">Flatbed</option>
                 <option value="ADF">ADF</option>
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Copies</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Copies</label>
               <input
                 type="number"
                 min={1}
@@ -89,23 +89,23 @@ export default function CopyPage() {
                 value={copies}
                 onChange={(e) => setCopies(Number(e.target.value))}
                 disabled={copying}
-                className="w-full rounded-lg border-gray-300 shadow-sm text-sm p-2 border"
+                className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Paper</label>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Paper</label>
               <select
                 value={media}
                 onChange={(e) => setMedia(e.target.value)}
                 disabled={copying}
-                className="w-full rounded-lg border-gray-300 shadow-sm text-sm p-2 border"
+                className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
               >
                 <option value="A4">A4</option>
                 <option value="Letter">Letter</option>
               </select>
             </div>
             <div className="flex items-end">
-              <label className="flex items-center gap-2 text-sm text-gray-700">
+              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                 <input
                   type="checkbox"
                   checked={duplex}
