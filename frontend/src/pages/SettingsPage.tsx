@@ -370,8 +370,11 @@ function ScannersCard() {
       : addMode === 'brother' ? brotherDevice
       : form.device;
     if (!form.name || !device) return;
+    const extra = addMode === 'brother'
+      ? { post_scan_config: { brother_model: brotherModel, brother_ip: ipAddress } }
+      : {};
     try {
-      await addScanner({ ...form, device });
+      await addScanner({ ...form, device, ...extra });
       setForm({ name: '', device: '', description: '', auto_deliver: false });
       setIpAddress('');
       setProbeStatus('idle');

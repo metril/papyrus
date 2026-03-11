@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -11,6 +13,65 @@ from app.auth.oidc import setup_oauth
 from app.config import settings
 from app.routers import auth, cloud, copy, email, escl, jobs, printer, printers, scanner, scanners, settings as settings_router, smb, system
 
+logger = logging.getLogger(__name__)
+
+
+async def _reconcile_on_startup() -> None:
+    """Restore CUPS queues and brscan4 registrations from the DB on startup."""
+    import cups
+    from sqlalchemy import select
+    from app.database import async_session
+    from app.models import Printer, Scanner
+    from app.services import cups_admin
+
+    async with async_session() as db:
+        # --- CUPS printer queues ---
+        try:
+            existing_cups = set(cups.Connection().getPrinters().keys())
+        except Exception:
+            existing_cups = set()
+
+        result = await db.execute(select(Printer))
+        for printer_obj in result.scalars():
+            if printer_obj.cups_name in existing_cups:
+                continue
+            try:
+                if printer_obj.is_network_queue:
+                    await cups_admin.add_network_queue(
+                        printer_obj.cups_name, printer_obj.display_name
+                    )
+                else:
+                    await cups_admin.add_physical_printer(
+                        printer_obj.cups_name, printer_obj.display_name, printer_obj.uri
+                    )
+                logger.info("Restored CUPS queue: %s", printer_obj.cups_name)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to restore CUPS queue '%s': %s", printer_obj.cups_name, exc
+                )
+
+        # --- brscan4 registrations ---
+        result = await db.execute(select(Scanner))
+        for scanner_obj in result.scalars():
+            cfg = scanner_obj.post_scan_config or {}
+            model = cfg.get("brother_model")
+            ip = cfg.get("brother_ip")
+            if not model or not ip:
+                continue
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "brsaneconfig4", "-a",
+                    f"name={scanner_obj.name}", f"model={model}", f"ip={ip}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await asyncio.wait_for(proc.communicate(), timeout=10)
+                logger.info("Restored brscan4 registration: %s", scanner_obj.name)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to restore brscan4 '%s': %s", scanner_obj.name, exc
+                )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -18,6 +79,7 @@ async def lifespan(app: FastAPI):
     os.makedirs(settings.scan_dir, exist_ok=True)
     os.makedirs(settings.upload_dir, exist_ok=True)
     setup_oauth()
+    await _reconcile_on_startup()
     yield
     # Shutdown: cleanup if needed
 
