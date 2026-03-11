@@ -17,6 +17,7 @@ import {
   deleteScanner,
   setDefaultScanner,
   discoverScanners,
+  probeScanner,
 } from '../api/scanners';
 import type { APIToken, CloudProvider, ManagedPrinter, ManagedScanner, DiscoveredDevice } from '../types';
 
@@ -194,15 +195,41 @@ function PrintersCard() {
 function ScannersCard() {
   const [scanners, setScanners] = useState<ManagedScanner[]>([]);
   const [showAdd, setShowAdd] = useState(false);
+  const [addMode, setAddMode] = useState<'manual' | 'ip' | 'discover'>('manual');
   const [editId, setEditId] = useState<number | null>(null);
   const [discovered, setDiscovered] = useState<DiscoveredDevice[]>([]);
   const [discovering, setDiscovering] = useState(false);
   const [form, setForm] = useState({ name: '', device: '', description: '', auto_deliver: false });
   const [editForm, setEditForm] = useState({ name: '', device: '', description: '', auto_deliver: false });
+  // IP mode state
+  const [ipAddress, setIpAddress] = useState('');
+  const [probeStatus, setProbeStatus] = useState<'idle' | 'probing' | 'reachable' | 'unreachable'>('idle');
 
   const load = () => listScanners().then(setScanners).catch(() => {});
 
   useEffect(() => { load(); }, []);
+
+  const ipDevice = ipAddress
+    ? `airscan:e:${form.name || 'Scanner'}:http://${ipAddress}/eSCL`
+    : '';
+
+  const handleProbe = async () => {
+    if (!ipAddress) return;
+    setProbeStatus('probing');
+    try {
+      const result = await probeScanner(ipAddress);
+      if (result.reachable) {
+        setProbeStatus('reachable');
+        if (result.make_model && !form.name) {
+          setForm((f) => ({ ...f, name: result.make_model! }));
+        }
+      } else {
+        setProbeStatus('unreachable');
+      }
+    } catch {
+      setProbeStatus('unreachable');
+    }
+  };
 
   const handleDiscover = async () => {
     setDiscovering(true);
@@ -214,10 +241,13 @@ function ScannersCard() {
   };
 
   const handleAdd = async () => {
-    if (!form.name || !form.device) return;
+    const device = addMode === 'ip' ? ipDevice : form.device;
+    if (!form.name || !device) return;
     try {
-      await addScanner(form);
+      await addScanner({ ...form, device });
       setForm({ name: '', device: '', description: '', auto_deliver: false });
+      setIpAddress('');
+      setProbeStatus('idle');
       setShowAdd(false);
       setDiscovered([]);
       load();
@@ -244,6 +274,14 @@ function ScannersCard() {
   const startEdit = (s: ManagedScanner) => {
     setEditId(s.id);
     setEditForm({ name: s.name, device: s.device, description: s.description || '', auto_deliver: s.auto_deliver });
+  };
+
+  const resetAdd = () => {
+    setShowAdd(false);
+    setDiscovered([]);
+    setIpAddress('');
+    setProbeStatus('idle');
+    setForm({ name: '', device: '', description: '', auto_deliver: false });
   };
 
   return (
@@ -292,41 +330,99 @@ function ScannersCard() {
         ))}
 
         {showAdd ? (
-          <div className="p-3 rounded-lg border border-blue-200 bg-blue-50 space-y-2">
+          <div className="p-3 rounded-lg border border-blue-200 bg-blue-50 space-y-3">
+            {/* Mode tabs */}
+            <div className="flex gap-1 text-xs">
+              {(['ip', 'manual', 'discover'] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setAddMode(m)}
+                  className={`px-3 py-1 rounded-full font-medium ${addMode === m ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-50'}`}
+                >
+                  {m === 'ip' ? 'IP Address' : m === 'manual' ? 'Manual' : 'Discover'}
+                </button>
+              ))}
+            </div>
+
+            {addMode === 'ip' && (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">IP Address</label>
+                    <div className="flex gap-1">
+                      <input
+                        type="text"
+                        value={ipAddress}
+                        onChange={(e) => { setIpAddress(e.target.value); setProbeStatus('idle'); }}
+                        placeholder="192.168.1.100"
+                        className="flex-1 rounded-lg border border-gray-300 text-sm p-2"
+                      />
+                      <Button size="sm" variant="secondary" onClick={handleProbe} disabled={!ipAddress || probeStatus === 'probing'}>
+                        {probeStatus === 'probing' ? '…' : 'Test'}
+                      </Button>
+                    </div>
+                    {probeStatus === 'reachable' && <p className="text-xs text-green-600 mt-0.5">Scanner reachable</p>}
+                    {probeStatus === 'unreachable' && <p className="text-xs text-red-600 mt-0.5">Not reachable — check IP and network</p>}
+                  </div>
+                  <SettingField label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="Brother DCP-L2540DW" />
+                </div>
+                {ipDevice && (
+                  <p className="text-xs text-gray-500">Device string: <span className="font-mono">{ipDevice}</span></p>
+                )}
+              </div>
+            )}
+
+            {addMode === 'manual' && (
+              <div className="grid grid-cols-2 gap-2">
+                <SettingField label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="Brother DCP-L2540DW" />
+                <SettingField label="SANE Device String" value={form.device} onChange={(v) => setForm((f) => ({ ...f, device: v }))} placeholder="airscan:w:Brother DCP-L2540DW" />
+              </div>
+            )}
+
+            {addMode === 'discover' && (
+              <div className="space-y-2">
+                <div className="flex gap-2">
+                  <SettingField label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="Brother DCP-L2540DW" />
+                  <div className="self-end">
+                    <Button size="sm" variant="secondary" onClick={handleDiscover} disabled={discovering}>
+                      {discovering ? 'Scanning…' : 'Scan Network'}
+                    </Button>
+                  </div>
+                </div>
+                {discovered.length > 0 && (
+                  <div>
+                    <p className="text-xs text-gray-600 mb-1">Found devices (click to select):</p>
+                    <div className="space-y-1">
+                      {discovered.map((d) => (
+                        <button
+                          key={d.device}
+                          onClick={() => setForm((f) => ({ ...f, device: d.device, name: f.name || d.description }))}
+                          className={`block w-full text-left text-xs p-2 rounded border hover:bg-gray-50 ${form.device === d.device ? 'border-blue-400 bg-blue-50' : 'border-gray-200 bg-white'}`}
+                        >
+                          <span className="font-mono">{d.device}</span>
+                          {d.description && <span className="text-gray-500 ml-1">— {d.description}</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {discovered.length === 0 && !discovering && (
+                  <p className="text-xs text-gray-500">Click "Scan Network" to find scanners via mDNS.</p>
+                )}
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-2">
-              <SettingField label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="Brother DCP-L2540DW" />
-              <SettingField label="SANE Device String" value={form.device} onChange={(v) => setForm((f) => ({ ...f, device: v }))} placeholder="airscan:w:Brother DCP-L2540DW" />
-              <SettingField label="Description" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
+              <SettingField label="Description (optional)" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
               <label className="flex items-center gap-2 text-sm self-center">
                 <input type="checkbox" checked={form.auto_deliver} onChange={(e) => setForm((f) => ({ ...f, auto_deliver: e.target.checked }))} className="rounded border-gray-300" />
                 <span className="font-medium text-gray-700">Auto-deliver scans</span>
               </label>
             </div>
 
-            {discovered.length > 0 && (
-              <div>
-                <p className="text-xs text-gray-600 mb-1">Discovered devices (click to use):</p>
-                <div className="space-y-1">
-                  {discovered.map((d) => (
-                    <button
-                      key={d.device}
-                      onClick={() => setForm((f) => ({ ...f, device: d.device, name: f.name || d.description }))}
-                      className="block w-full text-left text-xs p-2 rounded bg-white border border-gray-200 hover:bg-gray-50"
-                    >
-                      <span className="font-mono">{d.device}</span>
-                      {d.description && <span className="text-gray-500 ml-1">— {d.description}</span>}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
             <div className="flex gap-2">
               <Button size="sm" onClick={handleAdd}>Add Scanner</Button>
-              <Button size="sm" variant="secondary" onClick={handleDiscover} disabled={discovering}>
-                {discovering ? 'Discovering…' : 'Discover Devices'}
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => { setShowAdd(false); setDiscovered([]); }}>Cancel</Button>
+              <Button size="sm" variant="ghost" onClick={resetAdd}>Cancel</Button>
             </div>
           </div>
         ) : (

@@ -29,3 +29,14 @@ export async function discoverScanners(): Promise<DiscoveredDevice[]> {
   const { data } = await api.get('/scanners/discover');
   return data;
 }
+
+export interface ProbeResult {
+  reachable: boolean;
+  device: string;
+  make_model: string | null;
+}
+
+export async function probeScanner(ip: string): Promise<ProbeResult> {
+  const { data } = await api.get('/scanners/probe', { params: { ip } });
+  return data;
+}

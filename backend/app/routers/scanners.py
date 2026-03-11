@@ -50,6 +50,46 @@ async def list_scanners(
     return [_scanner_response(s) for s in result.scalars()]
 
 
+@router.get("/probe")
+async def probe_scanner_ip(
+    ip: str,
+    _user: User = Depends(require_admin),
+) -> dict:
+    """Probe a scanner at the given IP address via eSCL and return connection info."""
+    import re
+    import xml.etree.ElementTree as ET
+    from urllib.request import urlopen
+    from urllib.error import URLError
+
+    url = f"http://{ip}/eSCL/ScannerCapabilities"
+    device = f"airscan:e:Scanner_{ip.replace('.', '_')}:http://{ip}/eSCL"
+    make_model = None
+
+    try:
+        # Run the blocking urllib call in a thread pool to avoid blocking the event loop
+        loop = asyncio.get_event_loop()
+
+        def _fetch() -> bytes:
+            with urlopen(url, timeout=3) as resp:
+                return resp.read()
+
+        raw = await loop.run_in_executor(None, _fetch)
+        try:
+            root = ET.fromstring(raw)
+            for elem in root.iter():
+                if elem.tag.endswith("}MakeAndModel") or elem.tag == "MakeAndModel":
+                    make_model = elem.text
+                    break
+        except ET.ParseError:
+            pass
+        # Use make_model as label in device string if available
+        label = make_model or f"Scanner_{ip.replace('.', '_')}"
+        device = f"airscan:e:{label}:http://{ip}/eSCL"
+        return {"reachable": True, "device": device, "make_model": make_model}
+    except (URLError, OSError, TimeoutError):
+        return {"reachable": False, "device": device, "make_model": None}
+
+
 @router.get("/discover")
 async def discover_scanners(_user: User = Depends(require_admin)) -> list[dict]:
     """Run scanimage -L and return found SANE devices."""
