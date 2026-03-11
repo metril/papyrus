@@ -28,7 +28,7 @@ export default function ScanList() {
   const [previewScan, setPreviewScan] = useState<ScanJob | null>(null);
 
   const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
-  const debouncedFetch = useCallback(() => {
+  const debouncedFetch = useCallback((_msg: unknown) => {
     clearTimeout(fetchTimeoutRef.current);
     fetchTimeoutRef.current = setTimeout(() => fetchScans(), 300);
   }, [fetchScans]);
