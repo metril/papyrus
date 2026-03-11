@@ -18,7 +18,7 @@ export default function ScanForm() {
   const { progress, setProgress, fetchScans } = useScanStore();
 
   useWebSocket({
-    url: result ? `/ws/scan/${result.scan_id}` : '/ws/scan/_',
+    url: result ? `/api/scanner/ws/scan/${result.scan_id}` : '/api/scanner/ws/scan/_',
     onMessage: (msg) => {
       if (msg.type === 'scan_progress') {
         setProgress((msg.data as { progress: number }).progress);

@@ -20,3 +20,14 @@ async def jobs_ws(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         ws_manager.disconnect("jobs", websocket)
+
+
+@router.websocket("/ws/scans")
+async def scans_ws(websocket: WebSocket):
+    """WebSocket for real-time scan list updates."""
+    await ws_manager.connect("scans", websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect("scans", websocket)

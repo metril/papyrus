@@ -2,6 +2,7 @@ import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, status
+from starlette.responses import FileResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,6 +72,11 @@ async def upload_and_create_job(
     db.add(job)
     await db.commit()
     await db.refresh(job)
+
+    await ws_manager.broadcast("jobs", {
+        "type": "job_created",
+        "data": {"id": job.id, "title": job.title, "status": job.status, "source_type": "upload"},
+    })
 
     # If not holding, process immediately
     if not hold:
@@ -224,6 +230,26 @@ async def get_job(
     return job
 
 
+@router.get("/{job_id}/download")
+async def download_job_file(
+    job_id: int,
+    user: User = Depends(require_permission("print")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Download a print job's file."""
+    result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not job.filepath or not os.path.exists(job.filepath):
+        raise HTTPException(status_code=404, detail="File not found on disk")
+    return FileResponse(
+        job.filepath,
+        filename=job.filename,
+        media_type=job.mime_type,
+    )
+
+
 @router.post("/{job_id}/release", response_model=PrintJobResponse)
 async def release_job(
     job_id: int,
@@ -328,5 +354,10 @@ async def delete_job(
     # Clean up file
     cleanup_file(job.filepath)
 
+    job_id_copy = job.id
     await db.delete(job)
     await db.commit()
+
+    await ws_manager.broadcast("jobs", {
+        "type": "job_deleted", "data": {"id": job_id_copy}
+    })

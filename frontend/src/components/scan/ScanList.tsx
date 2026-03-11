@@ -1,10 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { useScanStore } from '../../store/scanStore';
+import { useWebSocket } from '../../hooks/useWebSocket';
+import { getScanDownloadUrl } from '../../api/scanner';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
-import { getScanDownloadUrl } from '../../api/scanner';
+import FilePreviewModal from '../common/FilePreviewModal';
 import EmailScanDialog from './EmailScanDialog';
 import CloudSaveDialog from './CloudSaveDialog';
+import type { ScanJob } from '../../types';
 
 function formatSize(bytes: number | null): string {
   if (!bytes) return '';
@@ -13,13 +16,31 @@ function formatSize(bytes: number | null): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function scanMimeType(scan: ScanJob): string {
+  if (scan.format === 'pdf') return 'application/pdf';
+  return `image/${scan.format}`;
+}
+
 export default function ScanList() {
   const { scans, loading, fetchScans, deleteScan } = useScanStore();
   const [emailScanId, setEmailScanId] = useState<string | null>(null);
   const [cloudScanId, setCloudScanId] = useState<string | null>(null);
+  const [previewScan, setPreviewScan] = useState<ScanJob | null>(null);
+
+  const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const debouncedFetch = useCallback(() => {
+    clearTimeout(fetchTimeoutRef.current);
+    fetchTimeoutRef.current = setTimeout(() => fetchScans(), 300);
+  }, [fetchScans]);
+
+  useWebSocket({
+    url: '/api/system/ws/scans',
+    onMessage: debouncedFetch,
+  });
 
   useEffect(() => {
     fetchScans();
+    return () => clearTimeout(fetchTimeoutRef.current);
   }, [fetchScans]);
 
   if (loading && scans.length === 0) {
@@ -40,9 +61,12 @@ export default function ScanList() {
         >
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-gray-900">
+              <button
+                onClick={() => scan.status === 'completed' && setPreviewScan(scan)}
+                className={`text-sm font-medium truncate text-left ${scan.status === 'completed' ? 'text-blue-600 hover:underline cursor-pointer' : 'text-gray-900'}`}
+              >
                 {scan.format.toUpperCase()} &middot; {scan.resolution} DPI &middot; {scan.mode}
-              </span>
+              </button>
               <StatusBadge status={scan.status} />
             </div>
             <div className="text-xs text-gray-500 mt-1">
@@ -56,6 +80,9 @@ export default function ScanList() {
           <div className="flex gap-2 ml-4">
             {scan.status === 'completed' && (
               <>
+                <Button size="sm" variant="secondary" onClick={() => setPreviewScan(scan)}>
+                  View
+                </Button>
                 <a href={getScanDownloadUrl(scan.scan_id)} download>
                   <Button size="sm" variant="secondary">Download</Button>
                 </a>
@@ -80,6 +107,14 @@ export default function ScanList() {
     )}
     {cloudScanId && (
       <CloudSaveDialog scanId={cloudScanId} onClose={() => setCloudScanId(null)} />
+    )}
+    {previewScan && (
+      <FilePreviewModal
+        url={getScanDownloadUrl(previewScan.scan_id)}
+        filename={`scan_${previewScan.scan_id}.${previewScan.format}`}
+        mimeType={scanMimeType(previewScan)}
+        onClose={() => setPreviewScan(null)}
+      />
     )}
     </>
   );

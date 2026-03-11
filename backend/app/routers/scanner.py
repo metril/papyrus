@@ -79,6 +79,10 @@ async def initiate_scan(
             "type": "scan_completed",
             "data": {"scan_id": job.scan_id},
         })
+        await ws_manager.broadcast("scans", {
+            "type": "scan_completed",
+            "data": {"scan_id": job.scan_id},
+        })
 
     except ScanError as e:
         job.status = "failed"
@@ -133,6 +137,10 @@ async def initiate_batch_scan(
         await ws_manager.broadcast(f"scan:{job.scan_id}", {
             "type": "scan_completed",
             "data": {"scan_id": job.scan_id, "page_count": page_count},
+        })
+        await ws_manager.broadcast("scans", {
+            "type": "scan_completed",
+            "data": {"scan_id": job.scan_id},
         })
 
     except ScanError as e:
@@ -323,8 +331,13 @@ async def delete_scan(
     if job.filepath:
         cleanup_file(job.filepath)
 
+    scan_id_copy = job.scan_id
     await db.delete(job)
     await db.commit()
+
+    await ws_manager.broadcast("scans", {
+        "type": "scan_deleted", "data": {"scan_id": scan_id_copy}
+    })
 
 
 # WebSocket endpoint for scan progress

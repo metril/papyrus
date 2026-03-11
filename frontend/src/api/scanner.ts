@@ -39,6 +39,10 @@ export function getScanDownloadUrl(scanId: string): string {
   return `/api/scanner/scans/${scanId}/download`;
 }
 
+export function getJobDownloadUrl(jobId: number): string {
+  return `/api/jobs/${jobId}/download`;
+}
+
 export async function emailScan(
   scanId: string,
   to: string,

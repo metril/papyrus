@@ -1,7 +1,11 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { useJobStore } from '../../store/jobStore';
+import { useWebSocket } from '../../hooks/useWebSocket';
+import { getJobDownloadUrl } from '../../api/scanner';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
+import FilePreviewModal from '../common/FilePreviewModal';
+import type { PrintJob } from '../../types';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -30,9 +34,22 @@ const sourceColors: Record<string, string> = {
 
 export default function JobQueue() {
   const { jobs, loading, fetchJobs, releaseJob, cancelJob, deleteJob } = useJobStore();
+  const [previewJob, setPreviewJob] = useState<PrintJob | null>(null);
+
+  const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const debouncedFetch = useCallback(() => {
+    clearTimeout(fetchTimeoutRef.current);
+    fetchTimeoutRef.current = setTimeout(() => fetchJobs(), 300);
+  }, [fetchJobs]);
+
+  useWebSocket({
+    url: '/api/system/ws/jobs',
+    onMessage: debouncedFetch,
+  });
 
   useEffect(() => {
     fetchJobs();
+    return () => clearTimeout(fetchTimeoutRef.current);
   }, [fetchJobs]);
 
   if (loading && jobs.length === 0) {
@@ -44,6 +61,7 @@ export default function JobQueue() {
   }
 
   return (
+    <>
     <div className="space-y-3">
       {jobs.map((job) => (
         <div
@@ -52,7 +70,12 @@ export default function JobQueue() {
         >
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium text-gray-900 truncate">{job.filename}</span>
+              <button
+                onClick={() => setPreviewJob(job)}
+                className="text-sm font-medium text-blue-600 hover:underline truncate text-left"
+              >
+                {job.filename}
+              </button>
               <StatusBadge status={job.status} />
               {job.source_type && job.source_type !== 'upload' && (
                 <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${sourceColors[job.source_type] || 'bg-gray-100 text-gray-600'}`}>
@@ -91,5 +114,15 @@ export default function JobQueue() {
         </div>
       ))}
     </div>
+
+    {previewJob && (
+      <FilePreviewModal
+        url={getJobDownloadUrl(previewJob.id)}
+        filename={previewJob.filename}
+        mimeType={previewJob.mime_type}
+        onClose={() => setPreviewJob(null)}
+      />
+    )}
+    </>
   );
 }
