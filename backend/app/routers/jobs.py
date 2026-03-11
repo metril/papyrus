@@ -247,6 +247,7 @@ async def download_job_file(
         job.filepath,
         filename=job.filename,
         media_type=job.mime_type,
+        content_disposition_type="inline",
     )
 
 

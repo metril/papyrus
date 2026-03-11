@@ -190,6 +190,7 @@ async def download_scan(
         job.filepath,
         filename=f"scan_{scan_id}.{job.format}",
         media_type=f"application/{job.format}" if job.format == "pdf" else f"image/{job.format}",
+        content_disposition_type="inline",
     )
 
 
