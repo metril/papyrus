@@ -1,17 +1,18 @@
 import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form, status
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
+from pydantic import BaseModel
 from starlette.responses import FileResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_permission
 from app.database import get_db
-from app.models import PrintJob, User
+from app.models import Printer, PrintJob, User
 from app.schemas import PrintJobList, PrintJobResponse
 from app.services.convert_service import convert_to_pdf, is_printable, needs_conversion
-from app.services.cups_service import cups_service
+from app.services.cups_service import CupsService, get_default_printer_name
 from app.services.file_service import (
     cleanup_file,
     detect_mime_type,
@@ -45,7 +46,6 @@ async def upload_and_create_job(
             detail=f"Unsupported file type: {mime_type}. Accepted: PDF, images, office documents.",
         )
 
-    # Save uploaded file
     upload_path = get_upload_path(file.filename)
     content = await file.read()
 
@@ -55,7 +55,9 @@ async def upload_and_create_job(
     with open(upload_path, "wb") as f:
         f.write(content)
 
-    # Create job record
+    # Assign to default printer
+    default_printer = await get_default_printer(db)
+
     job = PrintJob(
         user_id=user.id,
         title=sanitize_filename(file.filename),
@@ -68,6 +70,7 @@ async def upload_and_create_job(
         duplex=duplex,
         media=media,
         source_type="upload",
+        printer_id=default_printer.id if default_printer else None,
     )
     db.add(job)
     await db.commit()
@@ -78,37 +81,51 @@ async def upload_and_create_job(
         "data": {"id": job.id, "title": job.title, "status": job.status, "source_type": "upload"},
     })
 
-    # If not holding, process immediately
     if not hold:
-        await _process_job(job, db)
+        await _process_job(job, db, default_printer)
 
     return job
 
 
-async def _process_job(job: PrintJob, db: AsyncSession):
-    """Convert (if needed) and send job to CUPS."""
+async def get_default_printer(db: AsyncSession):
+    result = await db.execute(
+        select(Printer).where(Printer.is_default == True, Printer.is_network_queue == False)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
+    """Convert (if needed) and send job to the designated CUPS release queue."""
     print_path = job.filepath
 
+    # Resolve which CUPS queue to print to
+    release_queue = None
+    if printer is None and job.printer_id:
+        printer = await db.get(Printer, job.printer_id)
+    if printer and not printer.is_network_queue:
+        release_queue = f"{printer.cups_name}_release"
+    else:
+        release_queue = await get_default_printer_name(db)
+
+    svc = CupsService(printer_name=release_queue)
+
     try:
-        # Convert office documents to PDF
         if needs_conversion(job.mime_type):
             job.status = "converting"
             await db.commit()
             await ws_manager.broadcast("jobs", {
                 "type": "job_updated", "data": {"id": job.id, "status": "converting"}
             })
-
             output_dir = os.path.dirname(job.filepath)
             print_path = await convert_to_pdf(job.filepath, output_dir)
 
-        # Send to CUPS
         job.status = "printing"
         await db.commit()
         await ws_manager.broadcast("jobs", {
             "type": "job_updated", "data": {"id": job.id, "status": "printing"}
         })
 
-        cups_job_id = cups_service.create_held_job(
+        cups_job_id = svc.create_held_job(
             filepath=print_path,
             title=job.title,
             copies=job.copies,
@@ -116,9 +133,7 @@ async def _process_job(job: PrintJob, db: AsyncSession):
             media=job.media,
         )
         job.cups_job_id = cups_job_id
-
-        # Release immediately since hold=False
-        cups_service.release_job(cups_job_id)
+        svc.release_job(cups_job_id)
 
         job.status = "completed"
         job.completed_at = datetime.now(timezone.utc)
@@ -146,6 +161,7 @@ async def ingest_network_job(
     copies: int = Form(default=1),
     duplex: bool = Form(default=False),
     media: str = Form(default="A4"),
+    queue_name: str = Form(default=""),
     db: AsyncSession = Depends(get_db),
 ):
     """Internal endpoint for the CUPS backend to submit network print jobs.
@@ -167,6 +183,16 @@ async def ingest_network_job(
     with open(upload_path, "wb") as f:
         f.write(content)
 
+    # Resolve printer from queue_name
+    printer = None
+    if queue_name:
+        result = await db.execute(select(Printer).where(Printer.cups_name == queue_name))
+        printer = result.scalar_one_or_none()
+    if printer is None:
+        printer = await get_default_printer(db)
+
+    auto_release = printer.auto_release if printer else False
+
     job = PrintJob(
         title=sanitize_filename(title),
         filename=sanitize_filename(file.filename),
@@ -178,6 +204,7 @@ async def ingest_network_job(
         duplex=duplex,
         media=media,
         source_type="network",
+        printer_id=printer.id if printer else None,
     )
     db.add(job)
     await db.commit()
@@ -187,6 +214,9 @@ async def ingest_network_job(
         "type": "job_created",
         "data": {"id": job.id, "title": job.title, "status": "held", "source_type": "network"},
     })
+
+    if auto_release:
+        await _process_job(job, db, printer)
 
     return job
 
@@ -251,6 +281,41 @@ async def download_job_file(
     )
 
 
+class PrinterAssign(BaseModel):
+    printer_id: int
+
+
+@router.patch("/{job_id}/printer", response_model=PrintJobResponse)
+async def assign_printer(
+    job_id: int,
+    body: PrinterAssign,
+    user: User = Depends(require_permission("print")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Reassign a held job to a different printer."""
+    result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != "held":
+        raise HTTPException(status_code=400, detail="Can only reassign held jobs")
+
+    printer = await db.get(Printer, body.printer_id)
+    if printer is None:
+        raise HTTPException(status_code=404, detail="Printer not found")
+    if printer.is_network_queue:
+        raise HTTPException(status_code=400, detail="Cannot assign job to network queue")
+
+    job.printer_id = printer.id
+    await db.commit()
+    await db.refresh(job)
+    await ws_manager.broadcast("jobs", {
+        "type": "job_updated",
+        "data": {"id": job.id, "status": job.status, "printer_id": job.printer_id},
+    })
+    return job
+
+
 @router.post("/{job_id}/release", response_model=PrintJobResponse)
 async def release_job(
     job_id: int,
@@ -265,8 +330,11 @@ async def release_job(
     if job.status != "held":
         raise HTTPException(status_code=400, detail=f"Job is not held (status: {job.status})")
 
+    printer = None
+    if job.printer_id:
+        printer = await db.get(Printer, job.printer_id)
+
     try:
-        # Convert if needed
         print_path = job.filepath
         if needs_conversion(job.mime_type):
             job.status = "converting"
@@ -277,8 +345,14 @@ async def release_job(
             output_dir = os.path.dirname(job.filepath)
             print_path = await convert_to_pdf(job.filepath, output_dir)
 
-        # Send to CUPS and release
-        cups_job_id = cups_service.create_held_job(
+        # Use the printer's release queue or fall back to default
+        if printer and not printer.is_network_queue:
+            queue = f"{printer.cups_name}_release"
+        else:
+            queue = await get_default_printer_name(db)
+
+        svc = CupsService(printer_name=queue)
+        cups_job_id = svc.create_held_job(
             filepath=print_path,
             title=job.title,
             copies=job.copies,
@@ -286,7 +360,7 @@ async def release_job(
             media=job.media,
         )
         job.cups_job_id = cups_job_id
-        cups_service.release_job(cups_job_id)
+        svc.release_job(cups_job_id)
 
         job.status = "printing"
         await db.commit()
@@ -320,8 +394,11 @@ async def cancel_job(
         raise HTTPException(status_code=404, detail="Job not found")
 
     if job.cups_job_id:
+        # Try to cancel via CUPS — use the job's printer or default
         try:
-            cups_service.cancel_job(job.cups_job_id)
+            printer = await db.get(Printer, job.printer_id) if job.printer_id else None
+            queue = f"{printer.cups_name}_release" if printer and not printer.is_network_queue else await get_default_printer_name(db)
+            CupsService(printer_name=queue).cancel_job(job.cups_job_id)
         except Exception:
             pass
 
@@ -345,16 +422,15 @@ async def delete_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Cancel CUPS job if active
     if job.cups_job_id and job.status in ("held", "printing"):
         try:
-            cups_service.cancel_job(job.cups_job_id)
+            printer = await db.get(Printer, job.printer_id) if job.printer_id else None
+            queue = f"{printer.cups_name}_release" if printer and not printer.is_network_queue else await get_default_printer_name(db)
+            CupsService(printer_name=queue).cancel_job(job.cups_job_id)
         except Exception:
             pass
 
-    # Clean up file
     cleanup_file(job.filepath)
-
     job_id_copy = job.id
     await db.delete(job)
     await db.commit()

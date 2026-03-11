@@ -65,7 +65,8 @@ class PrintJob(Base):
     copies: Mapped[int] = mapped_column(Integer, default=1)
     duplex: Mapped[bool] = mapped_column(Boolean, default=False)
     media: Mapped[str] = mapped_column(String(50), default="A4")
-    source_type: Mapped[str] = mapped_column(String(20), default="upload")  # upload, smb, cloud, email
+    source_type: Mapped[str] = mapped_column(String(20), default="upload")  # upload, smb, cloud, email, network
+    printer_id: Mapped[int | None] = mapped_column(ForeignKey("printers.id", ondelete="SET NULL"), nullable=True)
     options_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -98,6 +99,7 @@ class ScanJob(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    scanner_id: Mapped[int | None] = mapped_column(ForeignKey("scanners.id", ondelete="SET NULL"), nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="scan_jobs")
 
@@ -136,3 +138,30 @@ class AppConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
     )
+
+
+class Printer(Base):
+    __tablename__ = "printers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    display_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    cups_name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    uri: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_network_queue: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_release: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Scanner(Base):
+    __tablename__ = "scanners"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    device: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_deliver: Mapped[bool] = mapped_column(Boolean, default=False)
+    post_scan_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())

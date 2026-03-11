@@ -57,6 +57,7 @@ if [ ! -s "$TMPFILE" ]; then
 fi
 
 # POST to Papyrus API
+# $PRINTER is set by CUPS to the queue name that received the job
 HTTP_CODE=$(curl -s -o /dev/stderr -w "%{http_code}" \
     -X POST "$PAPYRUS_API" \
     -F "file=@${TMPFILE};filename=${TITLE:-Untitled}.pdf" \
@@ -65,6 +66,7 @@ HTTP_CODE=$(curl -s -o /dev/stderr -w "%{http_code}" \
     -F "copies=${COPIES:-1}" \
     -F "duplex=${DUPLEX}" \
     -F "media=${MEDIA}" \
+    -F "queue_name=${PRINTER:-}" \
     2>/dev/null)
 
 if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then

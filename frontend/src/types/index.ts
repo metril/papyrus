@@ -34,6 +34,7 @@ export interface PrintJob {
   duplex: boolean;
   media: string;
   source_type: 'upload' | 'smb' | 'cloud' | 'email' | 'network';
+  printer_id: number | null;
   error_message: string | null;
   created_at: string;
   updated_at: string;
@@ -124,6 +125,68 @@ export interface PrinterStatus {
   state: number;
   state_message: string;
   accepting_jobs: boolean;
+}
+
+export interface ManagedPrinter {
+  id: number;
+  display_name: string;
+  cups_name: string;
+  uri: string;
+  description: string | null;
+  is_default: boolean;
+  is_network_queue: boolean;
+  auto_release: boolean;
+  created_at: string;
+  cups_status: PrinterStatus;
+}
+
+export interface ManagedPrinterCreate {
+  display_name: string;
+  uri?: string;
+  description?: string;
+  is_network_queue?: boolean;
+  auto_release?: boolean;
+}
+
+export interface ManagedPrinterUpdate {
+  display_name?: string;
+  uri?: string;
+  description?: string;
+  auto_release?: boolean;
+}
+
+// --- Scanner Management ---
+
+export interface ManagedScanner {
+  id: number;
+  name: string;
+  device: string;
+  description: string | null;
+  is_default: boolean;
+  auto_deliver: boolean;
+  post_scan_config: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface ManagedScannerCreate {
+  name: string;
+  device: string;
+  description?: string;
+  auto_deliver?: boolean;
+  post_scan_config?: Record<string, unknown>;
+}
+
+export interface ManagedScannerUpdate {
+  name?: string;
+  device?: string;
+  description?: string;
+  auto_deliver?: boolean;
+  post_scan_config?: Record<string, unknown>;
+}
+
+export interface DiscoveredDevice {
+  device: string;
+  description: string;
 }
 
 // --- WebSocket ---

@@ -13,7 +13,7 @@ from app.schemas import EmailSendRequest, ScanBatchRequest, ScanList, ScanReques
 from app.services.cloud_service import CloudError, cloud_service
 from app.services.email_service import EmailError, email_service
 from app.services.file_service import cleanup_file
-from app.services.scan_service import ScanError, scan_service
+from app.services.scan_service import ScanError, scan_service, get_default_scanner, get_default_scanner_device, run_post_scan_actions
 from app.services.smb_service import SMBError, smb_service
 from app.services.ws_manager import ws_manager
 
@@ -39,6 +39,9 @@ async def initiate_scan(
     db: AsyncSession = Depends(get_db),
 ):
     """Initiate a single-page scan."""
+    scanner = await get_default_scanner(db)
+    device = scanner.device if scanner else await get_default_scanner_device(db)
+
     # Create scan job record
     job = ScanJob(
         user_id=user.id,
@@ -47,6 +50,7 @@ async def initiate_scan(
         format=request.format,
         source=request.source,
         status="scanning",
+        scanner_id=scanner.id if scanner else None,
     )
     db.add(job)
     await db.commit()
@@ -65,6 +69,7 @@ async def initiate_scan(
             fmt=request.format,
             source=request.source,
             progress_callback=progress_callback,
+            device=device,
         )
 
         job.scan_id = scan_id
@@ -84,6 +89,9 @@ async def initiate_scan(
             "data": {"scan_id": job.scan_id},
         })
 
+        if scanner and scanner.auto_deliver:
+            await run_post_scan_actions(job, scanner, db)
+
     except ScanError as e:
         job.status = "failed"
         job.error_message = str(e)
@@ -100,6 +108,9 @@ async def initiate_batch_scan(
     db: AsyncSession = Depends(get_db),
 ):
     """Initiate a multi-page ADF batch scan into a single PDF."""
+    scanner = await get_default_scanner(db)
+    device = scanner.device if scanner else await get_default_scanner_device(db)
+
     job = ScanJob(
         user_id=user.id,
         resolution=request.resolution,
@@ -107,6 +118,7 @@ async def initiate_batch_scan(
         format="pdf",
         source="ADF",
         status="scanning",
+        scanner_id=scanner.id if scanner else None,
     )
     db.add(job)
     await db.commit()
@@ -123,6 +135,7 @@ async def initiate_batch_scan(
             resolution=request.resolution,
             mode=request.mode,
             progress_callback=progress_callback,
+            device=device,
         )
 
         job.scan_id = scan_id
@@ -142,6 +155,9 @@ async def initiate_batch_scan(
             "type": "scan_completed",
             "data": {"scan_id": job.scan_id},
         })
+
+        if scanner and scanner.auto_deliver:
+            await run_post_scan_actions(job, scanner, db)
 
     except ScanError as e:
         job.status = "failed"

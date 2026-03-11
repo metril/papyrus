@@ -1,0 +1,31 @@
+import api from './client';
+import type { ManagedScanner, ManagedScannerCreate, ManagedScannerUpdate, DiscoveredDevice } from '../types';
+
+export async function listScanners(): Promise<ManagedScanner[]> {
+  const { data } = await api.get('/scanners');
+  return data;
+}
+
+export async function addScanner(body: ManagedScannerCreate): Promise<ManagedScanner> {
+  const { data } = await api.post('/scanners', body);
+  return data;
+}
+
+export async function updateScanner(id: number, body: ManagedScannerUpdate): Promise<ManagedScanner> {
+  const { data } = await api.patch(`/scanners/${id}`, body);
+  return data;
+}
+
+export async function deleteScanner(id: number): Promise<void> {
+  await api.delete(`/scanners/${id}`);
+}
+
+export async function setDefaultScanner(id: number): Promise<ManagedScanner> {
+  const { data } = await api.post(`/scanners/${id}/default`);
+  return data;
+}
+
+export async function discoverScanners(): Promise<DiscoveredDevice[]> {
+  const { data } = await api.get('/scanners/discover');
+  return data;
+}

@@ -9,11 +9,13 @@ import os
 import uuid
 from xml.etree.ElementTree import Element, SubElement, tostring
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.services.scan_service import ScanError, scan_service
+from app.database import get_db
+from app.services.scan_service import ScanError, get_default_scanner_device, scan_service
 
 router = APIRouter(prefix="/eSCL")
 
@@ -218,7 +220,10 @@ async def create_scan_job(request: Request):
 
 
 @router.get("/ScanJobs/{job_id}/NextDocument")
-async def get_next_document(job_id: str):
+async def get_next_document(
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
     """Execute the scan and return the result to the client."""
     job = _scan_jobs.get(job_id)
     if job is None:
@@ -234,11 +239,13 @@ async def get_next_document(job_id: str):
     job["state"] = "Processing"
 
     try:
+        device = await get_default_scanner_device(db)
         scan_id, filepath = await scan_service.scan(
             resolution=job["resolution"],
             mode=job["color_mode"],
             fmt=job["format"],
             source=job["source"],
+            device=device,
         )
         job["filepath"] = filepath
         job["state"] = "Completed"

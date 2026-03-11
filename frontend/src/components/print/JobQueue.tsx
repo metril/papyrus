@@ -2,10 +2,11 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import { useJobStore } from '../../store/jobStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { getJobDownloadUrl } from '../../api/scanner';
+import { listPrinters, assignJobPrinter } from '../../api/printers';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
 import FilePreviewModal from '../common/FilePreviewModal';
-import type { PrintJob } from '../../types';
+import type { PrintJob, ManagedPrinter } from '../../types';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -32,9 +33,49 @@ const sourceColors: Record<string, string> = {
   smb: 'bg-orange-100 text-orange-700',
 };
 
+function PrinterSelector({ job, printers, onAssigned }: { job: PrintJob; printers: ManagedPrinter[]; onAssigned: () => void }) {
+  const [selected, setSelected] = useState<number | ''>(job.printer_id ?? '');
+  const [saving, setSaving] = useState(false);
+
+  const physicalPrinters = printers.filter((p) => !p.is_network_queue);
+
+  if (physicalPrinters.length <= 1) return null;
+
+  const handleAssign = async () => {
+    if (!selected) return;
+    setSaving(true);
+    try {
+      await assignJobPrinter(job.id, Number(selected));
+      onAssigned();
+    } catch { /* ignore */ }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="flex items-center gap-1">
+      <select
+        value={selected}
+        onChange={(e) => setSelected(e.target.value ? Number(e.target.value) : '')}
+        className="text-xs rounded border border-gray-300 py-0.5 px-1"
+      >
+        <option value="">— printer —</option>
+        {physicalPrinters.map((p) => (
+          <option key={p.id} value={p.id}>{p.display_name}</option>
+        ))}
+      </select>
+      {selected !== (job.printer_id ?? '') && (
+        <Button size="sm" variant="ghost" onClick={handleAssign} disabled={saving}>
+          {saving ? '…' : 'Move'}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 export default function JobQueue() {
   const { jobs, loading, fetchJobs, releaseJob, cancelJob, deleteJob } = useJobStore();
   const [previewJob, setPreviewJob] = useState<PrintJob | null>(null);
+  const [printers, setPrinters] = useState<ManagedPrinter[]>([]);
 
   const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const debouncedFetch = useCallback((_msg: unknown) => {
@@ -49,6 +90,7 @@ export default function JobQueue() {
 
   useEffect(() => {
     fetchJobs();
+    listPrinters().then(setPrinters).catch(() => {});
     return () => clearTimeout(fetchTimeoutRef.current);
   }, [fetchJobs]);
 
@@ -89,6 +131,11 @@ export default function JobQueue() {
               {' \u00b7 '}{job.media}
               {' \u00b7 '}{formatTime(job.created_at)}
             </div>
+            {job.status === 'held' && printers.length > 1 && (
+              <div className="mt-1.5">
+                <PrinterSelector job={job} printers={printers} onAssigned={fetchJobs} />
+              </div>
+            )}
             {job.error_message && (
               <p className="text-xs text-red-600 mt-1">{job.error_message}</p>
             )}

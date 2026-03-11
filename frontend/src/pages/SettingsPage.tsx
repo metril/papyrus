@@ -3,7 +3,22 @@ import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import api from '../api/client';
 import { listProviders, disconnectProvider, getAuthorizeUrl } from '../api/cloud';
-import type { APIToken, CloudProvider } from '../types';
+import {
+  listPrinters,
+  addPrinter,
+  updatePrinter,
+  deletePrinter,
+  setDefaultPrinter,
+} from '../api/printers';
+import {
+  listScanners,
+  addScanner,
+  updateScanner,
+  deleteScanner,
+  setDefaultScanner,
+  discoverScanners,
+} from '../api/scanners';
+import type { APIToken, CloudProvider, ManagedPrinter, ManagedScanner, DiscoveredDevice } from '../types';
 
 const providerLabels: Record<string, string> = {
   gdrive: 'Google Drive',
@@ -52,9 +67,278 @@ function SettingField({
   );
 }
 
+const printerStateLabels: Record<number, string> = { 3: 'Idle', 4: 'Printing', 5: 'Stopped' };
+
+function PrintersCard() {
+  const [printers, setPrinters] = useState<ManagedPrinter[]>([]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [form, setForm] = useState({ display_name: '', uri: '', description: '', is_network_queue: false, auto_release: false });
+  const [editForm, setEditForm] = useState({ display_name: '', uri: '', description: '', auto_release: false });
+
+  const load = () => listPrinters().then(setPrinters).catch(() => {});
+
+  useEffect(() => { load(); }, []);
+
+  const handleAdd = async () => {
+    if (!form.display_name) return;
+    try {
+      await addPrinter({ ...form, uri: form.uri || undefined });
+      setForm({ display_name: '', uri: '', description: '', is_network_queue: false, auto_release: false });
+      setShowAdd(false);
+      load();
+    } catch { alert('Failed to add printer'); }
+  };
+
+  const handleUpdate = async (id: number) => {
+    try {
+      await updatePrinter(id, { ...editForm, uri: editForm.uri || undefined });
+      setEditId(null);
+      load();
+    } catch { alert('Failed to update printer'); }
+  };
+
+  const handleDelete = async (id: number) => {
+    if (!confirm('Delete this printer?')) return;
+    try { await deletePrinter(id); load(); } catch { alert('Failed to delete printer'); }
+  };
+
+  const handleDefault = async (id: number) => {
+    try { await setDefaultPrinter(id); load(); } catch { alert('Failed to set default'); }
+  };
+
+  const startEdit = (p: ManagedPrinter) => {
+    setEditId(p.id);
+    setEditForm({ display_name: p.display_name, uri: p.uri, description: p.description || '', auto_release: p.auto_release });
+  };
+
+  return (
+    <Card title="Printers">
+      <div className="space-y-3">
+        {printers.length === 0 && <p className="text-sm text-gray-500">No printers configured yet.</p>}
+        {printers.map((p) => (
+          <div key={p.id} className="p-3 rounded-lg border border-gray-200 space-y-2">
+            {editId === p.id ? (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <SettingField label="Display Name" value={editForm.display_name} onChange={(v) => setEditForm((f) => ({ ...f, display_name: v }))} />
+                  {!p.is_network_queue && <SettingField label="URI" value={editForm.uri} onChange={(v) => setEditForm((f) => ({ ...f, uri: v }))} placeholder="ipp://10.0.0.1/ipp" />}
+                  <SettingField label="Description" value={editForm.description} onChange={(v) => setEditForm((f) => ({ ...f, description: v }))} />
+                  <label className="flex items-center gap-2 text-sm self-center">
+                    <input type="checkbox" checked={editForm.auto_release} onChange={(e) => setEditForm((f) => ({ ...f, auto_release: e.target.checked }))} className="rounded border-gray-300" />
+                    <span className="font-medium text-gray-700">Auto-release</span>
+                  </label>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => handleUpdate(p.id)}>Save</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditId(null)}>Cancel</Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-gray-900">{p.display_name}</span>
+                    {p.is_default && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">Default</span>}
+                    {p.is_network_queue && <span className="text-xs bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full font-medium">Network Queue</span>}
+                    {p.auto_release && <span className="text-xs bg-orange-100 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">Auto-release</span>}
+                    <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${p.cups_status.state === 3 ? 'bg-green-100 text-green-700' : p.cups_status.state === 4 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}>
+                      {printerStateLabels[p.cups_status.state] || 'Unknown'}
+                    </span>
+                  </div>
+                  {p.uri && <div className="text-xs text-gray-500 mt-0.5">{p.uri}</div>}
+                  {p.description && <div className="text-xs text-gray-400">{p.description}</div>}
+                </div>
+                <div className="flex gap-1 ml-2 flex-shrink-0">
+                  {!p.is_default && !p.is_network_queue && (
+                    <Button size="sm" variant="ghost" onClick={() => handleDefault(p.id)}>Set Default</Button>
+                  )}
+                  <Button size="sm" variant="ghost" onClick={() => startEdit(p)}>Edit</Button>
+                  <Button size="sm" variant="danger" onClick={() => handleDelete(p.id)}>Delete</Button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+
+        {showAdd ? (
+          <div className="p-3 rounded-lg border border-blue-200 bg-blue-50 space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <SettingField label="Display Name" value={form.display_name} onChange={(v) => setForm((f) => ({ ...f, display_name: v }))} placeholder="Brother DCP-L2540DW" />
+              <SettingField label="URI" value={form.uri} onChange={(v) => setForm((f) => ({ ...f, uri: v }))} placeholder="ipp://10.0.0.1/ipp" />
+              <SettingField label="Description" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
+            </div>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={form.is_network_queue} onChange={(e) => setForm((f) => ({ ...f, is_network_queue: e.target.checked }))} className="rounded border-gray-300" />
+                <span className="font-medium text-gray-700">Network queue only (no physical printer)</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={form.auto_release} onChange={(e) => setForm((f) => ({ ...f, auto_release: e.target.checked }))} className="rounded border-gray-300" />
+                <span className="font-medium text-gray-700">Auto-release jobs</span>
+              </label>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" onClick={handleAdd}>Add Printer</Button>
+              <Button size="sm" variant="ghost" onClick={() => setShowAdd(false)}>Cancel</Button>
+            </div>
+          </div>
+        ) : (
+          <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>+ Add Printer</Button>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function ScannersCard() {
+  const [scanners, setScanners] = useState<ManagedScanner[]>([]);
+  const [showAdd, setShowAdd] = useState(false);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [discovered, setDiscovered] = useState<DiscoveredDevice[]>([]);
+  const [discovering, setDiscovering] = useState(false);
+  const [form, setForm] = useState({ name: '', device: '', description: '', auto_deliver: false });
+  const [editForm, setEditForm] = useState({ name: '', device: '', description: '', auto_deliver: false });
+
+  const load = () => listScanners().then(setScanners).catch(() => {});
+
+  useEffect(() => { load(); }, []);
+
+  const handleDiscover = async () => {
+    setDiscovering(true);
+    try {
+      const devices = await discoverScanners();
+      setDiscovered(devices);
+    } catch { alert('Discovery failed'); }
+    finally { setDiscovering(false); }
+  };
+
+  const handleAdd = async () => {
+    if (!form.name || !form.device) return;
+    try {
+      await addScanner(form);
+      setForm({ name: '', device: '', description: '', auto_deliver: false });
+      setShowAdd(false);
+      setDiscovered([]);
+      load();
+    } catch { alert('Failed to add scanner'); }
+  };
+
+  const handleUpdate = async (id: number) => {
+    try {
+      await updateScanner(id, editForm);
+      setEditId(null);
+      load();
+    } catch { alert('Failed to update scanner'); }
+  };
+
+  const handleDelete = async (id: number) => {
+    if (!confirm('Delete this scanner?')) return;
+    try { await deleteScanner(id); load(); } catch { alert('Failed to delete scanner'); }
+  };
+
+  const handleDefault = async (id: number) => {
+    try { await setDefaultScanner(id); load(); } catch { alert('Failed to set default'); }
+  };
+
+  const startEdit = (s: ManagedScanner) => {
+    setEditId(s.id);
+    setEditForm({ name: s.name, device: s.device, description: s.description || '', auto_deliver: s.auto_deliver });
+  };
+
+  return (
+    <Card title="Scanners">
+      <div className="space-y-3">
+        {scanners.length === 0 && <p className="text-sm text-gray-500">No scanners configured yet.</p>}
+        {scanners.map((s) => (
+          <div key={s.id} className="p-3 rounded-lg border border-gray-200 space-y-2">
+            {editId === s.id ? (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <SettingField label="Name" value={editForm.name} onChange={(v) => setEditForm((f) => ({ ...f, name: v }))} />
+                  <SettingField label="SANE Device" value={editForm.device} onChange={(v) => setEditForm((f) => ({ ...f, device: v }))} placeholder="airscan:w:Brother DCP-L2540DW" />
+                  <SettingField label="Description" value={editForm.description} onChange={(v) => setEditForm((f) => ({ ...f, description: v }))} />
+                  <label className="flex items-center gap-2 text-sm self-center">
+                    <input type="checkbox" checked={editForm.auto_deliver} onChange={(e) => setEditForm((f) => ({ ...f, auto_deliver: e.target.checked }))} className="rounded border-gray-300" />
+                    <span className="font-medium text-gray-700">Auto-deliver</span>
+                  </label>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => handleUpdate(s.id)}>Save</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditId(null)}>Cancel</Button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-gray-900">{s.name}</span>
+                    {s.is_default && <span className="text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-medium">Default</span>}
+                    {s.auto_deliver && <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-medium">Auto-deliver</span>}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-0.5 font-mono">{s.device}</div>
+                  {s.description && <div className="text-xs text-gray-400">{s.description}</div>}
+                </div>
+                <div className="flex gap-1 ml-2 flex-shrink-0">
+                  {!s.is_default && (
+                    <Button size="sm" variant="ghost" onClick={() => handleDefault(s.id)}>Set Default</Button>
+                  )}
+                  <Button size="sm" variant="ghost" onClick={() => startEdit(s)}>Edit</Button>
+                  <Button size="sm" variant="danger" onClick={() => handleDelete(s.id)}>Delete</Button>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+
+        {showAdd ? (
+          <div className="p-3 rounded-lg border border-blue-200 bg-blue-50 space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <SettingField label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="Brother DCP-L2540DW" />
+              <SettingField label="SANE Device String" value={form.device} onChange={(v) => setForm((f) => ({ ...f, device: v }))} placeholder="airscan:w:Brother DCP-L2540DW" />
+              <SettingField label="Description" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
+              <label className="flex items-center gap-2 text-sm self-center">
+                <input type="checkbox" checked={form.auto_deliver} onChange={(e) => setForm((f) => ({ ...f, auto_deliver: e.target.checked }))} className="rounded border-gray-300" />
+                <span className="font-medium text-gray-700">Auto-deliver scans</span>
+              </label>
+            </div>
+
+            {discovered.length > 0 && (
+              <div>
+                <p className="text-xs text-gray-600 mb-1">Discovered devices (click to use):</p>
+                <div className="space-y-1">
+                  {discovered.map((d) => (
+                    <button
+                      key={d.device}
+                      onClick={() => setForm((f) => ({ ...f, device: d.device, name: f.name || d.description }))}
+                      className="block w-full text-left text-xs p-2 rounded bg-white border border-gray-200 hover:bg-gray-50"
+                    >
+                      <span className="font-mono">{d.device}</span>
+                      {d.description && <span className="text-gray-500 ml-1">— {d.description}</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <Button size="sm" onClick={handleAdd}>Add Scanner</Button>
+              <Button size="sm" variant="secondary" onClick={handleDiscover} disabled={discovering}>
+                {discovering ? 'Discovering…' : 'Discover Devices'}
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => { setShowAdd(false); setDiscovered([]); }}>Cancel</Button>
+            </div>
+          </div>
+        ) : (
+          <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>+ Add Scanner</Button>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const [appSettings, setAppSettings] = useState<AppSettings>({});
-  const [printerStatus, setPrinterStatus] = useState<Record<string, unknown> | null>(null);
   const [tokens, setTokens] = useState<APIToken[]>([]);
   const [newTokenName, setNewTokenName] = useState('');
   const [createdToken, setCreatedToken] = useState<string | null>(null);
@@ -65,7 +349,6 @@ export default function SettingsPage() {
 
   useEffect(() => {
     api.get('/settings').then(({ data }) => setAppSettings(data)).catch(() => {});
-    api.get('/printer/status').then(({ data }) => setPrinterStatus(data)).catch(() => {});
     api.get('/auth/tokens').then(({ data }) => setTokens(data)).catch(() => {});
     listProviders().then(setCloudProviders).catch(() => {});
     api.get('/email/webhook-info').then(({ data }) => setWebhookInfo(data)).catch(() => {});
@@ -153,61 +436,20 @@ export default function SettingsPage() {
     }
   };
 
-  const printerStateLabels: Record<number, string> = { 3: 'Idle', 4: 'Printing', 5: 'Stopped' };
-
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold text-gray-900">Settings</h2>
 
-      {/* Printer Status */}
-      <Card title="Printer Status">
-        {printerStatus ? (
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <span className="text-gray-600">Status</span>
-              <span className="font-medium">{printerStateLabels[printerStatus.state as number] || 'Unknown'}</span>
-            </div>
-            {typeof printerStatus.state_message === 'string' && printerStatus.state_message && (
-              <div className="flex justify-between">
-                <span className="text-gray-600">Message</span>
-                <span>{printerStatus.state_message}</span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <span className="text-gray-600">Accepting Jobs</span>
-              <span>{printerStatus.accepting_jobs ? 'Yes' : 'No'}</span>
-            </div>
-          </div>
-        ) : (
-          <p className="text-gray-500 text-sm">Unable to connect to printer.</p>
-        )}
-      </Card>
-
-      {/* Hardware */}
-      <Card title="Hardware">
-        <div className="space-y-3">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <SettingField label="Printer Name (CUPS)" value={appSettings['printer_name'] ?? ''} onChange={set('printer_name')} placeholder="Brother_DCP_L2540DW" />
-            <SettingField label="Printer URI" value={appSettings['printer_uri'] ?? ''} onChange={set('printer_uri')} placeholder="ipp://192.168.1.100/ipp" />
-          </div>
-          <SettingField label="Scanner Device (SANE)" value={appSettings['scanner_device'] ?? ''} onChange={set('scanner_device')} placeholder="airscan:w:Brother DCP-L2540DW" />
-          <div className="flex justify-end">
-            <SaveButton section="hardware" keys={['printer_name', 'printer_uri', 'scanner_device']} />
-          </div>
-        </div>
-      </Card>
+      <PrintersCard />
+      <ScannersCard />
 
       {/* Network Services */}
       <Card title="Network Services">
         <div className="space-y-3">
-          <p className="text-sm text-gray-600">mDNS/Bonjour advertisement for AirPrint and eSCL (AirScan).</p>
-          <div className="space-y-2">
-            <SettingField label="Enable AirPrint (network printer)" value={appSettings['network_printer_enabled'] ?? true} onChange={set('network_printer_enabled')} type="checkbox" />
-            <SettingField label="Enable eSCL Scanner (AirScan)" value={appSettings['escl_enabled'] ?? true} onChange={set('escl_enabled')} type="checkbox" />
-          </div>
-          <SettingField label="Network Printer Name" value={appSettings['network_printer_name'] ?? ''} onChange={set('network_printer_name')} placeholder="Papyrus" />
+          <p className="text-sm text-gray-600">eSCL (AirScan) enables network scanner discovery by macOS and iOS.</p>
+          <SettingField label="Enable eSCL Scanner (AirScan)" value={appSettings['escl_enabled'] ?? true} onChange={set('escl_enabled')} type="checkbox" />
           <div className="flex justify-end">
-            <SaveButton section="network" keys={['network_printer_enabled', 'network_printer_name', 'escl_enabled']} />
+            <SaveButton section="network" keys={['escl_enabled']} />
           </div>
         </div>
       </Card>

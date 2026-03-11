@@ -13,11 +13,10 @@ class Settings(BaseSettings):
     # Session
     session_secret: str = "change-me-in-production"
 
-    # Printer (CUPS)
+    # Printer fallback name (used if no default printer configured in DB)
     printer_name: str = "Brother_DCP_L2540DW"
-    printer_uri: str = "ipp://192.168.1.100/ipp"
 
-    # Scanner (SANE)
+    # Scanner fallback device string (used if no default scanner configured in DB)
     scanner_device: str = "airscan:w:Brother DCP-L2540DW"
 
     # Storage
@@ -55,8 +54,6 @@ class Settings(BaseSettings):
     email_webhook_rate_limit: int = 10  # max requests per minute per IP
 
     # Network Services
-    network_printer_enabled: bool = True
-    network_printer_name: str = "Papyrus"
     escl_enabled: bool = True
 
     model_config = {"env_prefix": "PAPYRUS_"}

@@ -14,16 +14,12 @@ router = APIRouter()
 
 # Maps setting key → (python_type, is_encrypted)
 # Encrypted values are stored in AppConfig as "{key}_encrypted"
+# Note: printer/scanner hardware is managed via /api/printers and /api/scanners
 CONFIGURABLE: dict[str, tuple[type, bool]] = {
-    "printer_name": (str, False),
-    "printer_uri": (str, False),
-    "scanner_device": (str, False),
     "scan_dir": (str, False),
     "upload_dir": (str, False),
     "max_upload_size_mb": (int, False),
     "scan_retention_days": (int, False),
-    "network_printer_enabled": (bool, False),
-    "network_printer_name": (str, False),
     "escl_enabled": (bool, False),
     "base_url": (str, False),
     "dev_mode": (bool, False),

@@ -9,7 +9,7 @@ from starlette.responses import FileResponse
 
 from app.auth.oidc import setup_oauth
 from app.config import settings
-from app.routers import auth, cloud, copy, email, escl, jobs, printer, scanner, settings, smb, system
+from app.routers import auth, cloud, copy, email, escl, jobs, printer, printers, scanner, scanners, settings, smb, system
 
 
 @asynccontextmanager
@@ -51,6 +51,8 @@ app.include_router(smb.router, prefix="/api/smb", tags=["smb"])
 app.include_router(email.router, prefix="/api/email", tags=["email"])
 app.include_router(cloud.router, prefix="/api/cloud", tags=["cloud"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
+app.include_router(printers.router, prefix="/api/printers", tags=["printers"])
+app.include_router(scanners.router, prefix="/api/scanners", tags=["scanners"])
 
 # eSCL scanner protocol (no /api prefix — clients expect /eSCL/ at root)
 app.include_router(escl.router, tags=["escl"])

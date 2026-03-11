@@ -4,6 +4,9 @@ import re
 import uuid
 from typing import Callable, Awaitable
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import settings
 
 
@@ -48,6 +51,7 @@ class ScanService:
         fmt: str = "pdf",
         source: str = "Flatbed",
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        device: str | None = None,
     ) -> tuple[str, str]:
         """Perform a single-page scan.
 
@@ -70,9 +74,10 @@ class ScanService:
             scan_fmt = "tiff" if fmt == "pdf" else fmt
             output_file = os.path.join(settings.scan_dir, f"{scan_id}.{scan_fmt}")
 
+            _device = device or settings.scanner_device
             cmd = [
                 "scanimage",
-                "-d", settings.scanner_device,
+                "-d", _device,
                 "--resolution", str(resolution),
                 "--mode", mode,
                 f"--format={scan_fmt}",
@@ -124,6 +129,7 @@ class ScanService:
         resolution: int = 300,
         mode: str = "Color",
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        device: str | None = None,
     ) -> tuple[str, str, int]:
         """Perform a multi-page ADF batch scan, merging pages into a single PDF.
 
@@ -138,10 +144,11 @@ class ScanService:
             page_dir = os.path.join(settings.scan_dir, f"batch_{scan_id}")
             os.makedirs(page_dir, exist_ok=True)
 
+            _device = device or settings.scanner_device
             # scanimage --batch mode scans all pages from ADF
             cmd = [
                 "scanimage",
-                "-d", settings.scanner_device,
+                "-d", _device,
                 "--resolution", str(resolution),
                 "--mode", mode,
                 "--format=tiff",
@@ -197,3 +204,77 @@ class ScanService:
 
 
 scan_service = ScanService()
+
+
+async def get_default_scanner_device(db: AsyncSession) -> str:
+    """Return the SANE device string for the default scanner (DB overrides settings)."""
+    from app.models import Scanner  # avoid circular import at module level
+    result = await db.execute(select(Scanner).where(Scanner.is_default == True))
+    s = result.scalar_one_or_none()
+    return s.device if s else settings.scanner_device
+
+
+async def get_default_scanner(db: AsyncSession):
+    """Return the default Scanner DB object, or None."""
+    from app.models import Scanner
+    result = await db.execute(select(Scanner).where(Scanner.is_default == True))
+    return result.scalar_one_or_none()
+
+
+async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
+    """Run configured auto-deliver actions after a scan completes."""
+    import shutil
+    from app.services.email_service import email_service, EmailError
+    from app.services.cloud_service import cloud_service, CloudError
+    from app.routers.email import _get_smtp_config
+
+    if not scanner or not scanner.post_scan_config or not scan_job.filepath:
+        return
+
+    config = scanner.post_scan_config
+    filename = f"scan_{scan_job.scan_id}.{scan_job.format}"
+
+    if config.get("email"):
+        try:
+            db_config = await _get_smtp_config(db)
+            await email_service.send_scan(
+                to=config["email"],
+                subject=f"Scan: {filename}",
+                body="Scan delivered automatically by Papyrus.",
+                filepath=scan_job.filepath,
+                filename=filename,
+                db_config=db_config,
+            )
+        except (EmailError, Exception):
+            pass
+
+    if config.get("folder"):
+        try:
+            dest = os.path.join(config["folder"], filename)
+            shutil.copy2(scan_job.filepath, dest)
+        except Exception:
+            pass
+
+    if config.get("cloud_provider_id"):
+        try:
+            from app.models import CloudProvider
+            from sqlalchemy import select as sa_select
+            result = await db.execute(
+                sa_select(CloudProvider).where(CloudProvider.id == config["cloud_provider_id"])
+            )
+            provider = result.scalar_one_or_none()
+            if provider:
+                if provider.provider == "gdrive":
+                    await cloud_service.upload_to_gdrive(
+                        filepath=scan_job.filepath,
+                        filename=filename,
+                        access_token_encrypted=provider.access_token_encrypted,
+                    )
+                elif provider.provider == "dropbox":
+                    await cloud_service.upload_to_dropbox(
+                        filepath=scan_job.filepath,
+                        filename=filename,
+                        access_token_encrypted=provider.access_token_encrypted,
+                    )
+        except (CloudError, Exception):
+            pass
