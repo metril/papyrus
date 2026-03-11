@@ -28,3 +28,13 @@ export async function setDefaultPrinter(id: number): Promise<ManagedPrinter> {
 export async function assignJobPrinter(jobId: number, printerId: number): Promise<void> {
   await api.patch(`/jobs/${jobId}/printer`, { printer_id: printerId });
 }
+
+export interface PrinterProbeResult {
+  reachable: boolean;
+  uri: string;
+}
+
+export async function probePrinter(ip: string): Promise<PrinterProbeResult> {
+  const { data } = await api.get('/printers/probe', { params: { ip } });
+  return data;
+}

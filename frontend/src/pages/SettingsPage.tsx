@@ -9,6 +9,7 @@ import {
   updatePrinter,
   deletePrinter,
   setDefaultPrinter,
+  probePrinter,
 } from '../api/printers';
 import {
   listScanners,
@@ -73,20 +74,37 @@ const printerStateLabels: Record<number, string> = { 3: 'Idle', 4: 'Printing', 5
 function PrintersCard() {
   const [printers, setPrinters] = useState<ManagedPrinter[]>([]);
   const [showAdd, setShowAdd] = useState(false);
+  const [addMode, setAddMode] = useState<'ip' | 'manual'>('ip');
   const [editId, setEditId] = useState<number | null>(null);
   const [form, setForm] = useState({ display_name: '', uri: '', description: '', is_network_queue: false, auto_release: false });
   const [editForm, setEditForm] = useState({ display_name: '', uri: '', description: '', auto_release: false });
+  // IP mode state
+  const [ipAddress, setIpAddress] = useState('');
+  const [probeStatus, setProbeStatus] = useState<'idle' | 'probing' | 'reachable' | 'unreachable'>('idle');
 
   const load = () => listPrinters().then(setPrinters).catch(() => {});
 
   useEffect(() => { load(); }, []);
 
+  const ipUri = ipAddress ? `ipp://${ipAddress}/ipp` : '';
+
+  const handleProbe = async () => {
+    if (!ipAddress) return;
+    setProbeStatus('probing');
+    try {
+      const result = await probePrinter(ipAddress);
+      setProbeStatus(result.reachable ? 'reachable' : 'unreachable');
+    } catch {
+      setProbeStatus('unreachable');
+    }
+  };
+
   const handleAdd = async () => {
+    const uri = addMode === 'ip' ? ipUri : form.uri;
     if (!form.display_name) return;
     try {
-      await addPrinter({ ...form, uri: form.uri || undefined });
-      setForm({ display_name: '', uri: '', description: '', is_network_queue: false, auto_release: false });
-      setShowAdd(false);
+      await addPrinter({ ...form, uri: uri || undefined });
+      resetAdd();
       load();
     } catch { alert('Failed to add printer'); }
   };
@@ -111,6 +129,13 @@ function PrintersCard() {
   const startEdit = (p: ManagedPrinter) => {
     setEditId(p.id);
     setEditForm({ display_name: p.display_name, uri: p.uri, description: p.description || '', auto_release: p.auto_release });
+  };
+
+  const resetAdd = () => {
+    setShowAdd(false);
+    setIpAddress('');
+    setProbeStatus('idle');
+    setForm({ display_name: '', uri: '', description: '', is_network_queue: false, auto_release: false });
   };
 
   return (
@@ -163,12 +188,56 @@ function PrintersCard() {
         ))}
 
         {showAdd ? (
-          <div className="p-3 rounded-lg border border-blue-200 bg-blue-50 space-y-2">
-            <div className="grid grid-cols-2 gap-2">
-              <SettingField label="Display Name" value={form.display_name} onChange={(v) => setForm((f) => ({ ...f, display_name: v }))} placeholder="Brother DCP-L2540DW" />
-              <SettingField label="URI" value={form.uri} onChange={(v) => setForm((f) => ({ ...f, uri: v }))} placeholder="ipp://10.0.0.1/ipp" />
-              <SettingField label="Description" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
+          <div className="p-3 rounded-lg border border-blue-200 bg-blue-50 space-y-3">
+            {/* Mode tabs */}
+            <div className="flex gap-1 text-xs">
+              {(['ip', 'manual'] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setAddMode(m)}
+                  className={`px-3 py-1 rounded-full font-medium ${addMode === m ? 'bg-blue-600 text-white' : 'bg-white text-gray-600 border border-gray-300 hover:bg-gray-50'}`}
+                >
+                  {m === 'ip' ? 'IP Address' : 'Manual'}
+                </button>
+              ))}
             </div>
+
+            {addMode === 'ip' && (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">IP Address</label>
+                    <div className="flex gap-1">
+                      <input
+                        type="text"
+                        value={ipAddress}
+                        onChange={(e) => { setIpAddress(e.target.value); setProbeStatus('idle'); }}
+                        placeholder="192.168.1.100"
+                        className="flex-1 rounded-lg border border-gray-300 text-sm p-2"
+                      />
+                      <Button size="sm" variant="secondary" onClick={handleProbe} disabled={!ipAddress || probeStatus === 'probing'}>
+                        {probeStatus === 'probing' ? '…' : 'Test'}
+                      </Button>
+                    </div>
+                    {probeStatus === 'reachable' && <p className="text-xs text-green-600 mt-0.5">Printer reachable</p>}
+                    {probeStatus === 'unreachable' && <p className="text-xs text-red-600 mt-0.5">Not reachable — check IP and network</p>}
+                  </div>
+                  <SettingField label="Printer Name" value={form.display_name} onChange={(v) => setForm((f) => ({ ...f, display_name: v }))} placeholder="Brother DCP-L2540DW" />
+                </div>
+                {ipUri && (
+                  <p className="text-xs text-gray-500">URI: <span className="font-mono">{ipUri}</span></p>
+                )}
+              </div>
+            )}
+
+            {addMode === 'manual' && (
+              <div className="grid grid-cols-2 gap-2">
+                <SettingField label="Display Name" value={form.display_name} onChange={(v) => setForm((f) => ({ ...f, display_name: v }))} placeholder="Brother DCP-L2540DW" />
+                <SettingField label="URI" value={form.uri} onChange={(v) => setForm((f) => ({ ...f, uri: v }))} placeholder="ipp://10.0.0.1/ipp" />
+                <SettingField label="Description" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
+              </div>
+            )}
+
             <div className="flex gap-4">
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={form.is_network_queue} onChange={(e) => setForm((f) => ({ ...f, is_network_queue: e.target.checked }))} className="rounded border-gray-300" />
@@ -181,7 +250,7 @@ function PrintersCard() {
             </div>
             <div className="flex gap-2">
               <Button size="sm" onClick={handleAdd}>Add Printer</Button>
-              <Button size="sm" variant="ghost" onClick={() => setShowAdd(false)}>Cancel</Button>
+              <Button size="sm" variant="ghost" onClick={resetAdd}>Cancel</Button>
             </div>
           </div>
         ) : (
