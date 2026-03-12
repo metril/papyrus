@@ -171,13 +171,47 @@ async def _run_scan(job_id: str) -> None:
     try:
         async with async_session() as db:
             device = await get_default_scanner_device(db)
+
+        # Convert requested scan region from pixels to mm for scanimage
+        left_mm = top_mm = width_mm = height_mm = None
+        region = job.get("scan_region") or {}
+        res = job["resolution"]
+        if region.get("width"):
+            width_mm  = region["width"]    / res * 25.4
+            height_mm = region["height"]   / res * 25.4
+            left_mm   = region["x_offset"] / res * 25.4
+            top_mm    = region["y_offset"] / res * 25.4
+
         scan_id, filepath = await scan_service.scan(
-            resolution=job["resolution"],
+            resolution=res,
             mode=job["color_mode"],
             fmt=job["format"],
             source=job["source"],
             device=device,
+            left_mm=left_mm,
+            top_mm=top_mm,
+            width_mm=width_mm,
+            height_mm=height_mm,
         )
+
+        # Trim/pad to exact pixel dimensions (scanner may be off by ±1px due
+        # to mm→pixel rounding; ICA pre-allocates an exact buffer and corrupts
+        # the file if dimensions don't match)
+        req_w = region.get("width")
+        req_h = region.get("height")
+        if req_w and req_h and job["format"] in ("jpeg", "png"):
+            from PIL import Image as _PILImage
+
+            def _trim() -> None:
+                with _PILImage.open(filepath) as img:
+                    if img.size != (req_w, req_h):
+                        canvas = _PILImage.new(img.mode, (req_w, req_h),
+                                               (255,) * len(img.mode))
+                        canvas.paste(img, (0, 0))
+                        canvas.save(filepath, dpi=(res, res))
+
+            await asyncio.get_event_loop().run_in_executor(None, _trim)
+
         job["filepath"] = filepath
         job["state"] = "Completed"
     except Exception as e:
@@ -247,6 +281,29 @@ async def create_scan_job(request: Request):
                 else:
                     source = "Flatbed"
                 break
+
+        # Extract scan region (pixels at the requested resolution)
+        scan_region: dict = {"width": None, "height": None, "x_offset": 0, "y_offset": 0}
+        for tag in ("Width", "pwg:Width", "{%s}Width" % PWG_NS):
+            elem = root.find(f".//{tag}")
+            if elem is not None and elem.text:
+                scan_region["width"] = int(elem.text)
+                break
+        for tag in ("Height", "pwg:Height", "{%s}Height" % PWG_NS):
+            elem = root.find(f".//{tag}")
+            if elem is not None and elem.text:
+                scan_region["height"] = int(elem.text)
+                break
+        for tag in ("XOffset", "pwg:XOffset", "{%s}XOffset" % PWG_NS):
+            elem = root.find(f".//{tag}")
+            if elem is not None and elem.text:
+                scan_region["x_offset"] = int(elem.text)
+                break
+        for tag in ("YOffset", "pwg:YOffset", "{%s}YOffset" % PWG_NS):
+            elem = root.find(f".//{tag}")
+            if elem is not None and elem.text:
+                scan_region["y_offset"] = int(elem.text)
+                break
     except Exception:
         pass  # Use defaults if XML parsing fails
 
@@ -257,6 +314,7 @@ async def create_scan_job(request: Request):
         "color_mode": color_mode,
         "format": fmt,
         "source": source,
+        "scan_region": scan_region,
         "filepath": None,
         "served": False,
         "error": None,

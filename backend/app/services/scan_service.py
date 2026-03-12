@@ -52,6 +52,10 @@ class ScanService:
         source: str = "Flatbed",
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
         device: str | None = None,
+        left_mm: float | None = None,
+        top_mm: float | None = None,
+        width_mm: float | None = None,
+        height_mm: float | None = None,
     ) -> tuple[str, str]:
         """Perform a single-page scan.
 
@@ -95,6 +99,16 @@ class ScanService:
                 "--progress",
                 "-o", tiff_file,
             ]
+
+            # Scan geometry: restrict to requested area (all values in mm)
+            if left_mm is not None:
+                cmd += ["-l", str(round(left_mm, 2))]
+            if top_mm is not None:
+                cmd += ["-t", str(round(top_mm, 2))]
+            if width_mm is not None:
+                cmd += ["-x", str(round(width_mm, 2))]
+            if height_mm is not None:
+                cmd += ["-y", str(round(height_mm, 2))]
 
             process = await asyncio.create_subprocess_exec(
                 *cmd,
