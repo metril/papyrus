@@ -77,6 +77,11 @@ class ScanService:
             if _device.startswith("brother4:") and source.lower() == "flatbed":
                 _source = "FlatBed"
 
+            # brscan4 uses different mode names than standard SANE
+            _mode = mode
+            if _device.startswith("brother4:"):
+                _mode = {"Color": "24bit Color", "Gray": "True Gray", "Lineart": "Black & White"}.get(mode, mode)
+
             # Always scan to TIFF; brscan4 only reliably outputs TIFF natively
             tiff_file = os.path.join(settings.scan_dir, f"{scan_id}.tiff")
 
@@ -84,7 +89,7 @@ class ScanService:
                 "scanimage",
                 "-d", _device,
                 "--resolution", str(resolution),
-                "--mode", mode,
+                "--mode", _mode,
                 "--format=tiff",
                 "--source", _source,
                 "--progress",
