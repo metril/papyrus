@@ -82,7 +82,7 @@ class ScanJob(Base):
     __tablename__ = "scan_jobs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     scan_id: Mapped[str] = mapped_column(
         String(36), unique=True, nullable=False, index=True, default=lambda: str(uuid.uuid4())
     )

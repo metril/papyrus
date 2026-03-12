@@ -5,8 +5,10 @@ the scanner via Apple AirScan, Mopria, and Windows WSD-eSCL.
 """
 
 import asyncio
+import logging
 import os
 import uuid
+from datetime import datetime, timezone
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -15,7 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import async_session, get_db
+from app.models import ScanJob
 from app.services.scan_service import ScanError, get_default_scanner_device, scan_service
+from app.services.ws_manager import ws_manager
+
+_log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/eSCL")
 
@@ -173,14 +179,31 @@ async def scanner_status():
 
 
 async def _run_scan(job_id: str) -> None:
-    """Background task: execute scan and update job state."""
+    """Background task: execute scan, persist to DB, and update job state."""
     job = _scan_jobs.get(job_id)
     if job is None:
         return
     job["state"] = "Processing"
+
+    db_job_id: int | None = None
+
     try:
         async with async_session() as db:
             device = await get_default_scanner_device(db)
+
+            # Create DB record so scan appears in web UI (user_id=None for network jobs)
+            db_job = ScanJob(
+                user_id=None,
+                resolution=job["resolution"],
+                mode=job["color_mode"],
+                format=job["format"],
+                source=job["source"],
+                status="scanning",
+            )
+            db.add(db_job)
+            await db.commit()
+            await db.refresh(db_job)
+            db_job_id = db_job.id
 
         # eSCL ScanRegion coordinates are in the scanner's capability coordinate
         # system (our MaxWidth/MaxHeight are defined at 300dpi), NOT at the
@@ -195,6 +218,15 @@ async def _run_scan(job_id: str) -> None:
             left_mm   = region["x_offset"] / CAPS_DPI * 25.4
             top_mm    = region["y_offset"] / CAPS_DPI * 25.4
 
+        req_w = round(region["width"]  * res / CAPS_DPI) if region.get("width")  else None
+        req_h = round(region["height"] * res / CAPS_DPI) if region.get("height") else None
+
+        _log.info(
+            "eSCL job %s: res=%s fmt=%s src=%s region_px=%sx%s mm=%.1fx%.1f",
+            job_id, res, job["format"], job["source"],
+            req_w, req_h, width_mm or 0, height_mm or 0,
+        )
+
         scan_id, filepath = await scan_service.scan(
             resolution=res,
             mode=job["color_mode"],
@@ -207,30 +239,64 @@ async def _run_scan(job_id: str) -> None:
             height_mm=height_mm,
         )
 
-        # Trim/pad to exact pixel dimensions (scanner may be off by ±1px due
-        # to mm→pixel rounding; ICA pre-allocates an exact buffer and corrupts
-        # the file if dimensions don't match).
-        # Convert caps-DPI region coords → expected pixels at scan resolution.
-        req_w = round(region["width"]  * res / CAPS_DPI) if region.get("width")  else None
-        req_h = round(region["height"] * res / CAPS_DPI) if region.get("height") else None
+        # Always re-save JPEG/PNG with correct DPI and exact dimensions.
+        # ICA pre-allocates an exact buffer (width×height×3 bytes) and will
+        # corrupt the saved file if our dimensions don't match precisely.
         if req_w and req_h and job["format"] in ("jpeg", "png"):
             from PIL import Image as _PILImage
 
             def _trim() -> None:
                 with _PILImage.open(filepath) as img:
-                    if img.size != (req_w, req_h):
+                    actual = img.size
+                    _log.info(
+                        "eSCL job %s: actual=%s expected=%sx%s dpi=%s",
+                        job_id, actual, req_w, req_h, img.info.get("dpi"),
+                    )
+                    if actual != (req_w, req_h):
                         canvas = _PILImage.new(img.mode, (req_w, req_h),
                                                (255,) * len(img.mode))
-                        canvas.paste(img, (0, 0))
-                        canvas.save(filepath, dpi=(res, res))
+                        canvas.paste(img.copy(), (0, 0))
+                    else:
+                        canvas = img.copy()
+                    fmt_str = "JPEG" if job["format"] == "jpeg" else "PNG"
+                    canvas.save(filepath, format=fmt_str, dpi=(res, res))
 
             await asyncio.get_event_loop().run_in_executor(None, _trim)
 
+        file_size = os.path.getsize(filepath)
+
+        # Update DB record with completed scan details
+        async with async_session() as db:
+            result = await db.get(ScanJob, db_job_id)
+            if result:
+                result.scan_id = scan_id
+                result.filepath = filepath
+                result.file_size = file_size
+                result.status = "completed"
+                result.completed_at = datetime.now(timezone.utc)
+                await db.commit()
+
+        # Notify web UI via WebSocket
+        await ws_manager.broadcast("scans", {
+            "type": "scan_completed",
+            "data": {"scan_id": scan_id},
+        })
+
         job["filepath"] = filepath
         job["state"] = "Completed"
+
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).error("eSCL scan %s failed: %s", job_id, e, exc_info=True)
+        _log.error("eSCL scan %s failed: %s", job_id, e, exc_info=True)
+        if db_job_id is not None:
+            try:
+                async with async_session() as db:
+                    result = await db.get(ScanJob, db_job_id)
+                    if result:
+                        result.status = "failed"
+                        result.error_message = str(e)
+                        await db.commit()
+            except Exception:
+                pass
         job["state"] = "Canceled"
         job["error"] = str(e)
 
@@ -346,8 +412,8 @@ async def cancel_scan_job(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
 
-    # Clean up any generated file
-    if job.get("filepath") and os.path.exists(job["filepath"]):
+    # Only delete the file for canceled/failed scans; completed scans live in the web UI
+    if job.get("state") != "Completed" and job.get("filepath") and os.path.exists(job["filepath"]):
         os.unlink(job["filepath"])
 
     return Response(status_code=200)
