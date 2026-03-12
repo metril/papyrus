@@ -131,7 +131,17 @@ class ScanService:
                 ext = {"jpeg": "jpg"}.get(fmt, fmt)  # jpeg→jpg, pdf→pdf, png→png
                 out_file = os.path.join(settings.scan_dir, f"{scan_id}.{ext}")
                 with Image.open(tiff_file) as img:
-                    img.save(out_file)
+                    # Ensure mode is compatible with target format
+                    if fmt == "jpeg" and img.mode not in ("RGB", "L"):
+                        img = img.convert("RGB")
+                    elif fmt in ("pdf", "png") and img.mode not in ("RGB", "L", "RGBA"):
+                        img = img.convert("RGB")
+                    # Embed correct DPI so clients (e.g. macOS Image Capture) can
+                    # determine physical size and render the preview correctly
+                    if fmt == "pdf":
+                        img.save(out_file, resolution=resolution)
+                    else:
+                        img.save(out_file, dpi=(resolution, resolution))
                 os.unlink(tiff_file)
                 return scan_id, out_file
             else:
