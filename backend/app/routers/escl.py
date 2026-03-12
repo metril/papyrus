@@ -22,6 +22,16 @@ router = APIRouter(prefix="/eSCL")
 ESCL_NS = "http://schemas.hp.com/imaging/escl/2011/05/03"
 PWG_NS = "http://www.pwg.org/schemas/2010/12/sm"
 
+
+def _find_local(root, local_name):
+    """Find first descendant element with given local name, ignoring XML namespace."""
+    for elem in root.iter():
+        tag = elem.tag
+        lname = tag.split("}")[-1] if "}" in tag else tag
+        if lname == local_name:
+            return elem
+    return None
+
 # In-memory scan job store (eSCL jobs are transient)
 _scan_jobs: dict[str, dict] = {}
 
@@ -219,6 +229,8 @@ async def _run_scan(job_id: str) -> None:
         job["filepath"] = filepath
         job["state"] = "Completed"
     except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("eSCL scan %s failed: %s", job_id, e, exc_info=True)
         job["state"] = "Canceled"
         job["error"] = str(e)
 
@@ -238,76 +250,48 @@ async def create_scan_job(request: Request):
     source = "Flatbed"
     scan_region: dict = {"width": None, "height": None, "x_offset": 0, "y_offset": 0}
 
-    # Parse XML settings (best-effort)
+    # Parse XML settings (best-effort; use local-name search to avoid namespace issues)
     try:
         import xml.etree.ElementTree as ET
         root = ET.fromstring(body)
 
-        # Extract resolution
-        for tag in ("XResolution", "scan:XResolution",
-                     "{%s}XResolution" % ESCL_NS):
-            elem = root.find(f".//{tag}")
-            if elem is not None and elem.text:
-                resolution = int(elem.text)
-                break
+        elem = _find_local(root, "XResolution")
+        if elem is not None and elem.text:
+            resolution = int(elem.text)
 
-        # Extract color mode
-        for tag in ("ColorMode", "scan:ColorMode",
-                     "{%s}ColorMode" % ESCL_NS):
-            elem = root.find(f".//{tag}")
-            if elem is not None and elem.text:
-                color_mode = ESCL_COLOR_MAP.get(elem.text, "Color")
-                break
+        elem = _find_local(root, "ColorMode")
+        if elem is not None and elem.text:
+            color_mode = ESCL_COLOR_MAP.get(elem.text, "Color")
 
-        # Extract document format
-        for tag in ("DocumentFormatExt", "scan:DocumentFormatExt",
-                     "{%s}DocumentFormatExt" % ESCL_NS,
-                     "DocumentFormat", "pwg:DocumentFormat",
-                     "{%s}DocumentFormat" % PWG_NS):
-            elem = root.find(f".//{tag}")
-            if elem is not None and elem.text:
-                mime = elem.text.lower()
-                if "jpeg" in mime:
-                    fmt = "jpeg"
-                elif "png" in mime:
-                    fmt = "png"
-                else:
-                    fmt = "pdf"
-                break
+        elem = _find_local(root, "DocumentFormatExt") or _find_local(root, "DocumentFormat")
+        if elem is not None and elem.text:
+            mime = elem.text.lower()
+            if "jpeg" in mime:
+                fmt = "jpeg"
+            elif "png" in mime:
+                fmt = "png"
+            else:
+                fmt = "pdf"
 
-        # Extract input source
-        for tag in ("InputSource", "scan:InputSource",
-                     "{%s}InputSource" % ESCL_NS):
-            elem = root.find(f".//{tag}")
-            if elem is not None and elem.text:
-                text = elem.text.lower()
-                if "adf" in text or "feeder" in text:
-                    source = "ADF"
-                else:
-                    source = "Flatbed"
-                break
+        elem = _find_local(root, "InputSource")
+        if elem is not None and elem.text:
+            text = elem.text.lower()
+            source = "ADF" if ("adf" in text or "feeder" in text) else "Flatbed"
 
-        # Extract scan region (coordinates in caps coordinate system, CAPS_DPI=300)
-        for tag in ("Width", "pwg:Width", "{%s}Width" % PWG_NS):
-            elem = root.find(f".//{tag}")
-            if elem is not None and elem.text:
-                scan_region["width"] = int(elem.text)
-                break
-        for tag in ("Height", "pwg:Height", "{%s}Height" % PWG_NS):
-            elem = root.find(f".//{tag}")
-            if elem is not None and elem.text:
-                scan_region["height"] = int(elem.text)
-                break
-        for tag in ("XOffset", "pwg:XOffset", "{%s}XOffset" % PWG_NS):
-            elem = root.find(f".//{tag}")
-            if elem is not None and elem.text:
-                scan_region["x_offset"] = int(elem.text)
-                break
-        for tag in ("YOffset", "pwg:YOffset", "{%s}YOffset" % PWG_NS):
-            elem = root.find(f".//{tag}")
-            if elem is not None and elem.text:
-                scan_region["y_offset"] = int(elem.text)
-                break
+        # ScanRegion coords are in caps coordinate system (CAPS_DPI=300 in _run_scan)
+        elem = _find_local(root, "Width")
+        if elem is not None and elem.text:
+            scan_region["width"] = int(elem.text)
+        elem = _find_local(root, "Height")
+        if elem is not None and elem.text:
+            scan_region["height"] = int(elem.text)
+        elem = _find_local(root, "XOffset")
+        if elem is not None and elem.text:
+            scan_region["x_offset"] = int(elem.text)
+        elem = _find_local(root, "YOffset")
+        if elem is not None and elem.text:
+            scan_region["y_offset"] = int(elem.text)
+
     except Exception:
         pass  # Use defaults if XML parsing fails
 
