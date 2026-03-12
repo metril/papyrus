@@ -83,6 +83,7 @@ async def scanner_capabilities():
     formats = SubElement(profile, "scan:DocumentFormats")
     for fmt in ("application/pdf", "image/jpeg", "image/png"):
         SubElement(formats, "pwg:DocumentFormat").text = fmt
+        SubElement(formats, "scan:DocumentFormatExt").text = fmt
 
     # ADF capabilities
     adf = SubElement(root, "scan:Adf")
@@ -106,6 +107,7 @@ async def scanner_capabilities():
     adf_formats = SubElement(adf_profile, "scan:DocumentFormats")
     for fmt in ("application/pdf", "image/jpeg", "image/png"):
         SubElement(adf_formats, "pwg:DocumentFormat").text = fmt
+        SubElement(adf_formats, "scan:DocumentFormatExt").text = fmt
 
     return _xml_response(root)
 
@@ -211,6 +213,7 @@ async def create_scan_job(request: Request):
         "format": fmt,
         "source": source,
         "filepath": None,
+        "served": False,
     }
 
     return Response(
@@ -230,7 +233,10 @@ async def get_next_document(
         raise HTTPException(status_code=404, detail="Scan job not found")
 
     if job["state"] == "Completed" and job["filepath"]:
-        # Already scanned, return existing file
+        if job["served"]:
+            # No more pages — signal end of job to client
+            raise HTTPException(status_code=404, detail="No more pages")
+        job["served"] = True
         return _file_response(job)
 
     if job["state"] == "Processing":
