@@ -60,9 +60,9 @@ async def scanner_capabilities():
     platen = SubElement(root, "scan:Platen")
     platen_caps = SubElement(platen, "scan:PlatenInputCaps")
 
-    SubElement(platen_caps, "scan:MinWidth").text = "0"
+    SubElement(platen_caps, "scan:MinWidth").text = "16"
     SubElement(platen_caps, "scan:MaxWidth").text = "2550"  # A4 at 300dpi
-    SubElement(platen_caps, "scan:MinHeight").text = "0"
+    SubElement(platen_caps, "scan:MinHeight").text = "16"
     SubElement(platen_caps, "scan:MaxHeight").text = "3508"
     SubElement(platen_caps, "scan:MaxPhysicalWidth").text = "2550"
     SubElement(platen_caps, "scan:MaxPhysicalHeight").text = "3508"
@@ -93,37 +93,6 @@ async def scanner_capabilities():
     discrete = SubElement(resolutions, "scan:DiscreteResolutions")
     for dpi in (75, 150, 300, 600):
         res = SubElement(discrete, "scan:DiscreteResolution")
-        SubElement(res, "scan:XResolution").text = str(dpi)
-        SubElement(res, "scan:YResolution").text = str(dpi)
-
-    # ADF capabilities
-    adf = SubElement(root, "scan:Adf")
-    adf_caps = SubElement(adf, "scan:AdfSimplexInputCaps")
-    SubElement(adf_caps, "scan:MinWidth").text = "0"
-    SubElement(adf_caps, "scan:MaxWidth").text = "2550"
-    SubElement(adf_caps, "scan:MinHeight").text = "0"
-    SubElement(adf_caps, "scan:MaxHeight").text = "3508"
-    SubElement(adf_caps, "scan:MaxPhysicalWidth").text = "2550"
-    SubElement(adf_caps, "scan:MaxPhysicalHeight").text = "3508"
-    SubElement(adf_caps, "scan:MaxScanRegions").text = "1"
-
-    adf_profiles = SubElement(adf_caps, "scan:SettingProfiles")
-    adf_profile = SubElement(adf_profiles, "scan:SettingProfile")
-    adf_colors = SubElement(adf_profile, "scan:ColorModes")
-    for mode in ("RGB24", "Grayscale8", "BlackAndWhite1"):
-        SubElement(adf_colors, "scan:ColorMode").text = mode
-    adf_content_types = SubElement(adf_profile, "scan:ContentTypes")
-    for ct in ("Photo", "Text", "TextAndPhoto"):
-        SubElement(adf_content_types, "pwg:ContentType").text = ct
-    adf_formats = SubElement(adf_profile, "scan:DocumentFormats")
-    for fmt in ("application/pdf", "image/jpeg", "image/png"):
-        SubElement(adf_formats, "pwg:DocumentFormat").text = fmt
-    for fmt in ("application/pdf", "image/jpeg", "image/png"):
-        SubElement(adf_formats, "scan:DocumentFormatExt").text = fmt
-    adf_res = SubElement(adf_profile, "scan:SupportedResolutions")
-    adf_discrete = SubElement(adf_res, "scan:DiscreteResolutions")
-    for dpi in (75, 150, 300, 600):
-        res = SubElement(adf_discrete, "scan:DiscreteResolution")
         SubElement(res, "scan:XResolution").text = str(dpi)
         SubElement(res, "scan:YResolution").text = str(dpi)
 
