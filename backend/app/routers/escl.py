@@ -172,15 +172,18 @@ async def _run_scan(job_id: str) -> None:
         async with async_session() as db:
             device = await get_default_scanner_device(db)
 
-        # Convert requested scan region from pixels to mm for scanimage
+        # eSCL ScanRegion coordinates are in the scanner's capability coordinate
+        # system (our MaxWidth/MaxHeight are defined at 300dpi), NOT at the
+        # actual scan resolution. Convert to mm using the caps DPI base.
+        CAPS_DPI = 300  # must match MaxWidth/MaxHeight in ScannerCapabilities
         left_mm = top_mm = width_mm = height_mm = None
         region = job.get("scan_region") or {}
         res = job["resolution"]
         if region.get("width"):
-            width_mm  = region["width"]    / res * 25.4
-            height_mm = region["height"]   / res * 25.4
-            left_mm   = region["x_offset"] / res * 25.4
-            top_mm    = region["y_offset"] / res * 25.4
+            width_mm  = region["width"]    / CAPS_DPI * 25.4
+            height_mm = region["height"]   / CAPS_DPI * 25.4
+            left_mm   = region["x_offset"] / CAPS_DPI * 25.4
+            top_mm    = region["y_offset"] / CAPS_DPI * 25.4
 
         scan_id, filepath = await scan_service.scan(
             resolution=res,
@@ -196,9 +199,10 @@ async def _run_scan(job_id: str) -> None:
 
         # Trim/pad to exact pixel dimensions (scanner may be off by ±1px due
         # to mm→pixel rounding; ICA pre-allocates an exact buffer and corrupts
-        # the file if dimensions don't match)
-        req_w = region.get("width")
-        req_h = region.get("height")
+        # the file if dimensions don't match).
+        # Convert caps-DPI region coords → expected pixels at scan resolution.
+        req_w = round(region["width"]  * res / CAPS_DPI) if region.get("width")  else None
+        req_h = round(region["height"] * res / CAPS_DPI) if region.get("height") else None
         if req_w and req_h and job["format"] in ("jpeg", "png"):
             from PIL import Image as _PILImage
 
