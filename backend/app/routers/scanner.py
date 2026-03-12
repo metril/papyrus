@@ -95,8 +95,19 @@ async def initiate_scan(
     except ScanError as e:
         job.status = "failed"
         job.error_message = str(e)
-        await db.commit()
+        try:
+            await db.commit()
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = f"{type(e).__name__}: {e}"
+        try:
+            await db.commit()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
 
     return job
 
@@ -162,8 +173,19 @@ async def initiate_batch_scan(
     except ScanError as e:
         job.status = "failed"
         job.error_message = str(e)
-        await db.commit()
+        try:
+            await db.commit()
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        job.status = "failed"
+        job.error_message = f"{type(e).__name__}: {e}"
+        try:
+            await db.commit()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
 
     return job
 

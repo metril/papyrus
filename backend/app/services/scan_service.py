@@ -124,22 +124,11 @@ class ScanService:
             if not os.path.exists(tiff_file):
                 raise ScanError("Scan produced no output file")
 
-            # Convert TIFF to the requested format
-            if fmt == "pdf":
-                pdf_file = os.path.join(settings.scan_dir, f"{scan_id}.pdf")
-                pdf_process = await asyncio.create_subprocess_exec(
-                    "img2pdf", tiff_file, "-o", pdf_file,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await pdf_process.wait()
-                if pdf_process.returncode != 0:
-                    raise ScanError("PDF conversion failed")
-                os.unlink(tiff_file)
-                return scan_id, pdf_file
-            elif fmt in ("png", "jpeg"):
+            # Convert TIFF to the requested format using Pillow
+            # (Pillow handles JPEG-in-TIFF from brscan4; img2pdf rejects lossy TIFF)
+            if fmt in ("pdf", "png", "jpeg"):
                 from PIL import Image
-                ext = "jpg" if fmt == "jpeg" else "png"
+                ext = {"jpeg": "jpg"}.get(fmt, fmt)  # jpeg→jpg, pdf→pdf, png→png
                 out_file = os.path.join(settings.scan_dir, f"{scan_id}.{ext}")
                 with Image.open(tiff_file) as img:
                     img.save(out_file)

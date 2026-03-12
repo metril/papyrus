@@ -44,8 +44,10 @@ export default function ScanForm() {
       setResult(job);
       await fetchScans();
     } catch (err: unknown) {
-      const axiosDetail = (err as { response?: { data?: { detail?: string } } })
-        .response?.data?.detail;
+      const data = (err as { response?: { data?: unknown } }).response?.data;
+      const axiosDetail = typeof data === 'string'
+        ? data
+        : (data as { detail?: string } | undefined)?.detail;
       const message = axiosDetail ?? (err instanceof Error ? err.message : 'Scan failed');
       setError(message);
     } finally {
