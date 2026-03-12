@@ -53,17 +53,20 @@ async def scanner_capabilities():
     SubElement(root, "pwg:Version").text = "2.6"
     SubElement(root, "pwg:MakeAndModel").text = "Papyrus Network Scanner"
     SubElement(root, "scan:UUID").text = str(uuid.uuid5(uuid.NAMESPACE_DNS, "papyrus.scanner"))
+    SubElement(root, "scan:AdminURI").text = ""
+    SubElement(root, "scan:IconURI").text = ""
 
     # Platen (flatbed) capabilities
     platen = SubElement(root, "scan:Platen")
-    SubElement(platen, "scan:MaxPhysicalWidth").text = "2550"
-    SubElement(platen, "scan:MaxPhysicalHeight").text = "3508"
     platen_caps = SubElement(platen, "scan:PlatenInputCaps")
 
     SubElement(platen_caps, "scan:MinWidth").text = "0"
     SubElement(platen_caps, "scan:MaxWidth").text = "2550"  # A4 at 300dpi
     SubElement(platen_caps, "scan:MinHeight").text = "0"
     SubElement(platen_caps, "scan:MaxHeight").text = "3508"
+    SubElement(platen_caps, "scan:MaxPhysicalWidth").text = "2550"
+    SubElement(platen_caps, "scan:MaxPhysicalHeight").text = "3508"
+    SubElement(platen_caps, "scan:MaxScanRegions").text = "1"
 
     profiles = SubElement(platen_caps, "scan:SettingProfiles")
     profile = SubElement(profiles, "scan:SettingProfile")
@@ -72,6 +75,11 @@ async def scanner_capabilities():
     color_modes = SubElement(profile, "scan:ColorModes")
     for mode in ("RGB24", "Grayscale8", "BlackAndWhite1"):
         SubElement(color_modes, "scan:ColorMode").text = mode
+
+    # Content types
+    content_types = SubElement(profile, "scan:ContentTypes")
+    for ct in ("Photo", "Text", "TextAndPhoto"):
+        SubElement(content_types, "pwg:ContentType").text = ct
 
     # Resolutions
     resolutions = SubElement(profile, "scan:SupportedResolutions")
@@ -90,19 +98,23 @@ async def scanner_capabilities():
 
     # ADF capabilities
     adf = SubElement(root, "scan:Adf")
-    SubElement(adf, "scan:MaxPhysicalWidth").text = "2550"
-    SubElement(adf, "scan:MaxPhysicalHeight").text = "3508"
     adf_caps = SubElement(adf, "scan:AdfSimplexInputCaps")
     SubElement(adf_caps, "scan:MinWidth").text = "0"
     SubElement(adf_caps, "scan:MaxWidth").text = "2550"
     SubElement(adf_caps, "scan:MinHeight").text = "0"
     SubElement(adf_caps, "scan:MaxHeight").text = "3508"
+    SubElement(adf_caps, "scan:MaxPhysicalWidth").text = "2550"
+    SubElement(adf_caps, "scan:MaxPhysicalHeight").text = "3508"
+    SubElement(adf_caps, "scan:MaxScanRegions").text = "1"
 
     adf_profiles = SubElement(adf_caps, "scan:SettingProfiles")
     adf_profile = SubElement(adf_profiles, "scan:SettingProfile")
     adf_colors = SubElement(adf_profile, "scan:ColorModes")
     for mode in ("RGB24", "Grayscale8", "BlackAndWhite1"):
         SubElement(adf_colors, "scan:ColorMode").text = mode
+    adf_content_types = SubElement(adf_profile, "scan:ContentTypes")
+    for ct in ("Photo", "Text", "TextAndPhoto"):
+        SubElement(adf_content_types, "pwg:ContentType").text = ct
     adf_res = SubElement(adf_profile, "scan:SupportedResolutions")
     adf_discrete = SubElement(adf_res, "scan:DiscreteResolutions")
     for dpi in (75, 150, 300, 600):
