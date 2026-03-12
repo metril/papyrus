@@ -53,8 +53,6 @@ async def scanner_capabilities():
     SubElement(root, "pwg:Version").text = "2.6"
     SubElement(root, "pwg:MakeAndModel").text = "Papyrus Network Scanner"
     SubElement(root, "scan:UUID").text = str(uuid.uuid5(uuid.NAMESPACE_DNS, "papyrus.scanner"))
-    SubElement(root, "scan:AdminURI").text = ""
-    SubElement(root, "scan:IconURI").text = ""
 
     # Platen (flatbed) capabilities
     platen = SubElement(root, "scan:Platen")
@@ -116,7 +114,7 @@ async def scanner_status():
 
     # StateReasons required by eSCL 2.6
     reasons = SubElement(root, "pwg:StateReasons")
-    SubElement(reasons, "pwg:StateReason").text = "None"
+    SubElement(reasons, "pwg:StateReason").text = "none"
 
     # Report active jobs so clients can track state transitions
     active_jobs = {jid: j for jid, j in _scan_jobs.items() if j["state"] != "Canceled"}
