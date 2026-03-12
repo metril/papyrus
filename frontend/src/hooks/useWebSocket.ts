@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react';
 import type { WSMessage } from '../types';
 
 interface UseWebSocketOptions {
-  url: string;
+  url: string | null;
   onMessage?: (message: WSMessage) => void;
   reconnectInterval?: number;
   maxReconnectAttempts?: number;
@@ -20,6 +20,7 @@ export function useWebSocket({
   const [connected, setConnected] = useState(false);
 
   const connect = useCallback(() => {
+    if (!url) return;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}${url}`;
     const ws = new WebSocket(wsUrl);

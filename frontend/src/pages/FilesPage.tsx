@@ -4,6 +4,7 @@ import Button from '../components/common/Button';
 import api from '../api/client';
 import { listProviders, listFiles, getDownloadUrl } from '../api/cloud';
 import type { SMBShare, SMBFileEntry, CloudProvider, CloudFileEntry } from '../types';
+import { useToast } from '../components/common/Toast';
 
 type Tab = 'network' | 'cloud';
 
@@ -46,6 +47,7 @@ export default function FilesPage() {
 // --- Network (SMB) Browser ---
 
 function NetworkBrowser() {
+  const toast = useToast();
   const [shares, setShares] = useState<SMBShare[]>([]);
   const [selectedShare, setSelectedShare] = useState<SMBShare | null>(null);
   const [currentPath, setCurrentPath] = useState('/');
@@ -107,9 +109,9 @@ function NetworkBrowser() {
       await api.post('/jobs/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      alert('File added to print queue (held)');
+      toast.show('File added to print queue (held)', 'success');
     } catch {
-      alert('Failed to print file');
+      toast.show('Failed to print file');
     }
   };
 
@@ -202,6 +204,7 @@ const providerLabels: Record<string, string> = {
 };
 
 function CloudBrowser() {
+  const toast = useToast();
   const [providers, setProviders] = useState<CloudProvider[]>([]);
   const [selectedProvider, setSelectedProvider] = useState<CloudProvider | null>(null);
   const [files, setFiles] = useState<CloudFileEntry[]>([]);
@@ -277,9 +280,9 @@ function CloudBrowser() {
       await api.post('/jobs/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
-      alert('File added to print queue (held)');
+      toast.show('File added to print queue (held)', 'success');
     } catch {
-      alert('Failed to print file');
+      toast.show('Failed to print file');
     }
   };
 

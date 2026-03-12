@@ -18,7 +18,7 @@ export default function ScanForm() {
   const { progress, setProgress, fetchScans } = useScanStore();
 
   useWebSocket({
-    url: result ? `/api/scanner/ws/scan/${result.scan_id}` : '/api/scanner/ws/scan/_',
+    url: result?.scan_id ? `/api/scanner/ws/scan/${result.scan_id}` : null,
     onMessage: (msg) => {
       if (msg.type === 'scan_progress') {
         setProgress((msg.data as { progress: number }).progress);
@@ -44,7 +44,9 @@ export default function ScanForm() {
       setResult(job);
       await fetchScans();
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Scan failed';
+      const axiosDetail = (err as { response?: { data?: { detail?: string } } })
+        .response?.data?.detail;
+      const message = axiosDetail ?? (err instanceof Error ? err.message : 'Scan failed');
       setError(message);
     } finally {
       setScanning(false);

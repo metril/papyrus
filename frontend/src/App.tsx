@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import AppShell from './components/layout/AppShell';
+import { ToastProvider } from './components/common/Toast';
 import PrintPage from './pages/PrintPage';
 import ScanPage from './pages/ScanPage';
 import CopyPage from './pages/CopyPage';
@@ -25,6 +26,7 @@ export default function App() {
   }, [theme]);
 
   return (
+    <ToastProvider>
     <BrowserRouter>
       <Routes>
         <Route element={<AppShell />}>
@@ -38,5 +40,6 @@ export default function App() {
         </Route>
       </Routes>
     </BrowserRouter>
+    </ToastProvider>
   );
 }

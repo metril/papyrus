@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
+import { useToast } from '../components/common/Toast';
 import api from '../api/client';
 import { listProviders, disconnectProvider, getAuthorizeUrl } from '../api/cloud';
 import {
@@ -76,10 +77,12 @@ function SettingField({
 const printerStateLabels: Record<number, string> = { 3: 'Idle', 4: 'Printing', 5: 'Stopped' };
 
 function PrintersCard() {
+  const toast = useToast();
   const [printers, setPrinters] = useState<ManagedPrinter[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [addMode, setAddMode] = useState<'ip' | 'manual'>('ip');
   const [editId, setEditId] = useState<number | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [form, setForm] = useState({ display_name: '', uri: '', description: '', is_network_queue: false, auto_release: false });
   const [editForm, setEditForm] = useState({ display_name: '', uri: '', description: '', auto_release: false });
   // IP mode state
@@ -112,7 +115,7 @@ function PrintersCard() {
       await addPrinter({ ...form, uri: uri || undefined });
       resetAdd();
       load();
-    } catch { alert('Failed to add printer'); }
+    } catch { toast.show('Failed to add printer'); }
   };
 
   const handleUpdate = async (id: number) => {
@@ -120,20 +123,19 @@ function PrintersCard() {
       await updatePrinter(id, { ...editForm, uri: editForm.uri || undefined });
       setEditId(null);
       load();
-    } catch { alert('Failed to update printer'); }
+    } catch { toast.show('Failed to update printer'); }
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Delete this printer?')) return;
-    try { await deletePrinter(id); load(); } catch { alert('Failed to delete printer'); }
+    try { await deletePrinter(id); setConfirmDeleteId(null); load(); } catch { toast.show('Failed to delete printer'); }
   };
 
   const handleDefault = async (id: number) => {
-    try { await setDefaultPrinter(id); load(); } catch { alert('Failed to set default'); }
+    try { await setDefaultPrinter(id); load(); } catch { toast.show('Failed to set default'); }
   };
 
   const handleResume = async (id: number) => {
-    try { await resumePrinter(id); load(); } catch { alert('Failed to resume printer'); }
+    try { await resumePrinter(id); load(); } catch { toast.show('Failed to resume printer'); }
   };
 
   const startEdit = (p: ManagedPrinter) => {
@@ -185,7 +187,7 @@ function PrintersCard() {
                   {p.uri && <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{p.uri}</div>}
                   {p.description && <div className="text-xs text-gray-400 dark:text-gray-500">{p.description}</div>}
                 </div>
-                <div className="flex gap-1 ml-2 flex-shrink-0">
+                <div className="flex gap-1 ml-2 flex-shrink-0 items-center">
                   {p.cups_status.state === 5 && (
                     <Button size="sm" variant="secondary" onClick={() => handleResume(p.id)}>Resume</Button>
                   )}
@@ -193,7 +195,15 @@ function PrintersCard() {
                     <Button size="sm" variant="ghost" onClick={() => handleDefault(p.id)}>Set Default</Button>
                   )}
                   <Button size="sm" variant="ghost" onClick={() => startEdit(p)}>Edit</Button>
-                  <Button size="sm" variant="danger" onClick={() => handleDelete(p.id)}>Delete</Button>
+                  {confirmDeleteId === p.id ? (
+                    <>
+                      <span className="text-xs text-gray-600 dark:text-gray-400">Delete?</span>
+                      <Button size="sm" variant="danger" onClick={() => handleDelete(p.id)}>Yes</Button>
+                      <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteId(null)}>No</Button>
+                    </>
+                  ) : (
+                    <Button size="sm" variant="danger" onClick={() => setConfirmDeleteId(p.id)}>Delete</Button>
+                  )}
                 </div>
               </div>
             )}
@@ -275,10 +285,12 @@ function PrintersCard() {
 }
 
 function ScannersCard() {
+  const toast = useToast();
   const [scanners, setScanners] = useState<ManagedScanner[]>([]);
   const [showAdd, setShowAdd] = useState(false);
   const [addMode, setAddMode] = useState<'manual' | 'ip' | 'discover' | 'brother'>('manual');
   const [editId, setEditId] = useState<number | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [discovered, setDiscovered] = useState<DiscoveredDevice[]>([]);
   const [discovering, setDiscovering] = useState(false);
   const [form, setForm] = useState({ name: '', device: '', description: '', auto_deliver: false });
@@ -361,7 +373,7 @@ function ScannersCard() {
     try {
       const devices = await discoverScanners();
       setDiscovered(devices);
-    } catch { alert('Discovery failed'); }
+    } catch { toast.show('Discovery failed'); }
     finally { setDiscovering(false); }
   };
 
@@ -381,7 +393,7 @@ function ScannersCard() {
       setShowAdd(false);
       setDiscovered([]);
       load();
-    } catch { alert('Failed to add scanner'); }
+    } catch { toast.show('Failed to add scanner'); }
   };
 
   const handleUpdate = async (id: number) => {
@@ -389,16 +401,15 @@ function ScannersCard() {
       await updateScanner(id, editForm);
       setEditId(null);
       load();
-    } catch { alert('Failed to update scanner'); }
+    } catch { toast.show('Failed to update scanner'); }
   };
 
   const handleDelete = async (id: number) => {
-    if (!confirm('Delete this scanner?')) return;
-    try { await deleteScanner(id); load(); } catch { alert('Failed to delete scanner'); }
+    try { await deleteScanner(id); setConfirmDeleteId(null); load(); } catch { toast.show('Failed to delete scanner'); }
   };
 
   const handleDefault = async (id: number) => {
-    try { await setDefaultScanner(id); load(); } catch { alert('Failed to set default'); }
+    try { await setDefaultScanner(id); load(); } catch { toast.show('Failed to set default'); }
   };
 
   const startEdit = (s: ManagedScanner) => {
@@ -453,7 +464,7 @@ function ScannersCard() {
                     <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-mono">{s.device}</div>
                     {s.description && <div className="text-xs text-gray-400 dark:text-gray-500">{s.description}</div>}
                   </div>
-                  <div className="flex gap-1 ml-2 flex-shrink-0">
+                  <div className="flex gap-1 ml-2 flex-shrink-0 items-center">
                     {!s.is_default && (
                       <Button size="sm" variant="ghost" onClick={() => handleDefault(s.id)}>Set Default</Button>
                     )}
@@ -461,7 +472,15 @@ function ScannersCard() {
                       {testResults[s.id] === 'testing' ? '…' : 'Test'}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => startEdit(s)}>Edit</Button>
-                    <Button size="sm" variant="danger" onClick={() => handleDelete(s.id)}>Delete</Button>
+                    {confirmDeleteId === s.id ? (
+                      <>
+                        <span className="text-xs text-gray-600 dark:text-gray-400">Delete?</span>
+                        <Button size="sm" variant="danger" onClick={() => handleDelete(s.id)}>Yes</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteId(null)}>No</Button>
+                      </>
+                    ) : (
+                      <Button size="sm" variant="danger" onClick={() => setConfirmDeleteId(s.id)}>Delete</Button>
+                    )}
                   </div>
                 </div>
                 {testResults[s.id] && testResults[s.id] !== 'testing' && (
@@ -704,6 +723,8 @@ export default function SettingsPage() {
     );
   };
 
+  const toast = useToast();
+
   const createToken = async () => {
     if (!newTokenName) return;
     try {
@@ -716,7 +737,7 @@ export default function SettingsPage() {
       const { data: refreshed } = await api.get('/auth/tokens');
       setTokens(refreshed);
     } catch {
-      alert('Failed to create token');
+      toast.show('Failed to create token');
     }
   };
 
@@ -725,7 +746,7 @@ export default function SettingsPage() {
       await api.delete(`/auth/tokens/${id}`);
       setTokens(tokens.filter((t) => t.id !== id));
     } catch {
-      alert('Failed to revoke token');
+      toast.show('Failed to revoke token');
     }
   };
 
@@ -734,7 +755,7 @@ export default function SettingsPage() {
       await disconnectProvider(id);
       setCloudProviders(cloudProviders.filter((p) => p.id !== id));
     } catch {
-      alert('Failed to disconnect provider');
+      toast.show('Failed to disconnect provider');
     }
   };
 
@@ -744,16 +765,16 @@ export default function SettingsPage() {
       setWebhookSecret(data.secret);
       setWebhookInfo({ webhook_url: data.webhook_url, configured: true });
     } catch {
-      alert('Failed to generate webhook secret');
+      toast.show('Failed to generate webhook secret');
     }
   };
 
   const testSmtp = async () => {
     try {
       await api.post('/email/test');
-      alert('SMTP connection successful');
+      toast.show('SMTP connection successful', 'success');
     } catch {
-      alert('SMTP connection failed');
+      toast.show('SMTP connection failed');
     }
   };
 

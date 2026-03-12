@@ -70,20 +70,25 @@ class ScanService:
 
         async with self._lock:
             scan_id = str(uuid.uuid4())
-            # For PDF, scan as TIFF then convert
-            scan_fmt = "tiff" if fmt == "pdf" else fmt
-            output_file = os.path.join(settings.scan_dir, f"{scan_id}.{scan_fmt}")
-
             _device = device or settings.scanner_device
+
+            # brscan4 uses "FlatBed" (capital B); map common "Flatbed" spelling
+            _source = source
+            if _device.startswith("brother4:") and source.lower() == "flatbed":
+                _source = "FlatBed"
+
+            # Always scan to TIFF; brscan4 only reliably outputs TIFF natively
+            tiff_file = os.path.join(settings.scan_dir, f"{scan_id}.tiff")
+
             cmd = [
                 "scanimage",
                 "-d", _device,
                 "--resolution", str(resolution),
                 "--mode", mode,
-                f"--format={scan_fmt}",
-                "--source", source,
+                "--format=tiff",
+                "--source", _source,
                 "--progress",
-                "-o", output_file,
+                "-o", tiff_file,
             ]
 
             process = await asyncio.create_subprocess_exec(
@@ -92,10 +97,12 @@ class ScanService:
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            # Parse progress from stderr
+            # Collect stderr lines and watch for progress updates
+            stderr_lines: list[str] = []
             if process.stderr:
                 async for line in process.stderr:
                     text = line.decode().strip()
+                    stderr_lines.append(text)
                     match = re.search(r"Progress: (\d+\.?\d*)%", text)
                     if match and progress_callback:
                         await progress_callback(scan_id, float(match.group(1)))
@@ -103,26 +110,39 @@ class ScanService:
             await process.wait()
 
             if process.returncode != 0:
-                raise ScanError(f"scanimage exited with code {process.returncode}")
+                stderr_text = "; ".join(l for l in stderr_lines if l)
+                raise ScanError(
+                    f"scanimage exited with code {process.returncode}"
+                    + (f": {stderr_text}" if stderr_text else "")
+                )
 
-            if not os.path.exists(output_file):
+            if not os.path.exists(tiff_file):
                 raise ScanError("Scan produced no output file")
 
-            # Convert to PDF if requested
+            # Convert TIFF to the requested format
             if fmt == "pdf":
                 pdf_file = os.path.join(settings.scan_dir, f"{scan_id}.pdf")
                 pdf_process = await asyncio.create_subprocess_exec(
-                    "img2pdf", output_file, "-o", pdf_file,
+                    "img2pdf", tiff_file, "-o", pdf_file,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
                 await pdf_process.wait()
                 if pdf_process.returncode != 0:
                     raise ScanError("PDF conversion failed")
-                os.unlink(output_file)
-                output_file = pdf_file
-
-            return scan_id, output_file
+                os.unlink(tiff_file)
+                return scan_id, pdf_file
+            elif fmt in ("png", "jpeg"):
+                from PIL import Image
+                ext = "jpg" if fmt == "jpeg" else "png"
+                out_file = os.path.join(settings.scan_dir, f"{scan_id}.{ext}")
+                with Image.open(tiff_file) as img:
+                    img.save(out_file)
+                os.unlink(tiff_file)
+                return scan_id, out_file
+            else:
+                # tiff — return as-is
+                return scan_id, tiff_file
 
     async def scan_batch(
         self,
