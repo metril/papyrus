@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.database import get_db
+from app.database import async_session, get_db
 from app.services.scan_service import ScanError, get_default_scanner_device, scan_service
 
 router = APIRouter(prefix="/eSCL")
@@ -83,6 +83,7 @@ async def scanner_capabilities():
     formats = SubElement(profile, "scan:DocumentFormats")
     for fmt in ("application/pdf", "image/jpeg", "image/png"):
         SubElement(formats, "pwg:DocumentFormat").text = fmt
+    for fmt in ("application/pdf", "image/jpeg", "image/png"):
         SubElement(formats, "scan:DocumentFormatExt").text = fmt
 
     # ADF capabilities
@@ -107,6 +108,7 @@ async def scanner_capabilities():
     adf_formats = SubElement(adf_profile, "scan:DocumentFormats")
     for fmt in ("application/pdf", "image/jpeg", "image/png"):
         SubElement(adf_formats, "pwg:DocumentFormat").text = fmt
+    for fmt in ("application/pdf", "image/jpeg", "image/png"):
         SubElement(adf_formats, "scan:DocumentFormatExt").text = fmt
 
     return _xml_response(root)
@@ -127,10 +129,10 @@ async def scanner_status():
     SubElement(root, "pwg:Version").text = "2.6"
     SubElement(root, "scan:State").text = state
 
-    # Report active jobs
+    # Report all non-canceled jobs so clients can track state transitions
     jobs_elem = SubElement(root, "scan:Jobs")
     for job_id, job in _scan_jobs.items():
-        if job["state"] in ("Processing", "Pending"):
+        if job["state"] != "Canceled":
             job_info = SubElement(jobs_elem, "scan:JobInfo")
             SubElement(job_info, "pwg:JobUri").text = f"/eSCL/ScanJobs/{job_id}"
             SubElement(job_info, "pwg:JobUuid").text = job_id
@@ -140,9 +142,32 @@ async def scanner_status():
     return _xml_response(root)
 
 
+async def _run_scan(job_id: str) -> None:
+    """Background task: execute scan and update job state."""
+    job = _scan_jobs.get(job_id)
+    if job is None:
+        return
+    job["state"] = "Processing"
+    try:
+        async with async_session() as db:
+            device = await get_default_scanner_device(db)
+        scan_id, filepath = await scan_service.scan(
+            resolution=job["resolution"],
+            mode=job["color_mode"],
+            fmt=job["format"],
+            source=job["source"],
+            device=device,
+        )
+        job["filepath"] = filepath
+        job["state"] = "Completed"
+    except Exception as e:
+        job["state"] = "Canceled"
+        job["error"] = str(e)
+
+
 @router.post("/ScanJobs")
 async def create_scan_job(request: Request):
-    """Create a new eSCL scan job from client-submitted XML settings."""
+    """Create a new eSCL scan job and immediately start scanning in the background."""
     if not settings.escl_enabled:
         raise HTTPException(status_code=503, detail="eSCL scanner disabled")
 
@@ -214,7 +239,11 @@ async def create_scan_job(request: Request):
         "source": source,
         "filepath": None,
         "served": False,
+        "error": None,
     }
+
+    # Start scan immediately in background — clients poll ScannerStatus for Completed
+    asyncio.create_task(_run_scan(job_id))
 
     return Response(
         status_code=201,
@@ -223,43 +252,25 @@ async def create_scan_job(request: Request):
 
 
 @router.get("/ScanJobs/{job_id}/NextDocument")
-async def get_next_document(
-    job_id: str,
-    db: AsyncSession = Depends(get_db),
-):
-    """Execute the scan and return the result to the client."""
+async def get_next_document(job_id: str):
+    """Return the scanned document once the background scan has completed."""
     job = _scan_jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
 
-    if job["state"] == "Completed" and job["filepath"]:
-        if job["served"]:
-            # No more pages — signal end of job to client
-            raise HTTPException(status_code=404, detail="No more pages")
-        job["served"] = True
-        return _file_response(job)
+    if job["state"] == "Canceled":
+        raise HTTPException(status_code=503, detail=job.get("error") or "Scan failed")
 
-    if job["state"] == "Processing":
+    if job["state"] in ("Pending", "Processing"):
         raise HTTPException(status_code=503, detail="Scan in progress")
 
-    job["state"] = "Processing"
+    # state == "Completed"
+    if job["served"]:
+        # No more pages — signal end of job to client
+        raise HTTPException(status_code=404, detail="No more pages")
 
-    try:
-        device = await get_default_scanner_device(db)
-        scan_id, filepath = await scan_service.scan(
-            resolution=job["resolution"],
-            mode=job["color_mode"],
-            fmt=job["format"],
-            source=job["source"],
-            device=device,
-        )
-        job["filepath"] = filepath
-        job["state"] = "Completed"
-        return _file_response(job)
-
-    except ScanError as e:
-        job["state"] = "Canceled"
-        raise HTTPException(status_code=503, detail=str(e))
+    job["served"] = True
+    return _file_response(job)
 
 
 @router.delete("/ScanJobs/{job_id}")
