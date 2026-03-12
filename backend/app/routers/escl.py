@@ -81,6 +81,13 @@ async def scanner_capabilities():
     for ct in ("Photo", "Text", "TextAndPhoto"):
         SubElement(content_types, "pwg:ContentType").text = ct
 
+    # Document formats (must come before SupportedResolutions per eSCL 2.6 schema)
+    formats = SubElement(profile, "scan:DocumentFormats")
+    for fmt in ("application/pdf", "image/jpeg", "image/png"):
+        SubElement(formats, "pwg:DocumentFormat").text = fmt
+    for fmt in ("application/pdf", "image/jpeg", "image/png"):
+        SubElement(formats, "scan:DocumentFormatExt").text = fmt
+
     # Resolutions
     resolutions = SubElement(profile, "scan:SupportedResolutions")
     discrete = SubElement(resolutions, "scan:DiscreteResolutions")
@@ -88,13 +95,6 @@ async def scanner_capabilities():
         res = SubElement(discrete, "scan:DiscreteResolution")
         SubElement(res, "scan:XResolution").text = str(dpi)
         SubElement(res, "scan:YResolution").text = str(dpi)
-
-    # Document formats
-    formats = SubElement(profile, "scan:DocumentFormats")
-    for fmt in ("application/pdf", "image/jpeg", "image/png"):
-        SubElement(formats, "pwg:DocumentFormat").text = fmt
-    for fmt in ("application/pdf", "image/jpeg", "image/png"):
-        SubElement(formats, "scan:DocumentFormatExt").text = fmt
 
     # ADF capabilities
     adf = SubElement(root, "scan:Adf")
@@ -115,17 +115,17 @@ async def scanner_capabilities():
     adf_content_types = SubElement(adf_profile, "scan:ContentTypes")
     for ct in ("Photo", "Text", "TextAndPhoto"):
         SubElement(adf_content_types, "pwg:ContentType").text = ct
+    adf_formats = SubElement(adf_profile, "scan:DocumentFormats")
+    for fmt in ("application/pdf", "image/jpeg", "image/png"):
+        SubElement(adf_formats, "pwg:DocumentFormat").text = fmt
+    for fmt in ("application/pdf", "image/jpeg", "image/png"):
+        SubElement(adf_formats, "scan:DocumentFormatExt").text = fmt
     adf_res = SubElement(adf_profile, "scan:SupportedResolutions")
     adf_discrete = SubElement(adf_res, "scan:DiscreteResolutions")
     for dpi in (75, 150, 300, 600):
         res = SubElement(adf_discrete, "scan:DiscreteResolution")
         SubElement(res, "scan:XResolution").text = str(dpi)
         SubElement(res, "scan:YResolution").text = str(dpi)
-    adf_formats = SubElement(adf_profile, "scan:DocumentFormats")
-    for fmt in ("application/pdf", "image/jpeg", "image/png"):
-        SubElement(adf_formats, "pwg:DocumentFormat").text = fmt
-    for fmt in ("application/pdf", "image/jpeg", "image/png"):
-        SubElement(adf_formats, "scan:DocumentFormatExt").text = fmt
 
     return _xml_response(root)
 
@@ -145,10 +145,15 @@ async def scanner_status():
     SubElement(root, "pwg:Version").text = "2.6"
     SubElement(root, "scan:State").text = state
 
-    # Report all non-canceled jobs so clients can track state transitions
-    jobs_elem = SubElement(root, "scan:Jobs")
-    for job_id, job in _scan_jobs.items():
-        if job["state"] != "Canceled":
+    # StateReasons required by eSCL 2.6
+    reasons = SubElement(root, "pwg:StateReasons")
+    SubElement(reasons, "pwg:StateReason").text = "None"
+
+    # Report active jobs so clients can track state transitions
+    active_jobs = {jid: j for jid, j in _scan_jobs.items() if j["state"] != "Canceled"}
+    if active_jobs:
+        jobs_elem = SubElement(root, "scan:Jobs")
+        for job_id, job in active_jobs.items():
             job_info = SubElement(jobs_elem, "scan:JobInfo")
             SubElement(job_info, "pwg:JobUri").text = f"/eSCL/ScanJobs/{job_id}"
             SubElement(job_info, "pwg:JobUuid").text = job_id
