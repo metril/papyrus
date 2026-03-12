@@ -56,6 +56,8 @@ async def scanner_capabilities():
 
     # Platen (flatbed) capabilities
     platen = SubElement(root, "scan:Platen")
+    SubElement(platen, "scan:MaxPhysicalWidth").text = "2550"
+    SubElement(platen, "scan:MaxPhysicalHeight").text = "3508"
     platen_caps = SubElement(platen, "scan:PlatenInputCaps")
 
     SubElement(platen_caps, "scan:MinWidth").text = "0"
@@ -88,6 +90,8 @@ async def scanner_capabilities():
 
     # ADF capabilities
     adf = SubElement(root, "scan:Adf")
+    SubElement(adf, "scan:MaxPhysicalWidth").text = "2550"
+    SubElement(adf, "scan:MaxPhysicalHeight").text = "3508"
     adf_caps = SubElement(adf, "scan:AdfSimplexInputCaps")
     SubElement(adf_caps, "scan:MinWidth").text = "0"
     SubElement(adf_caps, "scan:MaxWidth").text = "2550"
