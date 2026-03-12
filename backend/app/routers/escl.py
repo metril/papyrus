@@ -236,6 +236,7 @@ async def create_scan_job(request: Request):
     color_mode = "Color"
     fmt = "pdf"
     source = "Flatbed"
+    scan_region: dict = {"width": None, "height": None, "x_offset": 0, "y_offset": 0}
 
     # Parse XML settings (best-effort)
     try:
@@ -286,8 +287,7 @@ async def create_scan_job(request: Request):
                     source = "Flatbed"
                 break
 
-        # Extract scan region (pixels at the requested resolution)
-        scan_region: dict = {"width": None, "height": None, "x_offset": 0, "y_offset": 0}
+        # Extract scan region (coordinates in caps coordinate system, CAPS_DPI=300)
         for tag in ("Width", "pwg:Width", "{%s}Width" % PWG_NS):
             elem = root.find(f".//{tag}")
             if elem is not None and elem.text:
