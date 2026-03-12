@@ -10,7 +10,7 @@
     <txt-record>rs=eSCL</txt-record>
     <txt-record>ty=Papyrus Network Scanner</txt-record>
     <txt-record>cs=color,grayscale,binary</txt-record>
-    <txt-record>is=platen</txt-record>
+    <txt-record>is=platen,adf</txt-record>
     <txt-record>duplex=F</txt-record>
     <txt-record>uuid=12393b29-5fda-5f5a-94b0-086930d20848</txt-record>
   </service>
