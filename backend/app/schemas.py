@@ -234,6 +234,14 @@ class ScanProfileResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# --- Collation ---
+
+
+class CollateRequest(BaseModel):
+    scan_ids: list[str] = Field(min_length=2, max_length=50)
+    output_filename: str = "merged.pdf"
+
+
 # --- Bulk Delete ---
 
 

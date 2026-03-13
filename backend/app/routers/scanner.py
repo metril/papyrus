@@ -10,7 +10,7 @@ from app.auth.dependencies import get_current_user, require_permission
 from app.config import settings
 from app.database import get_db
 from app.models import CloudProvider, ScanJob, ScanProfile, SMBShare, User
-from app.schemas import BulkDeleteScansRequest, BulkDeleteResponse, EmailSendRequest, ScanBatchRequest, ScanList, ScanProfileCreate, ScanProfileResponse, ScanRequest, ScanResponse
+from app.schemas import BulkDeleteScansRequest, BulkDeleteResponse, CollateRequest, EmailSendRequest, ScanBatchRequest, ScanList, ScanProfileCreate, ScanProfileResponse, ScanRequest, ScanResponse
 from app.services.cloud_service import CloudError, cloud_service
 from app.services.email_service import EmailError, email_service
 from app.services.file_service import cleanup_file
@@ -470,6 +470,80 @@ async def bulk_delete_scans(
         })
 
     return BulkDeleteResponse(deleted=deleted)
+
+
+@router.post("/collate", response_model=ScanResponse, status_code=201)
+async def collate_scans(
+    body: CollateRequest,
+    user: User = Depends(require_permission("scan")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Merge multiple scans into a single PDF."""
+    import uuid as _uuid
+
+    from PIL import Image
+    from pypdf import PdfWriter
+
+    result = await db.execute(select(ScanJob).where(ScanJob.scan_id.in_(body.scan_ids)))
+    jobs_map = {j.scan_id: j for j in result.scalars().all()}
+
+    # Preserve order from request
+    ordered_jobs = []
+    for sid in body.scan_ids:
+        job = jobs_map.get(sid)
+        if job is None:
+            raise HTTPException(status_code=404, detail=f"Scan {sid} not found")
+        if job.status != "completed" or not job.filepath:
+            raise HTTPException(status_code=400, detail=f"Scan {sid} is not available")
+        if not os.path.exists(job.filepath):
+            raise HTTPException(status_code=404, detail=f"File for scan {sid} not found on disk")
+        ordered_jobs.append(job)
+
+    scan_id = str(_uuid.uuid4())
+    out_path = os.path.join(settings.scan_dir, f"{scan_id}.pdf")
+    writer = PdfWriter()
+
+    for job in ordered_jobs:
+        ext = os.path.splitext(job.filepath)[1].lower()
+        if ext == ".pdf":
+            writer.append(job.filepath)
+        else:
+            # Convert image to single-page PDF in memory
+            img = Image.open(job.filepath)
+            if img.mode not in ("RGB", "L", "RGBA"):
+                img = img.convert("RGB")
+            tmp_pdf = job.filepath + ".tmp.pdf"
+            img.save(tmp_pdf, format="PDF", resolution=job.resolution)
+            img.close()
+            writer.append(tmp_pdf)
+            os.unlink(tmp_pdf)
+
+    with open(out_path, "wb") as f:
+        writer.write(f)
+    writer.close()
+
+    merged_job = ScanJob(
+        user_id=user.id,
+        scan_id=scan_id,
+        resolution=ordered_jobs[0].resolution,
+        mode=ordered_jobs[0].mode,
+        format="pdf",
+        source="Merged",
+        page_count=sum(j.page_count for j in ordered_jobs),
+        filepath=out_path,
+        file_size=os.path.getsize(out_path),
+        status="completed",
+        completed_at=datetime.now(timezone.utc),
+    )
+    db.add(merged_job)
+    await db.commit()
+    await db.refresh(merged_job)
+
+    await ws_manager.broadcast("scans", {
+        "type": "scan_completed", "data": {"scan_id": scan_id}
+    })
+
+    return merged_job
 
 
 @router.delete("/scans/{scan_id}", status_code=204)

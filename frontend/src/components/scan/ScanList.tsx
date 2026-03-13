@@ -29,6 +29,8 @@ export default function ScanList() {
   const [emailScanId, setEmailScanId] = useState<string | null>(null);
   const [cloudScanId, setCloudScanId] = useState<string | null>(null);
   const [previewScan, setPreviewScan] = useState<ScanJob | null>(null);
+  const [mergeSelection, setMergeSelection] = useState<Set<string>>(new Set());
+  const [merging, setMerging] = useState(false);
 
   const sendToPaperless = async (scanId: string) => {
     try {
@@ -46,6 +48,34 @@ export default function ScanList() {
       fetchScans();
     } catch {
       toast.show('Failed to apply OCR');
+    }
+  };
+
+  const toggleMergeSelect = (scanId: string) => {
+    setMergeSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(scanId)) next.delete(scanId);
+      else next.add(scanId);
+      return next;
+    });
+  };
+
+  const handleMerge = async () => {
+    if (mergeSelection.size < 2) return;
+    setMerging(true);
+    try {
+      // Preserve order based on scan list order
+      const orderedIds = scans
+        .filter((s) => mergeSelection.has(s.scan_id))
+        .map((s) => s.scan_id);
+      await api.post('/scanner/collate', { scan_ids: orderedIds });
+      toast.show('Scans merged into PDF', 'success');
+      setMergeSelection(new Set());
+      fetchScans();
+    } catch {
+      toast.show('Failed to merge scans');
+    } finally {
+      setMerging(false);
     }
   };
 
@@ -73,14 +103,47 @@ export default function ScanList() {
     return <p className="text-gray-500 text-sm">No scans yet.</p>;
   }
 
+  const completedScans = scans.filter((s) => s.status === 'completed');
+
   return (
     <>
+    {/* Merge toolbar */}
+    {completedScans.length >= 2 && (
+      <div className="flex items-center gap-3 mb-3">
+        <span className="text-sm text-gray-600 dark:text-gray-400">
+          {mergeSelection.size > 0
+            ? `${mergeSelection.size} selected for merge`
+            : 'Select scans to merge into PDF'}
+        </span>
+        {mergeSelection.size >= 2 && (
+          <Button size="sm" onClick={handleMerge} disabled={merging}>
+            {merging ? 'Merging...' : `Merge ${mergeSelection.size} to PDF`}
+          </Button>
+        )}
+        {mergeSelection.size > 0 && (
+          <Button size="sm" variant="ghost" onClick={() => setMergeSelection(new Set())}>
+            Clear
+          </Button>
+        )}
+      </div>
+    )}
+
     <div className="space-y-3">
       {scans.map((scan) => (
         <div
           key={scan.scan_id}
-          className="flex items-center justify-between p-4 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700"
+          className={`flex items-center justify-between p-4 bg-white dark:bg-gray-900 rounded-lg border ${mergeSelection.has(scan.scan_id) ? 'border-blue-400 dark:border-blue-500 ring-1 ring-blue-200 dark:ring-blue-800' : 'border-gray-200 dark:border-gray-700'}`}
         >
+          {/* Merge checkbox */}
+          {scan.status === 'completed' && completedScans.length >= 2 && (
+            <input
+              type="checkbox"
+              checked={mergeSelection.has(scan.scan_id)}
+              onChange={() => toggleMergeSelect(scan.scan_id)}
+              className="mr-3 rounded border-gray-300 dark:border-gray-600"
+            />
+          )}
+
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <button
