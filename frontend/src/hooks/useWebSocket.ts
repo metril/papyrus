@@ -17,7 +17,13 @@ export function useWebSocket({
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectCount = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const onMessageRef = useRef(onMessage);
   const [connected, setConnected] = useState(false);
+
+  // Keep callback ref current without triggering reconnects
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  }, [onMessage]);
 
   const connect = useCallback(() => {
     if (!url) return;
@@ -33,7 +39,7 @@ export function useWebSocket({
     ws.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data) as WSMessage;
-        onMessage?.(message);
+        onMessageRef.current?.(message);
       } catch {
         // Ignore non-JSON messages
       }
@@ -55,7 +61,7 @@ export function useWebSocket({
     };
 
     wsRef.current = ws;
-  }, [url, onMessage, reconnectInterval, maxReconnectAttempts]);
+  }, [url, reconnectInterval, maxReconnectAttempts]);
 
   useEffect(() => {
     connect();
