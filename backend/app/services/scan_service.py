@@ -262,6 +262,48 @@ async def get_default_scanner(db: AsyncSession):
     return result.scalar_one_or_none()
 
 
+def render_scan_filename(template: str, scan_job, fmt: str | None = None) -> str:
+    """Render a scan filename from a template string.
+
+    Supported variables:
+      {date}       — YYYY-MM-DD
+      {time}       — HH-MM-SS
+      {datetime}   — YYYY-MM-DD_HH-MM-SS
+      {id}         — scan UUID (short: first 8 chars)
+      {full_id}    — full scan UUID
+      {resolution} — scan DPI
+      {mode}       — color mode (Color/Gray/Lineart)
+      {format}     — file format (pdf/png/jpeg/tiff)
+      {pages}      — page count
+      {counter}    — auto-incrementing daily counter (simple: based on scan_id hash)
+    """
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    ext = fmt or scan_job.format
+
+    replacements = {
+        "date": now.strftime("%Y-%m-%d"),
+        "time": now.strftime("%H-%M-%S"),
+        "datetime": now.strftime("%Y-%m-%d_%H-%M-%S"),
+        "id": scan_job.scan_id[:8],
+        "full_id": scan_job.scan_id,
+        "resolution": str(scan_job.resolution),
+        "mode": scan_job.mode,
+        "format": ext,
+        "pages": str(scan_job.page_count),
+        "counter": str(abs(hash(scan_job.scan_id)) % 10000).zfill(4),
+    }
+
+    result = template
+    for key, value in replacements.items():
+        result = result.replace(f"{{{key}}}", value)
+
+    # Sanitize: remove any chars that aren't safe for filenames
+    result = re.sub(r'[^\w\-.]', '_', result)
+    return f"{result}.{ext}"
+
+
 async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
     """Run configured auto-deliver actions after a scan completes."""
     import shutil
@@ -273,7 +315,10 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
         return
 
     config = scanner.post_scan_config
-    filename = f"scan_{scan_job.scan_id}.{scan_job.format}"
+
+    # Use template naming if configured, otherwise fall back to default
+    template = config.get("filename_template") or settings.scan_filename_template
+    filename = render_scan_filename(template, scan_job)
 
     # OCR — apply before other delivery actions so recipients get searchable PDF
     if config.get("ocr") and scan_job.format == "pdf" and scan_job.filepath:

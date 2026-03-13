@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     upload_dir: str = "/app/data/uploads"
     max_upload_size_mb: int = 50
     scan_retention_days: int = 7
+    scan_filename_template: str = "scan_{date}_{time}_{id}"
 
     # Security
     encryption_key: str = ""  # Fernet key for encrypting secrets at rest

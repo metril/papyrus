@@ -40,6 +40,7 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "paperless_api_token": (str, True),
     "ocr_enabled": (bool, False),
     "ocr_language": (str, False),
+    "scan_filename_template": (str, False),
     "ftp_host": (str, False),
     "ftp_port": (int, False),
     "ftp_username": (str, False),

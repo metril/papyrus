@@ -1144,6 +1144,24 @@ export default function SettingsPage() {
         </div>
       </Card>
 
+      {/* Scan Filename Template */}
+      <Card title="Scan Filename Template">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Template for naming delivered scan files. Variables: {'{date}'}, {'{time}'}, {'{datetime}'}, {'{id}'}, {'{resolution}'}, {'{mode}'}, {'{format}'}, {'{pages}'}, {'{counter}'}.
+          </p>
+          <SettingField
+            label="Template"
+            value={appSettings.scan_filename_template ?? 'scan_{date}_{time}_{id}'}
+            onChange={set('scan_filename_template')}
+            placeholder="scan_{date}_{time}_{id}"
+          />
+          <div className="flex justify-end">
+            <SaveButton section="scan_template" keys={['scan_filename_template']} />
+          </div>
+        </div>
+      </Card>
+
       {/* Paperless-ngx */}
       <Card title="Paperless-ngx">
         <div className="space-y-3">
