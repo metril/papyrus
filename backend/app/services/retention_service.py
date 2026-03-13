@@ -56,7 +56,8 @@ async def cleanup_old_print_jobs(db: AsyncSession, retention_days: int) -> int:
 
     deleted = 0
     for job in jobs:
-        cleanup_file(job.filepath)
+        if job.filepath:
+            cleanup_file(job.filepath)
         await db.delete(job)
         deleted += 1
 
