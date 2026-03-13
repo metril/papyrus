@@ -287,4 +287,131 @@ class CloudService:
         return dest_path
 
 
+    # --- OneDrive (Microsoft Graph) ---
+
+    GRAPH_BASE = "https://graph.microsoft.com/v1.0"
+
+    async def refresh_onedrive_token(
+        self,
+        refresh_token_encrypted: str,
+    ) -> tuple[str, datetime | None]:
+        """Refresh a OneDrive access token. Returns (new_access_token, expiry)."""
+        from app.config import settings
+
+        if not settings.onedrive_client_id or not settings.onedrive_client_secret:
+            raise CloudError("OneDrive OAuth credentials not configured")
+
+        refresh_token = decrypt_value(refresh_token_encrypted)
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+                data={
+                    "grant_type": "refresh_token",
+                    "refresh_token": refresh_token,
+                    "client_id": settings.onedrive_client_id,
+                    "client_secret": settings.onedrive_client_secret,
+                    "scope": "Files.ReadWrite.All offline_access",
+                },
+            )
+            if resp.status_code != 200:
+                raise CloudError(f"Failed to refresh OneDrive token: {resp.text}")
+
+            data = resp.json()
+            new_access_token = data["access_token"]
+            expires_in = data.get("expires_in", 3600)
+            expiry = datetime.now(timezone.utc).replace(
+                microsecond=0
+            ) + timedelta(seconds=expires_in)
+            return new_access_token, expiry
+
+    async def list_onedrive_files(
+        self,
+        access_token: str,
+        folder_id: str | None = None,
+    ) -> list[dict]:
+        """List files in a OneDrive folder via Microsoft Graph API."""
+        if folder_id:
+            url = f"{self.GRAPH_BASE}/me/drive/items/{folder_id}/children"
+        else:
+            url = f"{self.GRAPH_BASE}/me/drive/root/children"
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {access_token}"},
+                params={"$top": "100", "$orderby": "name"},
+            )
+            if resp.status_code != 200:
+                raise CloudError(f"OneDrive API error: {resp.text}")
+
+            data = resp.json()
+
+        files = []
+        for item in data.get("value", []):
+            is_dir = "folder" in item
+            files.append({
+                "name": item["name"],
+                "id": item["id"],
+                "is_directory": is_dir,
+                "size": item.get("size"),
+                "modified_at": item.get("lastModifiedDateTime"),
+                "mime_type": item.get("file", {}).get("mimeType") if not is_dir else None,
+            })
+        return files
+
+    async def download_onedrive_file(
+        self,
+        access_token: str,
+        file_id: str,
+        local_path: str,
+    ) -> str:
+        """Download a file from OneDrive."""
+        url = f"{self.GRAPH_BASE}/me/drive/items/{file_id}/content"
+
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            resp = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if resp.status_code != 200:
+                raise CloudError(f"OneDrive download error: {resp.status_code}")
+
+            with open(local_path, "wb") as f:
+                f.write(resp.content)
+
+        return local_path
+
+    async def upload_to_onedrive(
+        self,
+        filepath: str,
+        filename: str,
+        access_token_encrypted: str,
+        folder_path: str = "/Papyrus Scans",
+    ) -> str:
+        """Upload a file to OneDrive. Returns the item ID."""
+        access_token = decrypt_value(access_token_encrypted)
+
+        # Simple upload (< 4MB) via PUT to path
+        upload_path = f"{folder_path}/{filename}".replace("//", "/")
+        url = f"{self.GRAPH_BASE}/me/drive/root:{upload_path}:/content"
+
+        with open(filepath, "rb") as f:
+            content = f.read()
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.put(
+                url,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/octet-stream",
+                },
+                content=content,
+            )
+            if resp.status_code not in (200, 201):
+                raise CloudError(f"OneDrive upload error: {resp.text}")
+
+            return resp.json()["id"]
+
+
 cloud_service = CloudService()

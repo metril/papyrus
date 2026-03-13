@@ -1,7 +1,7 @@
 # Papyrus - Development Guide
 
 ## Project Overview
-Papyrus is a web-based print and scan server for network-connected Brother DCP-L2540DW (and potentially other devices). It provides a responsive web UI for managing print jobs (hold-release), scanning, copying, SMB share integration, bidirectional email (send + webhook receive), and bidirectional cloud storage (Google Drive/Dropbox with OAuth2 browse/download/upload).
+Papyrus is a web-based print and scan server for network-connected Brother DCP-L2540DW (and potentially other devices). It provides a responsive web UI for managing print jobs (hold-release), scanning, copying, SMB share integration, bidirectional email (send + webhook receive), bidirectional cloud storage (Google Drive/Dropbox/OneDrive with OAuth2 browse/download/upload), and Paperless-ngx document archival.
 
 ## Tech Stack
 - **Backend**: Python 3.12, FastAPI, Uvicorn, SQLAlchemy async (asyncpg), Alembic
@@ -21,7 +21,7 @@ Papyrus is a web-based print and scan server for network-connected Brother DCP-L
   - `config.py` — Pydantic Settings (`PAPYRUS_` env prefix)
   - `auth/` — OIDC + API token auth
   - `routers/` — API route handlers
-  - `services/` — Business logic (CUPS, scanning, SMB, email, cloud)
+  - `services/` — Business logic (CUPS, scanning, SMB, email, cloud, Paperless-ngx)
   - `models.py` — SQLAlchemy ORM models
   - `schemas.py` — Pydantic request/response models
   - `database.py` — Async engine (asyncpg)
@@ -61,7 +61,8 @@ cd frontend && npm test
 ## Environment Variables
 All backend config uses `PAPYRUS_` prefix. See `backend/app/config.py` for full list.
 Key vars: `PAPYRUS_DB_URL`, `PAPYRUS_OIDC_ISSUER`, `PAPYRUS_OIDC_CLIENT_ID`, `PAPYRUS_OIDC_CLIENT_SECRET`, `PAPYRUS_PRINTER_URI`, `PAPYRUS_SCANNER_DEVICE`, `PAPYRUS_ENCRYPTION_KEY`, `PAPYRUS_BASE_URL`
-Cloud OAuth: `PAPYRUS_GDRIVE_CLIENT_ID`, `PAPYRUS_GDRIVE_CLIENT_SECRET`, `PAPYRUS_DROPBOX_APP_KEY`, `PAPYRUS_DROPBOX_APP_SECRET`
+Cloud OAuth: `PAPYRUS_GDRIVE_CLIENT_ID`, `PAPYRUS_GDRIVE_CLIENT_SECRET`, `PAPYRUS_DROPBOX_APP_KEY`, `PAPYRUS_DROPBOX_APP_SECRET`, `PAPYRUS_ONEDRIVE_CLIENT_ID`, `PAPYRUS_ONEDRIVE_CLIENT_SECRET`
+Paperless-ngx: `PAPYRUS_PAPERLESS_URL`, `PAPYRUS_PAPERLESS_API_TOKEN`
 Email webhook: `PAPYRUS_EMAIL_WEBHOOK_SECRET`, `PAPYRUS_EMAIL_WEBHOOK_RATE_LIMIT`
 Network: `PAPYRUS_NETWORK_PRINTER_ENABLED`, `PAPYRUS_NETWORK_PRINTER_NAME`, `PAPYRUS_ESCL_ENABLED`
 

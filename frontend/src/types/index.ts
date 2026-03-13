@@ -106,7 +106,7 @@ export interface SMBFileEntry {
 
 export interface CloudProvider {
   id: number;
-  provider: 'gdrive' | 'dropbox';
+  provider: 'gdrive' | 'dropbox' | 'onedrive';
   connected_at: string;
 }
 

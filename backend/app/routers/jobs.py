@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user, require_permission
 from app.database import get_db
 from app.models import Printer, PrintJob, User
-from app.schemas import PrintJobList, PrintJobResponse
+from app.schemas import BulkDeleteJobsRequest, BulkDeleteResponse, PrintJobList, PrintJobResponse
 from app.services.convert_service import convert_to_pdf, is_printable, needs_conversion
 from app.services.cups_service import CupsService, get_default_printer_name
 from app.services.file_service import (
@@ -408,6 +408,39 @@ async def cancel_job(
         "type": "job_updated", "data": {"id": job.id, "status": "cancelled"}
     })
     return job
+
+
+@router.post("/bulk-delete", response_model=BulkDeleteResponse)
+async def bulk_delete_jobs(
+    body: BulkDeleteJobsRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete multiple print jobs and their files."""
+    result = await db.execute(select(PrintJob).where(PrintJob.id.in_(body.ids)))
+    jobs = result.scalars().all()
+
+    deleted = 0
+    for job in jobs:
+        if job.cups_job_id and job.status in ("held", "printing"):
+            try:
+                printer = await db.get(Printer, job.printer_id) if job.printer_id else None
+                queue = f"{printer.cups_name}_release" if printer and not printer.is_network_queue else await get_default_printer_name(db)
+                CupsService(printer_name=queue).cancel_job(job.cups_job_id)
+            except Exception:
+                pass
+        cleanup_file(job.filepath)
+        await db.delete(job)
+        deleted += 1
+
+    await db.commit()
+
+    for job_id in body.ids:
+        await ws_manager.broadcast("jobs", {
+            "type": "job_deleted", "data": {"id": job_id}
+        })
+
+    return BulkDeleteResponse(deleted=deleted)
 
 
 @router.delete("/{job_id}", status_code=204)

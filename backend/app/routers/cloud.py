@@ -26,6 +26,10 @@ GDRIVE_SCOPES = "https://www.googleapis.com/auth/drive.readonly https://www.goog
 DROPBOX_AUTH_URL = "https://www.dropbox.com/oauth2/authorize"
 DROPBOX_TOKEN_URL = "https://api.dropboxapi.com/oauth2/token"
 
+ONEDRIVE_AUTH_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+ONEDRIVE_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+ONEDRIVE_SCOPES = "Files.ReadWrite.All offline_access"
+
 
 @router.get("/providers")
 async def list_providers(
@@ -113,6 +117,19 @@ async def authorize_provider(
         url = DROPBOX_AUTH_URL + "?" + "&".join(f"{k}={v}" for k, v in params.items())
         return RedirectResponse(url=url)
 
+    elif provider == "onedrive":
+        if not settings.onedrive_client_id:
+            raise HTTPException(status_code=400, detail="OneDrive not configured")
+        params = {
+            "client_id": settings.onedrive_client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": ONEDRIVE_SCOPES,
+            "state": state,
+        }
+        url = ONEDRIVE_AUTH_URL + "?" + "&".join(f"{k}={v}" for k, v in params.items())
+        return RedirectResponse(url=url)
+
     raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
 
@@ -156,6 +173,20 @@ async def oauth_callback(
             })
         if resp.status_code != 200:
             raise HTTPException(status_code=502, detail="Failed to exchange token with Dropbox")
+        data = resp.json()
+
+    elif provider == "onedrive":
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(ONEDRIVE_TOKEN_URL, data={
+                "code": code,
+                "client_id": settings.onedrive_client_id,
+                "client_secret": settings.onedrive_client_secret,
+                "redirect_uri": redirect_uri,
+                "grant_type": "authorization_code",
+                "scope": ONEDRIVE_SCOPES,
+            })
+        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="Failed to exchange token with Microsoft")
         data = resp.json()
 
     else:
@@ -220,6 +251,10 @@ async def _get_access_token(provider: CloudProvider, db: AsyncSession) -> str:
             new_token, expiry = await cloud_service.refresh_dropbox_token(
                 provider.refresh_token_encrypted
             )
+        elif provider.provider == "onedrive":
+            new_token, expiry = await cloud_service.refresh_onedrive_token(
+                provider.refresh_token_encrypted
+            )
         else:
             raise HTTPException(status_code=400, detail="Unknown provider")
 
@@ -257,6 +292,8 @@ async def list_files(
             files = await cloud_service.list_gdrive_files(access_token, folder_id)
         elif provider.provider == "dropbox":
             files = await cloud_service.list_dropbox_files(access_token, path)
+        elif provider.provider == "onedrive":
+            files = await cloud_service.list_onedrive_files(access_token, folder_id)
         else:
             raise HTTPException(status_code=400, detail="Unknown provider")
     except CloudError as e:
@@ -308,6 +345,10 @@ async def download_file(
             if not path:
                 raise HTTPException(status_code=400, detail="path is required for Dropbox")
             await cloud_service.download_dropbox_file(access_token, path, local_path)
+        elif provider.provider == "onedrive":
+            if not file_id:
+                raise HTTPException(status_code=400, detail="file_id is required for OneDrive")
+            await cloud_service.download_onedrive_file(access_token, file_id, local_path)
         else:
             raise HTTPException(status_code=400, detail="Unknown provider")
     except CloudError as e:

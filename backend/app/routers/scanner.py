@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user, require_permission
 from app.database import get_db
 from app.models import CloudProvider, ScanJob, SMBShare, User
-from app.schemas import EmailSendRequest, ScanBatchRequest, ScanList, ScanRequest, ScanResponse
+from app.schemas import BulkDeleteScansRequest, BulkDeleteResponse, EmailSendRequest, ScanBatchRequest, ScanList, ScanRequest, ScanResponse
 from app.services.cloud_service import CloudError, cloud_service
 from app.services.email_service import EmailError, email_service
 from app.services.file_service import cleanup_file
@@ -309,9 +309,66 @@ async def upload_scan_to_cloud(
                 access_token_encrypted=provider.access_token_encrypted,
             )
             return {"message": "Uploaded to Dropbox", "path": path}
+        elif provider.provider == "onedrive":
+            file_id = await cloud_service.upload_to_onedrive(
+                filepath=job.filepath,
+                filename=filename,
+                access_token_encrypted=provider.access_token_encrypted,
+            )
+            return {"message": "Uploaded to OneDrive", "file_id": file_id}
         else:
             raise HTTPException(status_code=400, detail=f"Unknown provider: {provider.provider}")
     except CloudError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.post("/scans/{scan_id}/paperless")
+async def send_scan_to_paperless(
+    scan_id: str,
+    user: User = Depends(require_permission("scan")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Send a scan to Paperless-ngx for archival."""
+    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if job.status != "completed" or not job.filepath:
+        raise HTTPException(status_code=400, detail="Scan is not available")
+
+    from app.routers.settings import _load_db_values, _db_key
+    from app.services.paperless_service import PaperlessError, paperless_service
+    from app.services.crypto import encrypt_value
+
+    db_values = await _load_db_values(db)
+
+    paperless_url = db_values.get("paperless_url") or ""
+    if not paperless_url:
+        from app.config import settings as app_settings
+        paperless_url = app_settings.paperless_url
+
+    api_token_key = _db_key("paperless_api_token", True)
+    api_token_encrypted = db_values.get(api_token_key) or ""
+    if not api_token_encrypted:
+        from app.config import settings as app_settings
+        if app_settings.paperless_api_token:
+            api_token_encrypted = encrypt_value(app_settings.paperless_api_token)
+
+    if not paperless_url or not api_token_encrypted:
+        raise HTTPException(status_code=400, detail="Paperless-ngx not configured")
+
+    filename = f"scan_{scan_id}.{job.format}"
+
+    try:
+        task_id = await paperless_service.push_document(
+            filepath=job.filepath,
+            filename=filename,
+            paperless_url=paperless_url,
+            api_token_encrypted=api_token_encrypted,
+            title=filename,
+        )
+        return {"message": "Sent to Paperless-ngx", "task_id": task_id}
+    except PaperlessError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
 
@@ -353,6 +410,33 @@ async def save_scan_to_smb(
         raise HTTPException(status_code=502, detail=str(e))
 
     return {"message": f"Scan saved to {share.name}:{dest_path}"}
+
+
+@router.post("/scans/bulk-delete", response_model=BulkDeleteResponse)
+async def bulk_delete_scans(
+    body: BulkDeleteScansRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete multiple scans and their files."""
+    result = await db.execute(select(ScanJob).where(ScanJob.scan_id.in_(body.scan_ids)))
+    jobs = result.scalars().all()
+
+    deleted = 0
+    for job in jobs:
+        if job.filepath:
+            cleanup_file(job.filepath)
+        await db.delete(job)
+        deleted += 1
+
+    await db.commit()
+
+    for scan_id in body.scan_ids:
+        await ws_manager.broadcast("scans", {
+            "type": "scan_deleted", "data": {"scan_id": scan_id}
+        })
+
+    return BulkDeleteResponse(deleted=deleted)
 
 
 @router.delete("/scans/{scan_id}", status_code=204)

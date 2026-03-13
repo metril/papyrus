@@ -33,6 +33,10 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "dropbox_app_key": (str, False),
     "dropbox_app_secret": (str, True),
     "email_webhook_rate_limit": (int, False),
+    "onedrive_client_id": (str, False),
+    "onedrive_client_secret": (str, True),
+    "paperless_url": (str, False),
+    "paperless_api_token": (str, True),
 }
 
 _PLACEHOLDER = "*set*"

@@ -30,6 +30,7 @@ import type { APIToken, CloudProvider, ManagedPrinter, ManagedScanner, Discovere
 const providerLabels: Record<string, string> = {
   gdrive: 'Google Drive',
   dropbox: 'Dropbox',
+  onedrive: 'OneDrive',
 };
 
 type AppSettings = Record<string, string | number | boolean>;
@@ -930,7 +931,30 @@ export default function SettingsPage() {
           <div className="flex gap-2">
             <a href={getAuthorizeUrl('gdrive')}><Button size="sm" variant="secondary">Connect Google Drive</Button></a>
             <a href={getAuthorizeUrl('dropbox')}><Button size="sm" variant="secondary">Connect Dropbox</Button></a>
+            <a href={getAuthorizeUrl('onedrive')}><Button size="sm" variant="secondary">Connect OneDrive</Button></a>
           </div>
+        </div>
+      </Card>
+
+      {/* Paperless-ngx */}
+      <Card title="Paperless-ngx">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Send scans directly to your Paperless-ngx instance for archiving and OCR.
+          </p>
+          <SettingField
+            label="Paperless URL"
+            value={appSettings.paperless_url ?? ''}
+            onChange={(v) => setAppSettings({ ...appSettings, paperless_url: v })}
+            placeholder="https://paperless.example.com"
+          />
+          <SettingField
+            label="API Token"
+            value={appSettings.paperless_api_token ?? ''}
+            onChange={(v) => setAppSettings({ ...appSettings, paperless_api_token: v })}
+            type="password"
+            placeholder="Token from Paperless admin"
+          />
         </div>
       </Card>
 

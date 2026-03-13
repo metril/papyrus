@@ -201,6 +201,7 @@ function NetworkBrowser() {
 const providerLabels: Record<string, string> = {
   gdrive: 'Google Drive',
   dropbox: 'Dropbox',
+  onedrive: 'OneDrive',
 };
 
 function CloudBrowser() {
@@ -227,7 +228,7 @@ function CloudBrowser() {
 
     try {
       const params: { folder_id?: string; path?: string } = {};
-      if (provider.provider === 'gdrive' && folderId) {
+      if ((provider.provider === 'gdrive' || provider.provider === 'onedrive') && folderId) {
         params.folder_id = folderId;
       } else if (provider.provider === 'dropbox') {
         params.path = path || '';
@@ -300,7 +301,7 @@ function CloudBrowser() {
           <p className="text-gray-500 text-sm">Loading...</p>
         ) : providers.length === 0 ? (
           <p className="text-gray-500 text-sm">
-            No cloud storage connected. Go to Settings to connect Google Drive or Dropbox.
+            No cloud storage connected. Go to Settings to connect Google Drive, Dropbox, or OneDrive.
           </p>
         ) : (
           <div className="space-y-2">

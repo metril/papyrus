@@ -209,6 +209,21 @@ class PrinterSettings(BaseModel):
     quality: str = "normal"
 
 
+# --- Bulk Delete ---
+
+
+class BulkDeleteJobsRequest(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=100)
+
+
+class BulkDeleteScansRequest(BaseModel):
+    scan_ids: list[str] = Field(min_length=1, max_length=100)
+
+
+class BulkDeleteResponse(BaseModel):
+    deleted: int
+
+
 # --- System ---
 
 

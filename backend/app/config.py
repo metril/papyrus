@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     dropbox_app_key: str = ""
     dropbox_app_secret: str = ""
 
+    # OneDrive OAuth
+    onedrive_client_id: str = ""
+    onedrive_client_secret: str = ""
+
+    # Paperless-ngx
+    paperless_url: str = ""  # e.g. https://paperless.example.com
+    paperless_api_token: str = ""
+
     # Email Webhook
     email_webhook_secret: str = ""
     email_webhook_rate_limit: int = 10  # max requests per minute per IP

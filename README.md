@@ -4,14 +4,15 @@ A web-based print and scan server for network-connected multifunction printers. 
 
 ## Features
 
-- **Print Management**: Upload documents, hold-release print queue, job history
+- **Print Management**: Upload documents, hold-release print queue, rich history with preview/selection/bulk delete
 - **Document Conversion**: Automatically converts DOCX, ODT, XLSX, PPTX to PDF for printing (via LibreOffice)
 - **Scanning**: Initiate scans from the web UI with configurable resolution, color mode, and format
 - **Multi-page ADF Scanning**: Batch scan from the automatic document feeder into a single PDF
 - **Copy**: One-click scan-then-print workflow
 - **SMB Integration**: Browse and print from network shares, save scans to shares
 - **Email**: Send scanned documents as email attachments, receive attachments for printing via webhook
-- **Cloud Storage**: Browse, download, and print files from Google Drive and Dropbox; upload scans to cloud (OAuth2 connect flow)
+- **Cloud Storage**: Browse, download, and print files from Google Drive, Dropbox, and OneDrive; upload scans to cloud (OAuth2 connect flow)
+- **Paperless-ngx**: Send scans directly to Paperless-ngx for document archival and OCR
 - **Network Printer**: Appears as an AirPrint/IPP printer on the LAN; network print jobs enter the hold-release queue
 - **Network Scanner**: Appears as an eSCL/AirScan scanner on the LAN; devices can scan directly via the eSCL protocol
 - **Real-time Updates**: WebSocket-based live job status and scan progress

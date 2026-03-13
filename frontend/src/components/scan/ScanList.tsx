@@ -7,6 +7,8 @@ import Button from '../common/Button';
 import FilePreviewModal from '../common/FilePreviewModal';
 import EmailScanDialog from './EmailScanDialog';
 import CloudSaveDialog from './CloudSaveDialog';
+import { useToast } from '../common/Toast';
+import api from '../../api/client';
 import type { ScanJob } from '../../types';
 
 function formatSize(bytes: number | null): string {
@@ -23,9 +25,19 @@ function scanMimeType(scan: ScanJob): string {
 
 export default function ScanList() {
   const { scans, loading, fetchScans, deleteScan } = useScanStore();
+  const toast = useToast();
   const [emailScanId, setEmailScanId] = useState<string | null>(null);
   const [cloudScanId, setCloudScanId] = useState<string | null>(null);
   const [previewScan, setPreviewScan] = useState<ScanJob | null>(null);
+
+  const sendToPaperless = async (scanId: string) => {
+    try {
+      await api.post(`/scanner/scans/${scanId}/paperless`);
+      toast.show('Sent to Paperless-ngx', 'success');
+    } catch {
+      toast.show('Failed to send to Paperless-ngx');
+    }
+  };
 
   const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const debouncedFetch = useCallback((_msg: unknown) => {
@@ -91,6 +103,9 @@ export default function ScanList() {
                 </Button>
                 <Button size="sm" variant="secondary" onClick={() => setCloudScanId(scan.scan_id)}>
                   Cloud
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => sendToPaperless(scan.scan_id)}>
+                  Paperless
                 </Button>
               </>
             )}
