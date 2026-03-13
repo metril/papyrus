@@ -1,5 +1,7 @@
 import { Outlet, NavLink } from 'react-router-dom';
 import { useThemeStore } from '../../store/themeStore';
+import { useWebSocket } from '../../hooks/useWebSocket';
+import { useToast } from '../common/Toast';
 import {
   PrinterIcon,
   DocumentScannerIcon,
@@ -73,6 +75,17 @@ function ThemeToggle({ compact = false }: { compact?: boolean }) {
 }
 
 export default function AppShell() {
+  const toast = useToast();
+
+  useWebSocket({
+    url: '/api/system/ws/scans',
+    onMessage: (msg) => {
+      if (msg.type === 'scan_completed') {
+        toast.show('Scan completed', 'success');
+      }
+    },
+  });
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex">
       {/* Desktop sidebar */}

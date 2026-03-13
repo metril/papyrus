@@ -8,6 +8,7 @@ from app.auth.dependencies import require_admin
 from app.config import settings
 from app.database import get_db
 from app.models import AppConfig, User
+from app.services.audit_service import log_event
 from app.services.crypto import decrypt_value, encrypt_value
 
 router = APIRouter()
@@ -116,4 +117,12 @@ async def update_settings(
                 db.add(AppConfig(key=key, value=str_value))
 
     await db.commit()
+
+    # Audit log — record which keys were changed (redact encrypted values)
+    changed_keys = [k for k in updates if not (CONFIGURABLE[k][1] and updates[k] == _PLACEHOLDER)]
+    if changed_keys:
+        await log_event(db, "settings.update", "settings", detail={
+            "keys": changed_keys,
+        }, user_id=_user.id)
+
     return {"ok": True}
