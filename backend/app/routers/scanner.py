@@ -176,8 +176,8 @@ async def initiate_batch_scan(
         })
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
-                        detail={"format": request.format, "pages": request.pages})
-        await dispatch_webhook(db, "scan.complete", {"scan_id": job.scan_id, "format": request.format, "pages": request.pages})
+                        detail={"format": request.format, "pages": page_count})
+        await dispatch_webhook(db, "scan.complete", {"scan_id": job.scan_id, "format": request.format, "pages": page_count})
 
         if scanner and scanner.auto_deliver:
             await run_post_scan_actions(job, scanner, db)

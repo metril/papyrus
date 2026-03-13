@@ -59,6 +59,7 @@ class PrintJobResponse(BaseModel):
     duplex: bool
     media: str
     source_type: str
+    printer_id: int | None = None
     has_pin: bool = False
     error_message: str | None
     created_at: datetime

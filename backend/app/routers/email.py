@@ -172,20 +172,8 @@ async def receive_email(
         title = f"{subject} - {safe_filename}" if subject else safe_filename
 
         # Create held print job (no user_id since this is webhook-based)
-        # Use a system/webhook user concept — store with a null-safe approach
-        # For simplicity, we create the job without a user association
-        # by finding the first admin user
-        admin_result = await db.execute(
-            select(User).where(User.role == "admin").limit(1)
-        )
-        admin_user = admin_result.scalar_one_or_none()
-        if not admin_user:
-            raise HTTPException(
-                status_code=503, detail="No admin user configured"
-            )
-
         job = PrintJob(
-            user_id=admin_user.id,
+            user_id=None,
             title=title,
             filename=safe_filename,
             filepath=filepath,
