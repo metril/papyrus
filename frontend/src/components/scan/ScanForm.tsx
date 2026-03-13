@@ -1,10 +1,21 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Button from '../common/Button';
 import ProgressBar from '../common/ProgressBar';
 import { initiateScan, initiateBatchScan, getScanDownloadUrl } from '../../api/scanner';
 import { useScanStore } from '../../store/scanStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
+import api from '../../api/client';
 import type { ScanJob } from '../../types';
+
+interface ScanProfile {
+  id: number;
+  name: string;
+  resolution: number;
+  color_mode: string;
+  format: string;
+  source: string;
+  ocr_enabled: boolean;
+}
 
 export default function ScanForm() {
   const [resolution, setResolution] = useState(300);
@@ -15,7 +26,63 @@ export default function ScanForm() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ScanJob | null>(null);
 
+  const [profiles, setProfiles] = useState<ScanProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<number | ''>('');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileName, setProfileName] = useState('');
+  const [showSaveProfile, setShowSaveProfile] = useState(false);
+
   const { progress, setProgress, fetchScans } = useScanStore();
+
+  useEffect(() => {
+    api.get('/scanner/profiles').then(({ data }) => setProfiles(data)).catch(() => {});
+  }, []);
+
+  const loadProfile = (profileId: number | '') => {
+    setSelectedProfileId(profileId);
+    if (!profileId) return;
+    const p = profiles.find((pr) => pr.id === profileId);
+    if (p) {
+      setResolution(p.resolution);
+      setMode(p.color_mode);
+      setFormat(p.format);
+      setSource(p.source);
+    }
+  };
+
+  const handleSaveProfile = async () => {
+    if (!profileName.trim()) return;
+    setSavingProfile(true);
+    try {
+      const { data } = await api.post('/scanner/profiles', {
+        name: profileName.trim(),
+        resolution,
+        color_mode: mode,
+        format,
+        source,
+        ocr_enabled: false,
+      });
+      setProfiles((prev) => [...prev, data]);
+      setSelectedProfileId(data.id);
+      setShowSaveProfile(false);
+      setProfileName('');
+    } catch {
+      // ignore
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const handleDeleteProfile = async () => {
+    if (!selectedProfileId) return;
+    try {
+      await api.delete(`/scanner/profiles/${selectedProfileId}`);
+      setProfiles((prev) => prev.filter((p) => p.id !== selectedProfileId));
+      setSelectedProfileId('');
+    } catch {
+      // ignore
+    }
+  };
 
   useWebSocket({
     url: result?.scan_id ? `/api/scanner/ws/scan/${result.scan_id}` : null,
@@ -57,6 +124,50 @@ export default function ScanForm() {
 
   return (
     <div className="space-y-4">
+      {/* Profile selector */}
+      <div className="flex items-end gap-2">
+        <div className="flex-1">
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Profile</label>
+          <select
+            value={selectedProfileId}
+            onChange={(e) => loadProfile(e.target.value ? Number(e.target.value) : '')}
+            disabled={scanning}
+            className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
+          >
+            <option value="">Custom</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        </div>
+        {!showSaveProfile ? (
+          <Button size="sm" variant="ghost" onClick={() => setShowSaveProfile(true)} disabled={scanning}>
+            Save as Profile
+          </Button>
+        ) : (
+          <div className="flex gap-1">
+            <input
+              type="text"
+              value={profileName}
+              onChange={(e) => setProfileName(e.target.value)}
+              placeholder="Profile name"
+              className="rounded-lg border-gray-300 dark:border-gray-600 text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100 w-36"
+            />
+            <Button size="sm" onClick={handleSaveProfile} disabled={savingProfile || !profileName.trim()}>
+              Save
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setShowSaveProfile(false)}>
+              Cancel
+            </Button>
+          </div>
+        )}
+        {selectedProfileId && (
+          <Button size="sm" variant="ghost" onClick={handleDeleteProfile} disabled={scanning}>
+            Delete
+          </Button>
+        )}
+      </div>
+
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Resolution</label>

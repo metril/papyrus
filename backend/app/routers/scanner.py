@@ -9,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user, require_permission
 from app.config import settings
 from app.database import get_db
-from app.models import CloudProvider, ScanJob, SMBShare, User
-from app.schemas import BulkDeleteScansRequest, BulkDeleteResponse, EmailSendRequest, ScanBatchRequest, ScanList, ScanRequest, ScanResponse
+from app.models import CloudProvider, ScanJob, ScanProfile, SMBShare, User
+from app.schemas import BulkDeleteScansRequest, BulkDeleteResponse, EmailSendRequest, ScanBatchRequest, ScanList, ScanProfileCreate, ScanProfileResponse, ScanRequest, ScanResponse
 from app.services.cloud_service import CloudError, cloud_service
 from app.services.email_service import EmailError, email_service
 from app.services.file_service import cleanup_file
@@ -494,6 +494,87 @@ async def delete_scan(
     await ws_manager.broadcast("scans", {
         "type": "scan_deleted", "data": {"scan_id": scan_id_copy}
     })
+
+
+# --- Scan Profiles ---
+
+
+@router.get("/profiles", response_model=list[ScanProfileResponse])
+async def list_profiles(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """List the current user's scan profiles."""
+    result = await db.execute(
+        select(ScanProfile).where(ScanProfile.user_id == user.id).order_by(ScanProfile.name)
+    )
+    return result.scalars().all()
+
+
+@router.post("/profiles", response_model=ScanProfileResponse, status_code=201)
+async def create_profile(
+    data: ScanProfileCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create a scan profile."""
+    profile = ScanProfile(
+        name=data.name,
+        resolution=data.resolution,
+        color_mode=data.color_mode,
+        format=data.format,
+        source=data.source,
+        ocr_enabled=data.ocr_enabled,
+        user_id=user.id,
+    )
+    db.add(profile)
+    await db.commit()
+    await db.refresh(profile)
+    return profile
+
+
+@router.put("/profiles/{profile_id}", response_model=ScanProfileResponse)
+async def update_profile(
+    profile_id: int,
+    data: ScanProfileCreate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update a scan profile."""
+    result = await db.execute(
+        select(ScanProfile).where(ScanProfile.id == profile_id, ScanProfile.user_id == user.id)
+    )
+    profile = result.scalar_one_or_none()
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    profile.name = data.name
+    profile.resolution = data.resolution
+    profile.color_mode = data.color_mode
+    profile.format = data.format
+    profile.source = data.source
+    profile.ocr_enabled = data.ocr_enabled
+    await db.commit()
+    await db.refresh(profile)
+    return profile
+
+
+@router.delete("/profiles/{profile_id}", status_code=204)
+async def delete_profile(
+    profile_id: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a scan profile."""
+    result = await db.execute(
+        select(ScanProfile).where(ScanProfile.id == profile_id, ScanProfile.user_id == user.id)
+    )
+    profile = result.scalar_one_or_none()
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    await db.delete(profile)
+    await db.commit()
 
 
 # WebSocket endpoint for scan progress

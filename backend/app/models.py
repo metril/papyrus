@@ -154,6 +154,21 @@ class Printer(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ScanProfile(Base):
+    __tablename__ = "scan_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    resolution: Mapped[int] = mapped_column(Integer, default=300)
+    color_mode: Mapped[str] = mapped_column(String(20), default="Color")
+    format: Mapped[str] = mapped_column(String(10), default="pdf")
+    source: Mapped[str] = mapped_column(String(20), default="Flatbed")
+    ocr_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    post_actions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Scanner(Base):
     __tablename__ = "scanners"
 

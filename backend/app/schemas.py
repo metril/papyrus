@@ -209,6 +209,31 @@ class PrinterSettings(BaseModel):
     quality: str = "normal"
 
 
+# --- Scan Profiles ---
+
+
+class ScanProfileCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    resolution: int = Field(default=300, ge=75, le=600)
+    color_mode: str = Field(default="Color", pattern="^(Color|Gray|Lineart)$")
+    format: str = Field(default="pdf", pattern="^(png|jpeg|tiff|pdf)$")
+    source: str = Field(default="Flatbed", pattern="^(Flatbed|ADF)$")
+    ocr_enabled: bool = False
+
+
+class ScanProfileResponse(BaseModel):
+    id: int
+    name: str
+    resolution: int
+    color_mode: str
+    format: str
+    source: str
+    ocr_enabled: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # --- Bulk Delete ---
 
 
