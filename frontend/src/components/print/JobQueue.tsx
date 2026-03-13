@@ -73,9 +73,12 @@ function PrinterSelector({ job, printers, onAssigned }: { job: PrintJob; printer
 }
 
 export default function JobQueue() {
-  const { jobs, loading, fetchJobs, releaseJob, cancelJob, deleteJob } = useJobStore();
+  const { jobs, loading, fetchJobs, releaseJob, cancelJob, deleteJob, reprintJob } = useJobStore();
   const [previewJob, setPreviewJob] = useState<PrintJob | null>(null);
   const [printers, setPrinters] = useState<ManagedPrinter[]>([]);
+  const [pinJobId, setPinJobId] = useState<number | null>(null);
+  const [pinValue, setPinValue] = useState('');
+  const [pinError, setPinError] = useState('');
 
   const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const debouncedFetch = useCallback((_msg: unknown) => {
@@ -93,6 +96,26 @@ export default function JobQueue() {
     listPrinters().then(setPrinters).catch(() => {});
     return () => clearTimeout(fetchTimeoutRef.current);
   }, [fetchJobs]);
+
+  const handleRelease = async (job: PrintJob) => {
+    if (job.has_pin) {
+      setPinJobId(job.id);
+      setPinValue('');
+      setPinError('');
+      return;
+    }
+    await releaseJob(job.id);
+  };
+
+  const handlePinSubmit = async () => {
+    if (!pinJobId) return;
+    try {
+      await releaseJob(pinJobId, pinValue);
+      setPinJobId(null);
+    } catch {
+      setPinError('Invalid PIN');
+    }
+  };
 
   if (loading && jobs.length === 0) {
     return <p className="text-gray-500 text-sm">Loading jobs...</p>;
@@ -124,6 +147,11 @@ export default function JobQueue() {
                   {sourceLabels[job.source_type] || job.source_type}
                 </span>
               )}
+              {job.has_pin && job.status === 'held' && (
+                <span className="text-xs px-1.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                  PIN
+                </span>
+              )}
             </div>
             <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               {formatSize(job.file_size)} &middot; {job.copies} cop{job.copies > 1 ? 'ies' : 'y'}
@@ -143,7 +171,7 @@ export default function JobQueue() {
 
           <div className="flex gap-2 ml-4">
             {job.status === 'held' && (
-              <Button size="sm" onClick={() => releaseJob(job.id)}>
+              <Button size="sm" onClick={() => handleRelease(job)}>
                 Print
               </Button>
             )}
@@ -153,9 +181,14 @@ export default function JobQueue() {
               </Button>
             )}
             {['completed', 'failed', 'cancelled'].includes(job.status) && (
-              <Button size="sm" variant="ghost" onClick={() => deleteJob(job.id)}>
-                Delete
-              </Button>
+              <>
+                <Button size="sm" variant="secondary" onClick={() => reprintJob(job.id)}>
+                  Reprint
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => deleteJob(job.id)}>
+                  Delete
+                </Button>
+              </>
             )}
           </div>
         </div>
@@ -169,6 +202,32 @@ export default function JobQueue() {
         mimeType={previewJob.mime_type}
         onClose={() => setPreviewJob(null)}
       />
+    )}
+
+    {/* PIN entry dialog */}
+    {pinJobId !== null && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setPinJobId(null)}>
+        <div className="bg-white dark:bg-gray-900 rounded-xl p-6 w-full max-w-xs shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Enter Release PIN</h3>
+          <input
+            type="text"
+            inputMode="numeric"
+            pattern="[0-9]*"
+            maxLength={10}
+            value={pinValue}
+            onChange={(e) => { setPinValue(e.target.value); setPinError(''); }}
+            onKeyDown={(e) => e.key === 'Enter' && handlePinSubmit()}
+            placeholder="PIN"
+            autoFocus
+            className="w-full rounded-lg border border-gray-300 dark:border-gray-600 p-2 text-center text-2xl tracking-widest bg-white dark:bg-gray-800 dark:text-gray-100"
+          />
+          {pinError && <p className="text-sm text-red-600 mt-2">{pinError}</p>}
+          <div className="flex gap-2 justify-end mt-4">
+            <Button size="sm" variant="secondary" onClick={() => setPinJobId(null)}>Cancel</Button>
+            <Button size="sm" onClick={handlePinSubmit}>Release</Button>
+          </div>
+        </div>
+      </div>
     )}
     </>
   );

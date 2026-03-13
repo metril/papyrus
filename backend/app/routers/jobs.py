@@ -34,6 +34,7 @@ async def upload_and_create_job(
     duplex: bool = Form(default=False),
     media: str = Form(default="A4"),
     hold: bool = Form(default=True),
+    release_pin: str = Form(default=""),
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -60,6 +61,18 @@ async def upload_and_create_job(
     # Assign to default printer
     default_printer = await get_default_printer(db)
 
+    # Determine PIN: use provided value, or check if global setting requires one
+    pin = release_pin.strip() if release_pin else None
+    if not pin:
+        from app.routers.settings import _load_db_values
+        db_values = await _load_db_values(db)
+        require_pin = db_values.get("require_release_pin", "").lower() in ("true", "1", "yes")
+        if not require_pin:
+            require_pin = settings.require_release_pin
+        if require_pin:
+            import secrets
+            pin = f"{secrets.randbelow(10000):04d}"
+
     job = PrintJob(
         user_id=user.id,
         title=sanitize_filename(file.filename),
@@ -73,6 +86,7 @@ async def upload_and_create_job(
         media=media,
         source_type="upload",
         printer_id=default_printer.id if default_printer else None,
+        release_pin=pin,
     )
     db.add(job)
     await db.commit()
@@ -86,7 +100,13 @@ async def upload_and_create_job(
     if not hold:
         await _process_job(job, db, default_printer)
 
-    return job
+    resp = PrintJobResponse.from_job(job)
+    # Return the PIN in the initial response so the user can note it
+    if pin and hold:
+        resp_dict = resp.model_dump()
+        resp_dict["release_pin"] = pin
+        return resp_dict
+    return resp
 
 
 async def get_default_printer(db: AsyncSession):
@@ -318,19 +338,30 @@ async def assign_printer(
     return job
 
 
+class ReleaseRequest(BaseModel):
+    pin: str | None = None
+
+
 @router.post("/{job_id}/release", response_model=PrintJobResponse)
 async def release_job(
     job_id: int,
+    body: ReleaseRequest | None = None,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Release a held job to start printing."""
+    """Release a held job to start printing. Requires PIN if one was set."""
     result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
     job = result.scalar_one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status != "held":
         raise HTTPException(status_code=400, detail=f"Job is not held (status: {job.status})")
+
+    # Validate release PIN if one is set on the job
+    if job.release_pin:
+        provided_pin = body.pin if body else None
+        if not provided_pin or provided_pin != job.release_pin:
+            raise HTTPException(status_code=403, detail="Invalid or missing release PIN")
 
     printer = None
     if job.printer_id:
@@ -481,3 +512,45 @@ async def delete_job(
     await ws_manager.broadcast("jobs", {
         "type": "job_deleted", "data": {"id": job_id_copy}
     })
+
+
+@router.post("/{job_id}/reprint", response_model=PrintJobResponse, status_code=201)
+async def reprint_job(
+    job_id: int,
+    user: User = Depends(require_permission("print")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Re-create a print job from an existing completed/failed/cancelled job."""
+    result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
+    original = result.scalar_one_or_none()
+    if original is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not original.filepath or not os.path.exists(original.filepath):
+        raise HTTPException(status_code=400, detail="Original file no longer available")
+
+    default_printer = await get_default_printer(db)
+
+    new_job = PrintJob(
+        user_id=user.id,
+        title=original.title,
+        filename=original.filename,
+        filepath=original.filepath,
+        file_size=original.file_size,
+        mime_type=original.mime_type,
+        status="held",
+        copies=original.copies,
+        duplex=original.duplex,
+        media=original.media,
+        source_type="upload",
+        printer_id=original.printer_id or (default_printer.id if default_printer else None),
+    )
+    db.add(new_job)
+    await db.commit()
+    await db.refresh(new_job)
+
+    await ws_manager.broadcast("jobs", {
+        "type": "job_created",
+        "data": {"id": new_job.id, "title": new_job.title, "status": "held", "source_type": "upload"},
+    })
+
+    return PrintJobResponse.from_job(new_job)

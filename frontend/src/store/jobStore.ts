@@ -8,9 +8,10 @@ interface JobState {
   error: string | null;
   fetchJobs: () => Promise<void>;
   updateJob: (job: PrintJob) => void;
-  releaseJob: (id: number) => Promise<void>;
+  releaseJob: (id: number, pin?: string) => Promise<void>;
   cancelJob: (id: number) => Promise<void>;
   deleteJob: (id: number) => Promise<void>;
+  reprintJob: (id: number) => Promise<void>;
 }
 
 export const useJobStore = create<JobState>((set, get) => ({
@@ -35,8 +36,8 @@ export const useJobStore = create<JobState>((set, get) => ({
     });
   },
 
-  releaseJob: async (id: number) => {
-    await api.post(`/jobs/${id}/release`);
+  releaseJob: async (id: number, pin?: string) => {
+    await api.post(`/jobs/${id}/release`, pin ? { pin } : {});
     await get().fetchJobs();
   },
 
@@ -48,5 +49,10 @@ export const useJobStore = create<JobState>((set, get) => ({
   deleteJob: async (id: number) => {
     await api.delete(`/jobs/${id}`);
     set({ jobs: get().jobs.filter((j) => j.id !== id) });
+  },
+
+  reprintJob: async (id: number) => {
+    await api.post(`/jobs/${id}/reprint`);
+    await get().fetchJobs();
   },
 }));

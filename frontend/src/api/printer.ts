@@ -28,8 +28,8 @@ export async function uploadPrintJob(
   return data;
 }
 
-export async function releaseJob(jobId: number): Promise<PrintJob> {
-  const { data } = await api.post(`/jobs/${jobId}/release`);
+export async function releaseJob(jobId: number, pin?: string): Promise<PrintJob> {
+  const { data } = await api.post(`/jobs/${jobId}/release`, pin ? { pin } : {});
   return data;
 }
 
@@ -40,6 +40,11 @@ export async function cancelJob(jobId: number): Promise<PrintJob> {
 
 export async function deleteJob(jobId: number): Promise<void> {
   await api.delete(`/jobs/${jobId}`);
+}
+
+export async function reprintJob(jobId: number): Promise<PrintJob> {
+  const { data } = await api.post(`/jobs/${jobId}/reprint`);
+  return data;
 }
 
 export async function listJobs(status?: string): Promise<{ jobs: PrintJob[]; total: number }> {

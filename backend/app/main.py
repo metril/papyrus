@@ -73,6 +73,24 @@ async def _reconcile_on_startup() -> None:
                 )
 
 
+async def _retention_loop() -> None:
+    """Background task that runs retention cleanup once per hour."""
+    from app.database import async_session
+    from app.services.retention_service import run_retention
+
+    while True:
+        await asyncio.sleep(3600)  # every hour
+        try:
+            async with async_session() as db:
+                from app.routers.settings import _load_db_values
+                db_values = await _load_db_values(db)
+                scan_days = int(db_values.get("scan_retention_days", "0") or 0) or settings.scan_retention_days
+                print_days = int(db_values.get("print_retention_days", "0") or 0) or settings.print_retention_days
+                await run_retention(db, scan_days=scan_days, print_days=print_days)
+        except Exception as exc:
+            logger.warning("Retention cleanup failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -80,8 +98,10 @@ async def lifespan(app: FastAPI):
     os.makedirs(settings.upload_dir, exist_ok=True)
     setup_oauth()
     await _reconcile_on_startup()
+    retention_task = asyncio.create_task(_retention_loop())
     yield
-    # Shutdown: cleanup if needed
+    # Shutdown
+    retention_task.cancel()
 
 
 app = FastAPI(

@@ -947,9 +947,10 @@ export default function SettingsPage() {
             <SettingField label="Upload Directory" value={appSettings['upload_dir'] ?? ''} onChange={set('upload_dir')} placeholder="/app/data/uploads" />
             <SettingField label="Max Upload Size (MB)" value={appSettings['max_upload_size_mb'] ?? 50} onChange={set('max_upload_size_mb')} type="number" />
             <SettingField label="Scan Retention (days)" value={appSettings['scan_retention_days'] ?? 7} onChange={set('scan_retention_days')} type="number" />
+            <SettingField label="Print Retention (days)" value={appSettings['print_retention_days'] ?? 30} onChange={set('print_retention_days')} type="number" />
           </div>
           <div className="flex justify-end">
-            <SaveButton section="storage" keys={['scan_dir', 'upload_dir', 'max_upload_size_mb', 'scan_retention_days']} />
+            <SaveButton section="storage" keys={['scan_dir', 'upload_dir', 'max_upload_size_mb', 'scan_retention_days', 'print_retention_days']} />
           </div>
         </div>
       </Card>
@@ -959,8 +960,10 @@ export default function SettingsPage() {
         <div className="space-y-3">
           <SettingField label="Base URL" value={appSettings['base_url'] ?? ''} onChange={set('base_url')} placeholder="https://papyrus.example.com" />
           <SettingField label="Development Mode" value={appSettings['dev_mode'] ?? false} onChange={set('dev_mode')} type="checkbox" />
+          <SettingField label="Require Release PIN" value={appSettings['require_release_pin'] ?? false} onChange={set('require_release_pin')} type="checkbox" />
+          <p className="text-xs text-gray-500 dark:text-gray-400">When enabled, uploaded jobs get a randomly generated PIN required at release time.</p>
           <div className="flex justify-end">
-            <SaveButton section="application" keys={['base_url', 'dev_mode']} />
+            <SaveButton section="application" keys={['base_url', 'dev_mode', 'require_release_pin']} />
           </div>
         </div>
       </Card>
@@ -1221,6 +1224,47 @@ export default function SettingsPage() {
       </Card>
 
       <WebhooksCard />
+
+      {/* Backup / Restore */}
+      <Card title="Backup / Restore">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600 dark:text-gray-400">Export all application settings as JSON, or restore from a previous backup.</p>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={async () => {
+              try {
+                const { data } = await api.get('/admin/backup');
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `papyrus-backup-${new Date().toISOString().slice(0, 10)}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+                toast.show('Backup downloaded', 'success');
+              } catch { toast.show('Failed to export backup'); }
+            }}>
+              Export Backup
+            </Button>
+            <label className="cursor-pointer">
+              <Button size="sm" variant="secondary" onClick={() => document.getElementById('restore-file')?.click()}>
+                Restore Backup
+              </Button>
+              <input id="restore-file" type="file" accept=".json" className="hidden" onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                try {
+                  const text = await file.text();
+                  const data = JSON.parse(text);
+                  await api.post('/admin/restore', data);
+                  toast.show('Settings restored', 'success');
+                  window.location.reload();
+                } catch { toast.show('Failed to restore backup'); }
+                e.target.value = '';
+              }} />
+            </label>
+          </div>
+        </div>
+      </Card>
 
       {/* API Tokens */}
       <Card title="API Tokens">

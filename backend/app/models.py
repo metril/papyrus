@@ -68,6 +68,7 @@ class PrintJob(Base):
     source_type: Mapped[str] = mapped_column(String(20), default="upload")  # upload, smb, cloud, email, network
     printer_id: Mapped[int | None] = mapped_column(ForeignKey("printers.id", ondelete="SET NULL"), nullable=True)
     options_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    release_pin: Mapped[str | None] = mapped_column(String(10), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

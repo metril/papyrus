@@ -47,6 +47,8 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "ftp_password": (str, True),
     "ftp_remote_dir": (str, False),
     "ftp_protocol": (str, False),  # ftp, ftps, sftp
+    "require_release_pin": (bool, False),
+    "print_retention_days": (int, False),
 }
 
 _PLACEHOLDER = "*set*"

@@ -59,12 +59,34 @@ class PrintJobResponse(BaseModel):
     duplex: bool
     media: str
     source_type: str
+    has_pin: bool = False
     error_message: str | None
     created_at: datetime
     updated_at: datetime
     completed_at: datetime | None
 
     model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_job(cls, job) -> "PrintJobResponse":
+        return cls(
+            id=job.id,
+            cups_job_id=job.cups_job_id,
+            title=job.title,
+            filename=job.filename,
+            file_size=job.file_size,
+            mime_type=job.mime_type,
+            status=job.status,
+            copies=job.copies,
+            duplex=job.duplex,
+            media=job.media,
+            source_type=job.source_type,
+            has_pin=bool(job.release_pin),
+            error_message=job.error_message,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
+            completed_at=job.completed_at,
+        )
 
 
 class PrintJobList(BaseModel):
@@ -293,6 +315,11 @@ class WebhookResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = "0.1.0"
+    cups_running: bool = False
+    scanner_available: bool = False
+    db_connected: bool = False
+    disk_free_mb: int = 0
+    uptime_seconds: int = 0
 
 
 class SystemStatus(BaseModel):
@@ -300,3 +327,8 @@ class SystemStatus(BaseModel):
     scanner_available: bool
     db_connected: bool
     disk_free_mb: int
+
+
+class BackupResponse(BaseModel):
+    settings: dict
+    exported_at: str

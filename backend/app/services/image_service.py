@@ -16,25 +16,6 @@ class ImageError(Exception):
 class ImageService:
     """Apply image enhancements to scanned images."""
 
-    async def enhance(
-        self,
-        filepath: str,
-        brightness: float = 1.0,
-        contrast: float = 1.0,
-        rotation: int = 0,
-        auto_crop: bool = False,
-    ) -> str:
-        """Apply enhancements to an image file in-place.
-
-        Args:
-            filepath: Path to the image file (png, jpeg, tiff).
-            brightness: Brightness factor (1.0 = no change, >1 brighter).
-            contrast: Contrast factor (1.0 = no change, >1 more contrast).
-            rotation: Rotation angle in degrees (0, 90, 180, 270).
-            auto_crop: Whether to auto-crop whitespace borders.
-
-        Returns the filepath (unchanged, enhanced in-place).
-        """
     async def deskew(self, filepath: str) -> str:
         """Auto-deskew a scanned image using projection profiling.
 

@@ -74,6 +74,12 @@ class Settings(BaseSettings):
     email_webhook_secret: str = ""
     email_webhook_rate_limit: int = 10  # max requests per minute per IP
 
+    # Print release PIN
+    require_release_pin: bool = False
+
+    # Retention
+    print_retention_days: int = 30
+
     # Network Services
     escl_enabled: bool = True
 

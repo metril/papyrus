@@ -1,15 +1,16 @@
-"""Admin endpoints: audit log, usage stats."""
+"""Admin endpoints: audit log, usage stats, backup/restore, retention."""
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select, cast, Date
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_admin
+from app.config import settings
 from app.database import get_db
-from app.models import AuditEntry, PrintJob, ScanJob, User
+from app.models import AuditEntry, AppConfig, PrintJob, ScanJob, User
 
 router = APIRouter()
 
@@ -113,3 +114,76 @@ async def get_usage_stats(
             {"day": str(row.day), "count": row.count} for row in daily_scans
         ],
     }
+
+
+# --- Backup / Restore ---
+
+
+@router.get("/backup")
+async def export_settings(
+    _user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Export all app settings as JSON for backup."""
+    result = await db.execute(select(AppConfig))
+    configs = result.scalars().all()
+
+    data = {}
+    for c in configs:
+        data[c.key] = c.value
+
+    return {
+        "settings": data,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.post("/restore")
+async def restore_settings(
+    body: dict,
+    _user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Restore app settings from a backup JSON.
+
+    Body: {"settings": {"key": "value", ...}}
+    """
+    incoming = body.get("settings")
+    if not isinstance(incoming, dict):
+        raise HTTPException(status_code=400, detail="Body must contain a 'settings' dict")
+
+    restored = 0
+    for key, value in incoming.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            continue
+        result = await db.execute(select(AppConfig).where(AppConfig.key == key))
+        existing = result.scalar_one_or_none()
+        if existing:
+            existing.value = value
+        else:
+            db.add(AppConfig(key=key, value=value))
+        restored += 1
+
+    await db.commit()
+    return {"restored": restored}
+
+
+# --- Retention ---
+
+
+@router.post("/retention")
+async def trigger_retention(
+    _user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Manually trigger retention cleanup."""
+    from app.routers.settings import _load_db_values
+    from app.services.retention_service import run_retention
+
+    db_values = await _load_db_values(db)
+
+    scan_days = int(db_values.get("scan_retention_days", "0") or 0) or settings.scan_retention_days
+    print_days = int(db_values.get("print_retention_days", "0") or 0) or settings.print_retention_days
+
+    result = await run_retention(db, scan_days=scan_days, print_days=print_days)
+    return result
