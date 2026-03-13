@@ -1,7 +1,7 @@
 # Papyrus - Development Guide
 
 ## Project Overview
-Papyrus is a web-based print and scan server for network-connected Brother DCP-L2540DW (and potentially other devices). It provides a responsive web UI for managing print jobs (hold-release), scanning (with OCR, profiles, PDF collation, image enhancement, deskew, and template naming), copying, SMB share integration, bidirectional email (send + webhook receive), bidirectional cloud storage (Google Drive/Dropbox/OneDrive/Nextcloud via OAuth2 or WebDAV), FTP/SFTP upload, Paperless-ngx archival, outgoing webhooks, audit logging, usage dashboard, and PWA support.
+Papyrus is a web-based print and scan server for network-connected Brother DCP-L2540DW (and potentially other devices). It provides a responsive web UI for managing print jobs (hold-release with optional PIN, reprint), scanning (with OCR, profiles, PDF collation, image enhancement, deskew, and template naming), copying, SMB share integration, bidirectional email (send + webhook receive), bidirectional cloud storage (Google Drive/Dropbox/OneDrive/Nextcloud via OAuth2 or WebDAV), FTP/SFTP upload, Paperless-ngx archival, outgoing webhooks, audit logging, usage dashboard, backup/restore, retention policies, and PWA support.
 
 ## Tech Stack
 - **Backend**: Python 3.12, FastAPI, Uvicorn, SQLAlchemy async (asyncpg), Alembic
@@ -26,7 +26,7 @@ Papyrus is a web-based print and scan server for network-connected Brother DCP-L
   - `config.py` — Pydantic Settings (`PAPYRUS_` env prefix)
   - `auth/` — OIDC + API token auth
   - `routers/` — API route handlers
-  - `services/` — Business logic (CUPS, scanning, SMB, email, cloud, Paperless-ngx, OCR, audit, WebDAV, FTP, image enhancement, webhooks)
+  - `services/` — Business logic (CUPS, scanning, SMB, email, cloud, Paperless-ngx, OCR, audit, WebDAV, FTP, image enhancement, webhooks, retention)
   - `models.py` — SQLAlchemy ORM models
   - `schemas.py` — Pydantic request/response models
   - `database.py` — Async engine (asyncpg)
@@ -71,6 +71,7 @@ Paperless-ngx: `PAPYRUS_PAPERLESS_URL`, `PAPYRUS_PAPERLESS_API_TOKEN`
 OCR: `PAPYRUS_OCR_ENABLED`, `PAPYRUS_OCR_LANGUAGE`
 FTP/SFTP: `PAPYRUS_FTP_HOST`, `PAPYRUS_FTP_PORT`, `PAPYRUS_FTP_USERNAME`, `PAPYRUS_FTP_PASSWORD`, `PAPYRUS_FTP_REMOTE_DIR`, `PAPYRUS_FTP_PROTOCOL`
 Scan naming: `PAPYRUS_SCAN_FILENAME_TEMPLATE`
+Print: `PAPYRUS_REQUIRE_RELEASE_PIN`, `PAPYRUS_PRINT_RETENTION_DAYS`
 Email webhook: `PAPYRUS_EMAIL_WEBHOOK_SECRET`, `PAPYRUS_EMAIL_WEBHOOK_RATE_LIMIT`
 Network: `PAPYRUS_NETWORK_PRINTER_ENABLED`, `PAPYRUS_NETWORK_PRINTER_NAME`, `PAPYRUS_ESCL_ENABLED`
 

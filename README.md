@@ -26,6 +26,11 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Audit Log**: Tracks print releases, scan completions, deletions, and settings changes (admin view)
 - **Usage Dashboard**: Print/scan counts by status, daily activity charts (admin view)
 - **Real-time Updates**: WebSocket-based live job status, scan progress, and eSCL scan toast notifications
+- **Release PIN**: Optional PIN-protected print release for secure shared environments
+- **Reprint**: Re-submit completed, failed, or cancelled print jobs from history
+- **Retention Policies**: Automatic cleanup of old scans and print jobs with configurable retention periods
+- **Backup / Restore**: Export and import all application settings as JSON (admin)
+- **Detailed Health Check**: System health endpoint with CUPS, scanner, database, disk, and uptime status
 - **PWA Support**: Installable as a Progressive Web App on mobile and desktop
 - **Responsive Design**: Works on phones, tablets, and desktops
 - **Authentication**: OIDC (Authentik/Keycloak) for users, API tokens for programmatic access
