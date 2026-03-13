@@ -197,10 +197,18 @@ class EmailSendRequest(BaseModel):
 # --- Printer ---
 
 
+class MarkerLevel(BaseModel):
+    name: str
+    level: int  # 0-100, -1 = unknown
+    color: str
+
+
 class PrinterStatus(BaseModel):
     state: int  # 3=idle, 4=printing, 5=stopped
     state_message: str
     accepting_jobs: bool
+    markers: list[MarkerLevel] = []
+    state_reasons: list[str] = []
 
 
 class PrinterSettings(BaseModel):

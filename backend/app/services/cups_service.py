@@ -13,7 +13,7 @@ class CupsService:
         return cups.Connection()
 
     def get_printer_status(self) -> dict:
-        """Get printer status from CUPS."""
+        """Get printer status from CUPS, including marker/toner info."""
         conn = self._conn()
         try:
             attrs = conn.getPrinterAttributes(self.printer_name)
@@ -22,11 +22,40 @@ class CupsService:
                 "state": 5,  # stopped
                 "state_message": "Printer not found or unreachable",
                 "accepting_jobs": False,
+                "markers": [],
+                "state_reasons": [],
             }
+
+        # Parse marker (toner/ink) levels
+        marker_names = attrs.get("marker-names", [])
+        marker_levels = attrs.get("marker-levels", [])
+        marker_colors = attrs.get("marker-colors", [])
+        if isinstance(marker_names, str):
+            marker_names = [marker_names]
+        if isinstance(marker_levels, int):
+            marker_levels = [marker_levels]
+        if isinstance(marker_colors, str):
+            marker_colors = [marker_colors]
+
+        markers = []
+        for i, name in enumerate(marker_names):
+            markers.append({
+                "name": name,
+                "level": marker_levels[i] if i < len(marker_levels) else -1,
+                "color": marker_colors[i] if i < len(marker_colors) else "",
+            })
+
+        # State reasons
+        reasons = attrs.get("printer-state-reasons", [])
+        if isinstance(reasons, str):
+            reasons = [reasons]
+
         return {
             "state": attrs.get("printer-state", 5),
             "state_message": attrs.get("printer-state-message", ""),
             "accepting_jobs": attrs.get("printer-is-accepting-jobs", False),
+            "markers": markers,
+            "state_reasons": reasons,
         }
 
     def get_printer_options(self) -> dict:
