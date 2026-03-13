@@ -34,6 +34,8 @@ export default function ScanList() {
   const [enhanceScanId, setEnhanceScanId] = useState<string | null>(null);
   const [enhanceForm, setEnhanceForm] = useState({ brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false, deskew: false });
   const [enhancing, setEnhancing] = useState(false);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
 
   const defaultEnhanceForm = { brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false, deskew: false };
 
@@ -41,6 +43,18 @@ export default function ScanList() {
     setEnhanceScanId(null);
     setEnhanceForm(defaultEnhanceForm);
   };
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    if (!openMenuId) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpenMenuId(null);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [openMenuId]);
 
   const sendToPaperless = async (scanId: string) => {
     try {
@@ -76,6 +90,16 @@ export default function ScanList() {
     }
   };
 
+  const convertToPdf = async (scanId: string) => {
+    try {
+      await api.post('/scanner/collate', { scan_ids: [scanId] });
+      toast.show('Converted to PDF', 'success');
+      fetchScans();
+    } catch {
+      toast.show('Failed to convert to PDF');
+    }
+  };
+
   const toggleMergeSelect = (scanId: string) => {
     setMergeSelection((prev) => {
       const next = new Set(prev);
@@ -86,15 +110,14 @@ export default function ScanList() {
   };
 
   const handleMerge = async () => {
-    if (mergeSelection.size < 2) return;
+    if (mergeSelection.size < 1) return;
     setMerging(true);
     try {
-      // Preserve order based on scan list order
       const orderedIds = scans
         .filter((s) => mergeSelection.has(s.scan_id))
         .map((s) => s.scan_id);
       await api.post('/scanner/collate', { scan_ids: orderedIds });
-      toast.show('Scans merged into PDF', 'success');
+      toast.show(orderedIds.length === 1 ? 'Converted to PDF' : 'Scans merged into PDF', 'success');
       setMergeSelection(new Set());
       fetchScans();
     } catch {
@@ -129,20 +152,21 @@ export default function ScanList() {
   }
 
   const completedScans = scans.filter((s) => s.status === 'completed');
+  const mergeLabel = mergeSelection.size === 1 ? 'Convert to PDF' : `Merge ${mergeSelection.size} to PDF`;
 
   return (
     <>
     {/* Merge toolbar */}
-    {completedScans.length >= 2 && (
+    {completedScans.length >= 1 && (
       <div className="flex items-center gap-3 mb-3">
         <span className="text-sm text-gray-600 dark:text-gray-400">
           {mergeSelection.size > 0
-            ? `${mergeSelection.size} selected for merge`
-            : 'Select scans to merge into PDF'}
+            ? `${mergeSelection.size} selected`
+            : 'Select scans to merge or convert to PDF'}
         </span>
-        {mergeSelection.size >= 2 && (
+        {mergeSelection.size >= 1 && (
           <Button size="sm" onClick={handleMerge} disabled={merging}>
-            {merging ? 'Merging...' : `Merge ${mergeSelection.size} to PDF`}
+            {merging ? 'Processing...' : mergeLabel}
           </Button>
         )}
         {mergeSelection.size > 0 && (
@@ -160,7 +184,7 @@ export default function ScanList() {
           className={`flex items-center justify-between p-4 bg-white dark:bg-gray-900 rounded-lg border ${mergeSelection.has(scan.scan_id) ? 'border-blue-400 dark:border-blue-500 ring-1 ring-blue-200 dark:ring-blue-800' : 'border-gray-200 dark:border-gray-700'}`}
         >
           {/* Merge checkbox */}
-          {scan.status === 'completed' && completedScans.length >= 2 && (
+          {scan.status === 'completed' && completedScans.length >= 1 && (
             <input
               type="checkbox"
               checked={mergeSelection.has(scan.scan_id)}
@@ -187,7 +211,7 @@ export default function ScanList() {
             </div>
           </div>
 
-          <div className="flex gap-2 ml-4">
+          <div className="flex gap-2 ml-4 items-center">
             {scan.status === 'completed' && (
               <>
                 <Button size="sm" variant="secondary" onClick={() => setPreviewScan(scan)}>
@@ -196,28 +220,65 @@ export default function ScanList() {
                 <a href={getScanDownloadUrl(scan.scan_id)} download>
                   <Button size="sm" variant="secondary">Download</Button>
                 </a>
-                <Button size="sm" variant="secondary" onClick={() => setEmailScanId(scan.scan_id)}>
-                  Email
-                </Button>
-                <Button size="sm" variant="secondary" onClick={() => setCloudScanId(scan.scan_id)}>
-                  Cloud
-                </Button>
-                {scan.format === 'pdf' && (
-                  <Button size="sm" variant="secondary" onClick={() => applyOcr(scan.scan_id)}>
-                    OCR
+                {/* Actions dropdown */}
+                <div className="relative" ref={openMenuId === scan.scan_id ? menuRef : undefined}>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setOpenMenuId(openMenuId === scan.scan_id ? null : scan.scan_id)}
+                  >
+                    Actions &#9662;
                   </Button>
-                )}
-                {scan.format !== 'pdf' && (
-                  <Button size="sm" variant="secondary" onClick={() => setEnhanceScanId(scan.scan_id)}>
-                    Enhance
-                  </Button>
-                )}
-                <Button size="sm" variant="secondary" onClick={() => sendToPaperless(scan.scan_id)}>
-                  Paperless
-                </Button>
+                  {openMenuId === scan.scan_id && (
+                    <div className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-20 py-1">
+                      <button
+                        className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                        onClick={() => { setEmailScanId(scan.scan_id); setOpenMenuId(null); }}
+                      >
+                        Email
+                      </button>
+                      <button
+                        className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                        onClick={() => { setCloudScanId(scan.scan_id); setOpenMenuId(null); }}
+                      >
+                        Save to Cloud
+                      </button>
+                      <button
+                        className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                        onClick={() => { sendToPaperless(scan.scan_id); setOpenMenuId(null); }}
+                      >
+                        Send to Paperless
+                      </button>
+                      {scan.format === 'pdf' && (
+                        <button
+                          className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                          onClick={() => { applyOcr(scan.scan_id); setOpenMenuId(null); }}
+                        >
+                          OCR
+                        </button>
+                      )}
+                      {scan.format !== 'pdf' && (
+                        <>
+                          <button
+                            className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                            onClick={() => { setEnhanceScanId(scan.scan_id); setOpenMenuId(null); }}
+                          >
+                            Enhance
+                          </button>
+                          <button
+                            className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                            onClick={() => { convertToPdf(scan.scan_id); setOpenMenuId(null); }}
+                          >
+                            Convert to PDF
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
               </>
             )}
-            <Button size="sm" variant="ghost" onClick={() => deleteScan(scan.scan_id)}>
+            <Button size="sm" variant="danger" onClick={() => deleteScan(scan.scan_id)}>
               Delete
             </Button>
           </div>

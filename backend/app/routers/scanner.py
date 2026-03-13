@@ -531,7 +531,7 @@ async def collate_scans(
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Merge multiple scans into a single PDF."""
+    """Convert or merge scans into a single PDF."""
     import uuid as _uuid
 
     from PIL import Image

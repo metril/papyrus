@@ -1,5 +1,6 @@
 import { Outlet, NavLink } from 'react-router-dom';
 import { useThemeStore } from '../../store/themeStore';
+import { useAuthStore } from '../../store/authStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { useToast } from '../common/Toast';
 import {
@@ -19,8 +20,8 @@ const navItems = [
   { to: '/copy', label: 'Copy', icon: CopyIcon },
   { to: '/files', label: 'Files', icon: FolderIcon },
   { to: '/history', label: 'History', icon: ClockIcon },
-  { to: '/dashboard', label: 'Dashboard', icon: ChartIcon },
-  { to: '/audit', label: 'Audit', icon: ShieldIcon },
+  { to: '/dashboard', label: 'Dashboard', icon: ChartIcon, adminOnly: true },
+  { to: '/audit', label: 'Audit', icon: ShieldIcon, adminOnly: true },
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
 ];
 
@@ -76,6 +77,9 @@ function ThemeToggle({ compact = false }: { compact?: boolean }) {
 
 export default function AppShell() {
   const toast = useToast();
+  const { user } = useAuthStore();
+  const isAdmin = user?.role === 'admin';
+  const visibleNavItems = navItems.filter((item) => !item.adminOnly || isAdmin);
 
   useWebSocket({
     url: '/api/system/ws/scans',
@@ -94,7 +98,7 @@ export default function AppShell() {
           <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Papyrus</h1>
         </div>
         <nav className="flex-1 px-4 py-4 space-y-1">
-          {navItems.map(({ to, label, icon: Icon }) => (
+          {visibleNavItems.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
@@ -125,7 +129,7 @@ export default function AppShell() {
 
       {/* Mobile bottom navigation */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 flex justify-around py-2 z-50">
-        {navItems.slice(0, 3).map(({ to, label, icon: Icon }) => (
+        {visibleNavItems.slice(0, 3).map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}

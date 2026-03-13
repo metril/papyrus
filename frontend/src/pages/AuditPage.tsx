@@ -19,12 +19,14 @@ export default function AuditPage() {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
   const [page, setPage] = useState(0);
   const [actionFilter, setActionFilter] = useState('');
   const pageSize = 50;
 
   useEffect(() => {
     setLoading(true);
+    setError('');
     const params: Record<string, string | number> = { limit: pageSize, offset: page * pageSize };
     if (actionFilter) params.action = actionFilter;
 
@@ -33,12 +35,17 @@ export default function AuditPage() {
         setEntries(data.entries);
         setTotal(data.total);
       })
-      .catch(() => {})
+      .catch((err: unknown) => {
+        setEntries([]);
+        setTotal(0);
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        setError(status === 403 ? 'Admin access required' : 'Failed to load audit log');
+      })
       .finally(() => setLoading(false));
   }, [page, actionFilter]);
 
   const actions = [
-    '', 'print.release', 'print.delete', 'print.upload',
+    '', 'print.release', 'print.cancel', 'print.delete', 'print.upload',
     'scan.complete', 'scan.delete', 'scan.ocr',
     'cloud.upload', 'email.send', 'settings.update',
   ];
@@ -67,6 +74,8 @@ export default function AuditPage() {
 
           {loading ? (
             <p className="text-gray-500 text-sm">Loading...</p>
+          ) : error ? (
+            <p className="text-red-600 dark:text-red-400 text-sm">{error}</p>
           ) : entries.length === 0 ? (
             <p className="text-gray-500 text-sm">No audit entries found.</p>
           ) : (

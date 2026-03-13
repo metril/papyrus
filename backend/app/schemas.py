@@ -259,7 +259,7 @@ class ScanProfileResponse(BaseModel):
 
 
 class CollateRequest(BaseModel):
-    scan_ids: list[str] = Field(min_length=2, max_length=50)
+    scan_ids: list[str] = Field(min_length=1, max_length=50)
     output_filename: str = "merged.pdf"
 
 
