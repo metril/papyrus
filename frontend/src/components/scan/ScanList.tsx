@@ -39,6 +39,16 @@ export default function ScanList() {
     }
   };
 
+  const applyOcr = async (scanId: string) => {
+    try {
+      await api.post(`/scanner/scans/${scanId}/ocr`);
+      toast.show('OCR applied successfully', 'success');
+      fetchScans();
+    } catch {
+      toast.show('Failed to apply OCR');
+    }
+  };
+
   const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const debouncedFetch = useCallback((_msg: unknown) => {
     clearTimeout(fetchTimeoutRef.current);
@@ -104,6 +114,11 @@ export default function ScanList() {
                 <Button size="sm" variant="secondary" onClick={() => setCloudScanId(scan.scan_id)}>
                   Cloud
                 </Button>
+                {scan.format === 'pdf' && (
+                  <Button size="sm" variant="secondary" onClick={() => applyOcr(scan.scan_id)}>
+                    OCR
+                  </Button>
+                )}
                 <Button size="sm" variant="secondary" onClick={() => sendToPaperless(scan.scan_id)}>
                   Paperless
                 </Button>

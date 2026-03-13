@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     paperless_url: str = ""  # e.g. https://paperless.example.com
     paperless_api_token: str = ""
 
+    # OCR
+    ocr_enabled: bool = False
+    ocr_language: str = "eng"
+
     # Email Webhook
     email_webhook_secret: str = ""
     email_webhook_rate_limit: int = 10  # max requests per minute per IP

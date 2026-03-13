@@ -943,6 +943,33 @@ export default function SettingsPage() {
         </div>
       </Card>
 
+      {/* OCR */}
+      <Card title="OCR / Searchable PDFs">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Apply Tesseract OCR to scanned PDFs to make them searchable. Requires tesseract-ocr and ocrmypdf.
+          </p>
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={appSettings.ocr_enabled === true || appSettings.ocr_enabled === 'true'}
+              onChange={(e) => set('ocr_enabled')(String(e.target.checked))}
+              className="rounded border-gray-300 dark:border-gray-600"
+            />
+            <span className="text-sm text-gray-700 dark:text-gray-300">Enable OCR for auto-deliver scans</span>
+          </label>
+          <SettingField
+            label="OCR Language"
+            value={appSettings.ocr_language ?? 'eng'}
+            onChange={set('ocr_language')}
+            placeholder="eng"
+          />
+          <div className="flex justify-end">
+            <SaveButton section="ocr" keys={['ocr_enabled', 'ocr_language']} />
+          </div>
+        </div>
+      </Card>
+
       {/* Paperless-ngx */}
       <Card title="Paperless-ngx">
         <div className="space-y-3">

@@ -7,6 +7,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_permission
+from app.config import settings
 from app.database import get_db
 from app.models import CloudProvider, ScanJob, SMBShare, User
 from app.schemas import BulkDeleteScansRequest, BulkDeleteResponse, EmailSendRequest, ScanBatchRequest, ScanList, ScanRequest, ScanResponse
@@ -370,6 +371,38 @@ async def send_scan_to_paperless(
         return {"message": "Sent to Paperless-ngx", "task_id": task_id}
     except PaperlessError as e:
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.post("/scans/{scan_id}/ocr")
+async def apply_ocr_to_scan(
+    scan_id: str,
+    user: User = Depends(require_permission("scan")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Apply OCR to a completed PDF scan, making it searchable."""
+    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if job.status != "completed" or not job.filepath:
+        raise HTTPException(status_code=400, detail="Scan is not available")
+    if job.format != "pdf":
+        raise HTTPException(status_code=400, detail="OCR is only supported for PDF scans")
+
+    from app.services.ocr_service import OCRError, ocr_service
+    from app.routers.settings import _load_db_values
+
+    db_values = await _load_db_values(db)
+    language = db_values.get("ocr_language") or settings.ocr_language
+
+    try:
+        await ocr_service.apply_ocr(job.filepath, language=language)
+        # Update file size after OCR
+        job.file_size = os.path.getsize(job.filepath)
+        await db.commit()
+        return {"message": "OCR applied successfully"}
+    except OCRError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/scans/{scan_id}/smb")

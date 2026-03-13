@@ -37,6 +37,8 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "onedrive_client_secret": (str, True),
     "paperless_url": (str, False),
     "paperless_api_token": (str, True),
+    "ocr_enabled": (bool, False),
+    "ocr_language": (str, False),
 }
 
 _PLACEHOLDER = "*set*"

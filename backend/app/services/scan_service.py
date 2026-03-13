@@ -275,6 +275,15 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
     config = scanner.post_scan_config
     filename = f"scan_{scan_job.scan_id}.{scan_job.format}"
 
+    # OCR — apply before other delivery actions so recipients get searchable PDF
+    if config.get("ocr") and scan_job.format == "pdf" and scan_job.filepath:
+        try:
+            from app.services.ocr_service import ocr_service, OCRError
+            language = config.get("ocr_language", "eng")
+            await ocr_service.apply_ocr(scan_job.filepath, language=language)
+        except (OCRError, Exception):
+            pass
+
     if config.get("email"):
         try:
             db_config = await _get_smtp_config(db)

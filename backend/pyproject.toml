@@ -24,6 +24,7 @@ dependencies = [
     "pysmb>=1.2.9",
     "aiosmtplib>=3.0.0",
     "itsdangerous>=2.2.0",
+    "pypdf>=4.0.0",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +38,9 @@ cloud = [
     "google-api-python-client>=2.160.0",
     "google-auth-oauthlib>=1.2.0",
     "dropbox>=12.0.0",
+]
+ocr = [
+    "ocrmypdf>=16.0.0",
 ]
 
 [tool.ruff]

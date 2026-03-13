@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     avahi-daemon \
     avahi-utils \
     libnss-mdns \
+    tesseract-ocr \
+    ocrmypdf \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -41,7 +43,7 @@ RUN curl -fsSL "https://download.brother.com/welcome/dlf105200/brscan4-0.4.11-1.
 # Python dependencies
 WORKDIR /app
 COPY backend/pyproject.toml ./
-RUN pip install --no-cache-dir ".[cloud]"
+RUN pip install --no-cache-dir ".[cloud,ocr]"
 
 # Copy backend code
 COPY backend/ ./backend/
