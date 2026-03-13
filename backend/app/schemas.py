@@ -265,6 +265,28 @@ class BulkDeleteResponse(BaseModel):
     deleted: int
 
 
+# --- Webhooks ---
+
+
+class WebhookCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    url: str = Field(min_length=1, max_length=500)
+    secret: str | None = None
+    events: list[str] = Field(min_length=1)
+    enabled: bool = True
+
+
+class WebhookResponse(BaseModel):
+    id: int
+    name: str
+    url: str
+    events: list[str]
+    enabled: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 # --- System ---
 
 

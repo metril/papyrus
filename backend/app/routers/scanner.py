@@ -17,6 +17,7 @@ from app.services.file_service import cleanup_file
 from app.services.audit_service import log_event
 from app.services.scan_service import ScanError, scan_service, get_default_scanner, get_default_scanner_device, run_post_scan_actions
 from app.services.smb_service import SMBError, smb_service
+from app.services.webhook_service import dispatch_webhook
 from app.services.ws_manager import ws_manager
 
 router = APIRouter()
@@ -93,6 +94,7 @@ async def initiate_scan(
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
                         detail={"format": request.format, "resolution": request.resolution})
+        await dispatch_webhook(db, "scan.complete", {"scan_id": job.scan_id, "format": request.format})
 
         if scanner and scanner.auto_deliver:
             await run_post_scan_actions(job, scanner, db)
@@ -174,6 +176,7 @@ async def initiate_batch_scan(
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
                         detail={"format": request.format, "pages": request.pages})
+        await dispatch_webhook(db, "scan.complete", {"scan_id": job.scan_id, "format": request.format, "pages": request.pages})
 
         if scanner and scanner.auto_deliver:
             await run_post_scan_actions(job, scanner, db)
@@ -573,6 +576,7 @@ async def delete_scan(
     await db.commit()
 
     await log_event(db, "scan.delete", "scan_job", scan_id_copy, user_id=user.id)
+    await dispatch_webhook(db, "scan.delete", {"scan_id": scan_id_copy})
 
     await ws_manager.broadcast("scans", {
         "type": "scan_deleted", "data": {"scan_id": scan_id_copy}

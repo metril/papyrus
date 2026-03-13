@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user, require_permission
 from app.database import get_db
 from app.services.audit_service import log_event
+from app.services.webhook_service import dispatch_webhook
 from app.models import Printer, PrintJob, User
 from app.schemas import BulkDeleteJobsRequest, BulkDeleteResponse, PrintJobList, PrintJobResponse
 from app.services.convert_service import convert_to_pdf, is_printable, needs_conversion
@@ -367,6 +368,7 @@ async def release_job(
         await db.commit()
         await log_event(db, "print.release", "print_job", str(job.id), user_id=user.id,
                         detail={"title": job.title, "copies": job.copies})
+        await dispatch_webhook(db, "print.release", {"id": job.id, "title": job.title, "copies": job.copies})
         await ws_manager.broadcast("jobs", {
             "type": "job_updated", "data": {"id": job.id, "status": "printing"}
         })
@@ -474,6 +476,7 @@ async def delete_job(
 
     await log_event(db, "print.delete", "print_job", str(job_id_copy), user_id=user.id,
                     detail={"title": title_copy})
+    await dispatch_webhook(db, "print.delete", {"id": job_id_copy, "title": title_copy})
 
     await ws_manager.broadcast("jobs", {
         "type": "job_deleted", "data": {"id": job_id_copy}
