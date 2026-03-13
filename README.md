@@ -13,9 +13,16 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Email**: Send scanned documents as email attachments, receive attachments for printing via webhook
 - **Cloud Storage**: Browse, download, and print files from Google Drive, Dropbox, and OneDrive; upload scans to cloud (OAuth2 connect flow)
 - **Paperless-ngx**: Send scans directly to Paperless-ngx for document archival and OCR
+- **OCR / Searchable PDFs**: Automatic or manual OCR via Tesseract/ocrmypdf; produces searchable PDFs
+- **Scan Profiles**: Save and load scan presets (resolution, color, format, source, OCR, post-actions) per user
+- **PDF Collation**: Merge multiple scans into a single PDF document
 - **Network Printer**: Appears as an AirPrint/IPP printer on the LAN; network print jobs enter the hold-release queue
 - **Network Scanner**: Appears as an eSCL/AirScan scanner on the LAN; devices can scan directly via the eSCL protocol
-- **Real-time Updates**: WebSocket-based live job status and scan progress
+- **Printer Status**: Live toner/ink levels and state display from CUPS marker attributes
+- **Audit Log**: Tracks print releases, scan completions, deletions, and settings changes (admin view)
+- **Usage Dashboard**: Print/scan counts by status, daily activity charts (admin view)
+- **Real-time Updates**: WebSocket-based live job status, scan progress, and eSCL scan toast notifications
+- **PWA Support**: Installable as a Progressive Web App on mobile and desktop
 - **Responsive Design**: Works on phones, tablets, and desktops
 - **Authentication**: OIDC (Authentik/Keycloak) for users, API tokens for programmatic access
 
