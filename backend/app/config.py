@@ -61,6 +61,14 @@ class Settings(BaseSettings):
     ocr_enabled: bool = False
     ocr_language: str = "eng"
 
+    # FTP/SFTP
+    ftp_host: str = ""
+    ftp_port: int = 21
+    ftp_username: str = ""
+    ftp_password: str = ""
+    ftp_remote_dir: str = "/"
+    ftp_protocol: str = "ftp"  # ftp, ftps, sftp
+
     # Email Webhook
     email_webhook_secret: str = ""
     email_webhook_rate_limit: int = 10  # max requests per minute per IP

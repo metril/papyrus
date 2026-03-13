@@ -340,3 +340,20 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
                         )
         except (CloudError, Exception):
             pass
+
+    if config.get("ftp_host"):
+        try:
+            from app.services.ftp_service import ftp_service, FTPError
+            from app.services.crypto import encrypt_value
+            host = config["ftp_host"]
+            port = int(config.get("ftp_port", 21))
+            user = config.get("ftp_username", "")
+            pwd_enc = encrypt_value(config.get("ftp_password", ""))
+            remote_dir = config.get("ftp_remote_dir", "/")
+            protocol = config.get("ftp_protocol", "ftp")
+            if protocol == "sftp":
+                await ftp_service.upload_sftp(host, port, user, pwd_enc, scan_job.filepath, filename, remote_dir)
+            else:
+                await ftp_service.upload_ftp(host, port, user, pwd_enc, scan_job.filepath, filename, remote_dir, use_tls=(protocol == "ftps"))
+        except Exception:
+            pass

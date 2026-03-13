@@ -40,6 +40,12 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "paperless_api_token": (str, True),
     "ocr_enabled": (bool, False),
     "ocr_language": (str, False),
+    "ftp_host": (str, False),
+    "ftp_port": (int, False),
+    "ftp_username": (str, False),
+    "ftp_password": (str, True),
+    "ftp_remote_dir": (str, False),
+    "ftp_protocol": (str, False),  # ftp, ftps, sftp
 }
 
 _PLACEHOLDER = "*set*"
