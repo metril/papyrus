@@ -11,7 +11,7 @@ from starlette.responses import FileResponse
 
 from app.auth.oidc import setup_oauth
 from app.config import settings
-from app.routers import auth, cloud, copy, email, escl, jobs, printer, printers, scanner, scanners, settings as settings_router, smb, system
+from app.routers import admin, auth, cloud, copy, email, escl, jobs, printer, printers, scanner, scanners, settings as settings_router, smb, system
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,7 @@ app.include_router(cloud.router, prefix="/api/cloud", tags=["cloud"])
 app.include_router(settings_router.router, prefix="/api/settings", tags=["settings"])
 app.include_router(printers.router, prefix="/api/printers", tags=["printers"])
 app.include_router(scanners.router, prefix="/api/scanners", tags=["scanners"])
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 
 # eSCL scanner protocol (no /api prefix — clients expect /eSCL/ at root)
 app.include_router(escl.router, tags=["escl"])

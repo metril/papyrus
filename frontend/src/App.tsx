@@ -8,6 +8,8 @@ import CopyPage from './pages/CopyPage';
 import FilesPage from './pages/FilesPage';
 import HistoryPage from './pages/HistoryPage';
 import SettingsPage from './pages/SettingsPage';
+import AuditPage from './pages/AuditPage';
+import DashboardPage from './pages/DashboardPage';
 import { useThemeStore } from './store/themeStore';
 
 export default function App() {
@@ -37,6 +39,8 @@ export default function App() {
           <Route path="/files" element={<FilesPage />} />
           <Route path="/history" element={<HistoryPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/audit" element={<AuditPage />} />
+          <Route path="/dashboard" element={<DashboardPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

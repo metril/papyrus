@@ -6,6 +6,8 @@ import {
   CopyIcon,
   FolderIcon,
   ClockIcon,
+  ChartIcon,
+  ShieldIcon,
   SettingsIcon,
 } from '../common/Icons';
 
@@ -15,6 +17,8 @@ const navItems = [
   { to: '/copy', label: 'Copy', icon: CopyIcon },
   { to: '/files', label: 'Files', icon: FolderIcon },
   { to: '/history', label: 'History', icon: ClockIcon },
+  { to: '/dashboard', label: 'Dashboard', icon: ChartIcon },
+  { to: '/audit', label: 'Audit', icon: ShieldIcon },
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
 ];
 
