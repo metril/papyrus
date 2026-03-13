@@ -40,16 +40,16 @@ RUN curl -fsSL "https://download.brother.com/welcome/dlf105200/brscan4-0.4.11-1.
     && dpkg -i /tmp/brscan4.deb \
     && rm /tmp/brscan4.deb
 
-# Python dependencies
-WORKDIR /app
+# Python dependencies (create minimal package for dependency caching layer)
+WORKDIR /app/backend
 COPY backend/pyproject.toml ./
-RUN pip install --no-cache-dir ".[cloud,ocr]"
+RUN mkdir -p app && touch app/__init__.py && pip install --no-cache-dir ".[cloud,ocr,sftp]"
 
-# Copy backend code
-COPY backend/ ./backend/
+# Copy backend code (overwrites minimal stub)
+COPY backend/ ./
 
 # Copy built frontend
-COPY --from=frontend-build /app/frontend/dist ./backend/static/
+COPY --from=frontend-build /app/frontend/dist ./static/
 
 # Copy CUPS, SANE, and Avahi configuration
 COPY docker/cups/cupsd.conf /etc/cups/cupsd.conf
