@@ -1,7 +1,7 @@
 # Papyrus - Development Guide
 
 ## Project Overview
-Papyrus is a web-based print and scan server for network-connected Brother DCP-L2540DW (and potentially other devices). It provides a responsive web UI for managing print jobs (hold-release), scanning (with OCR, profiles, and PDF collation), copying, SMB share integration, bidirectional email (send + webhook receive), bidirectional cloud storage (Google Drive/Dropbox/OneDrive with OAuth2 browse/download/upload), Paperless-ngx document archival, audit logging, usage dashboard, and PWA support.
+Papyrus is a web-based print and scan server for network-connected Brother DCP-L2540DW (and potentially other devices). It provides a responsive web UI for managing print jobs (hold-release), scanning (with OCR, profiles, PDF collation, image enhancement, deskew, and template naming), copying, SMB share integration, bidirectional email (send + webhook receive), bidirectional cloud storage (Google Drive/Dropbox/OneDrive/Nextcloud via OAuth2 or WebDAV), FTP/SFTP upload, Paperless-ngx archival, outgoing webhooks, audit logging, usage dashboard, and PWA support.
 
 ## Tech Stack
 - **Backend**: Python 3.12, FastAPI, Uvicorn, SQLAlchemy async (asyncpg), Alembic
@@ -14,6 +14,9 @@ Papyrus is a web-based print and scan server for network-connected Brother DCP-L
 - **OCR**: Tesseract + ocrmypdf for searchable PDFs
 - **Auth**: OIDC (Authentik/Keycloak) via authlib + admin-generated API tokens
 - **SMB**: pysmb for network share browsing/read/write
+- **WebDAV**: httpx-based WebDAV client for Nextcloud and other WebDAV servers
+- **FTP/SFTP**: stdlib ftplib + optional paramiko for file uploads
+- **Image Processing**: Pillow + numpy for brightness/contrast/rotation/crop/deskew
 - **PWA**: vite-plugin-pwa with workbox service worker
 - **Deploy**: Docker multi-stage build (`network_mode: host` for mDNS) behind Traefik
 
@@ -23,7 +26,7 @@ Papyrus is a web-based print and scan server for network-connected Brother DCP-L
   - `config.py` — Pydantic Settings (`PAPYRUS_` env prefix)
   - `auth/` — OIDC + API token auth
   - `routers/` — API route handlers
-  - `services/` — Business logic (CUPS, scanning, SMB, email, cloud, Paperless-ngx, OCR, audit)
+  - `services/` — Business logic (CUPS, scanning, SMB, email, cloud, Paperless-ngx, OCR, audit, WebDAV, FTP, image enhancement, webhooks)
   - `models.py` — SQLAlchemy ORM models
   - `schemas.py` — Pydantic request/response models
   - `database.py` — Async engine (asyncpg)
@@ -66,6 +69,8 @@ Key vars: `PAPYRUS_DB_URL`, `PAPYRUS_OIDC_ISSUER`, `PAPYRUS_OIDC_CLIENT_ID`, `PA
 Cloud OAuth: `PAPYRUS_GDRIVE_CLIENT_ID`, `PAPYRUS_GDRIVE_CLIENT_SECRET`, `PAPYRUS_DROPBOX_APP_KEY`, `PAPYRUS_DROPBOX_APP_SECRET`, `PAPYRUS_ONEDRIVE_CLIENT_ID`, `PAPYRUS_ONEDRIVE_CLIENT_SECRET`
 Paperless-ngx: `PAPYRUS_PAPERLESS_URL`, `PAPYRUS_PAPERLESS_API_TOKEN`
 OCR: `PAPYRUS_OCR_ENABLED`, `PAPYRUS_OCR_LANGUAGE`
+FTP/SFTP: `PAPYRUS_FTP_HOST`, `PAPYRUS_FTP_PORT`, `PAPYRUS_FTP_USERNAME`, `PAPYRUS_FTP_PASSWORD`, `PAPYRUS_FTP_REMOTE_DIR`, `PAPYRUS_FTP_PROTOCOL`
+Scan naming: `PAPYRUS_SCAN_FILENAME_TEMPLATE`
 Email webhook: `PAPYRUS_EMAIL_WEBHOOK_SECRET`, `PAPYRUS_EMAIL_WEBHOOK_RATE_LIMIT`
 Network: `PAPYRUS_NETWORK_PRINTER_ENABLED`, `PAPYRUS_NETWORK_PRINTER_NAME`, `PAPYRUS_ESCL_ENABLED`
 

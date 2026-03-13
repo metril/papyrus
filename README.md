@@ -11,13 +11,17 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Copy**: One-click scan-then-print workflow
 - **SMB Integration**: Browse and print from network shares, save scans to shares
 - **Email**: Send scanned documents as email attachments, receive attachments for printing via webhook
-- **Cloud Storage**: Browse, download, and print files from Google Drive, Dropbox, and OneDrive; upload scans to cloud (OAuth2 connect flow)
+- **Cloud Storage**: Browse, download, and print files from Google Drive, Dropbox, OneDrive, and Nextcloud/WebDAV; upload scans to cloud (OAuth2 or basic auth)
+- **FTP/SFTP**: Upload scans to FTP, FTPS, or SFTP servers as a delivery target
 - **Paperless-ngx**: Send scans directly to Paperless-ngx for document archival and OCR
 - **OCR / Searchable PDFs**: Automatic or manual OCR via Tesseract/ocrmypdf; produces searchable PDFs
 - **Scan Profiles**: Save and load scan presets (resolution, color, format, source, OCR, post-actions) per user
 - **PDF Collation**: Merge multiple scans into a single PDF document
+- **Image Enhancement**: Adjust brightness, contrast, rotation, auto-crop, and auto-deskew on scanned images
+- **Template Naming**: Configurable filename templates for delivered scans using variables ({date}, {time}, {id}, etc.)
 - **Network Printer**: Appears as an AirPrint/IPP printer on the LAN; network print jobs enter the hold-release queue
 - **Network Scanner**: Appears as an eSCL/AirScan scanner on the LAN; devices can scan directly via the eSCL protocol
+- **Webhooks**: Outgoing HTTP notifications with HMAC-SHA256 signing for print/scan events
 - **Printer Status**: Live toner/ink levels and state display from CUPS marker attributes
 - **Audit Log**: Tracks print releases, scan completions, deletions, and settings changes (admin view)
 - **Usage Dashboard**: Print/scan counts by status, daily activity charts (admin view)
