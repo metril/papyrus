@@ -35,8 +35,65 @@ class ImageService:
 
         Returns the filepath (unchanged, enhanced in-place).
         """
+    async def deskew(self, filepath: str) -> str:
+        """Auto-deskew a scanned image using projection profiling.
+
+        Detects the skew angle by analyzing horizontal line projections
+        of the binarized image and rotates to correct it.
+        """
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext not in (".png", ".jpg", ".jpeg", ".tiff", ".tif"):
+            return filepath
+
+        def _deskew():
+            import numpy as np
+
+            img = Image.open(filepath)
+            gray = img.convert("L")
+            arr = np.array(gray)
+
+            # Binarize (Otsu-like threshold)
+            threshold = arr.mean()
+            binary = (arr < threshold).astype(np.int32)
+
+            # Try angles from -5 to +5 degrees in 0.1 increments
+            best_angle = 0.0
+            best_score = 0.0
+            for angle_10x in range(-50, 51):
+                angle = angle_10x / 10.0
+                rotated = img.rotate(angle, expand=False, fillcolor=255)
+                rot_arr = np.array(rotated.convert("L"))
+                rot_bin = (rot_arr < threshold).astype(np.int32)
+                # Score = variance of row sums (higher = more aligned text)
+                row_sums = rot_bin.sum(axis=1)
+                score = float(np.var(row_sums))
+                if score > best_score:
+                    best_score = score
+                    best_angle = angle
+
+            if abs(best_angle) > 0.1:
+                img = img.rotate(best_angle, expand=True, fillcolor=255)
+                img.save(filepath)
+
+        try:
+            await asyncio.to_thread(_deskew)
+        except Exception as exc:
+            raise ImageError(f"Deskew failed: {exc}") from exc
+
+        return filepath
+
+    async def enhance(
+        self,
+        filepath: str,
+        brightness: float = 1.0,
+        contrast: float = 1.0,
+        rotation: int = 0,
+        auto_crop: bool = False,
+        deskew: bool = False,
+    ) -> str:
+        """Apply enhancements to an image file in-place."""
         # Skip if no enhancements requested
-        if brightness == 1.0 and contrast == 1.0 and rotation == 0 and not auto_crop:
+        if brightness == 1.0 and contrast == 1.0 and rotation == 0 and not auto_crop and not deskew:
             return filepath
 
         ext = os.path.splitext(filepath)[1].lower()
@@ -61,6 +118,10 @@ class ImageService:
                 img = _auto_crop(img)
 
             img.save(filepath)
+
+        if deskew:
+            await self.deskew(filepath)
+            return filepath
 
         try:
             await asyncio.to_thread(_process)

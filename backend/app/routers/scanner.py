@@ -421,6 +421,7 @@ class EnhanceRequest(BaseModel):
     contrast: float = Field(default=1.0, ge=0.1, le=3.0)
     rotation: int = Field(default=0)
     auto_crop: bool = False
+    deskew: bool = False
 
 
 @router.post("/scans/{scan_id}/enhance")
@@ -448,6 +449,7 @@ async def enhance_scan(
             contrast=body.contrast,
             rotation=body.rotation,
             auto_crop=body.auto_crop,
+            deskew=body.deskew,
         )
         job.file_size = os.path.getsize(job.filepath)
         await db.commit()

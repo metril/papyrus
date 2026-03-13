@@ -32,7 +32,7 @@ export default function ScanList() {
   const [mergeSelection, setMergeSelection] = useState<Set<string>>(new Set());
   const [merging, setMerging] = useState(false);
   const [enhanceScanId, setEnhanceScanId] = useState<string | null>(null);
-  const [enhanceForm, setEnhanceForm] = useState({ brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false });
+  const [enhanceForm, setEnhanceForm] = useState({ brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false, deskew: false });
 
   const sendToPaperless = async (scanId: string) => {
     try {
@@ -49,7 +49,7 @@ export default function ScanList() {
       await api.post(`/scanner/scans/${enhanceScanId}/enhance`, enhanceForm);
       toast.show('Enhancement applied', 'success');
       setEnhanceScanId(null);
-      setEnhanceForm({ brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false });
+      setEnhanceForm({ brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false, deskew: false });
       fetchScans();
     } catch {
       toast.show('Failed to apply enhancement');
@@ -265,6 +265,12 @@ export default function ScanList() {
                 onChange={(e) => setEnhanceForm({ ...enhanceForm, auto_crop: e.target.checked })}
                 className="rounded border-gray-300 dark:border-gray-600" />
               <span className="text-gray-700 dark:text-gray-300">Auto-crop whitespace</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={enhanceForm.deskew}
+                onChange={(e) => setEnhanceForm({ ...enhanceForm, deskew: e.target.checked })}
+                className="rounded border-gray-300 dark:border-gray-600" />
+              <span className="text-gray-700 dark:text-gray-300">Auto-deskew (straighten)</span>
             </label>
           </div>
           <div className="flex gap-2 justify-end mt-5">

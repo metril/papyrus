@@ -25,6 +25,7 @@ dependencies = [
     "aiosmtplib>=3.0.0",
     "itsdangerous>=2.2.0",
     "pypdf>=4.0.0",
+    "numpy>=1.26.0",
 ]
 
 [project.optional-dependencies]
