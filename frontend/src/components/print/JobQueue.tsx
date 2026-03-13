@@ -142,8 +142,9 @@ export default function JobQueue() {
     setBusyJobId(jobId);
     try {
       await action();
-    } catch {
-      toast.show('Action failed');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      toast.show(`Action failed: ${msg}`);
     } finally {
       setBusyJobId(null);
     }

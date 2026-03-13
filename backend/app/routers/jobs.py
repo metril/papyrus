@@ -445,6 +445,8 @@ async def cancel_job(
     await ws_manager.broadcast("jobs", {
         "type": "job_updated", "data": {"id": job.id, "status": "cancelled"}
     })
+    await log_event(db, "print.cancel", "print_job", str(job.id), user_id=user.id,
+                    detail={"title": job.title})
     return job
 
 

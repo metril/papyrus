@@ -38,12 +38,12 @@ export const useJobStore = create<JobState>((set, get) => ({
 
   releaseJob: async (id: number, pin?: string) => {
     await api.post(`/jobs/${id}/release`, pin ? { pin } : undefined);
-    await get().fetchJobs();
+    get().fetchJobs();
   },
 
   cancelJob: async (id: number) => {
     await api.post(`/jobs/${id}/cancel`);
-    await get().fetchJobs();
+    get().fetchJobs();
   },
 
   deleteJob: async (id: number) => {
@@ -53,6 +53,6 @@ export const useJobStore = create<JobState>((set, get) => ({
 
   reprintJob: async (id: number) => {
     await api.post(`/jobs/${id}/reprint`);
-    await get().fetchJobs();
+    get().fetchJobs();
   },
 }));
