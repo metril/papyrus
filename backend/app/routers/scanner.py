@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -412,6 +413,46 @@ async def apply_ocr_to_scan(
         await db.commit()
         return {"message": "OCR applied successfully"}
     except OCRError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class EnhanceRequest(BaseModel):
+    brightness: float = Field(default=1.0, ge=0.1, le=3.0)
+    contrast: float = Field(default=1.0, ge=0.1, le=3.0)
+    rotation: int = Field(default=0)
+    auto_crop: bool = False
+
+
+@router.post("/scans/{scan_id}/enhance")
+async def enhance_scan(
+    scan_id: str,
+    body: EnhanceRequest,
+    user: User = Depends(require_permission("scan")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Apply image enhancements (brightness, contrast, rotation, crop) to a completed scan."""
+    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if job.status != "completed" or not job.filepath:
+        raise HTTPException(status_code=400, detail="Scan is not available")
+    if job.format == "pdf":
+        raise HTTPException(status_code=400, detail="Image enhancement is for image scans (png/jpeg/tiff), not PDFs")
+
+    from app.services.image_service import ImageError, image_service
+    try:
+        await image_service.enhance(
+            job.filepath,
+            brightness=body.brightness,
+            contrast=body.contrast,
+            rotation=body.rotation,
+            auto_crop=body.auto_crop,
+        )
+        job.file_size = os.path.getsize(job.filepath)
+        await db.commit()
+        return {"message": "Enhancement applied"}
+    except ImageError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 

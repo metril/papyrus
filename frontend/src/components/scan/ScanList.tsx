@@ -31,6 +31,8 @@ export default function ScanList() {
   const [previewScan, setPreviewScan] = useState<ScanJob | null>(null);
   const [mergeSelection, setMergeSelection] = useState<Set<string>>(new Set());
   const [merging, setMerging] = useState(false);
+  const [enhanceScanId, setEnhanceScanId] = useState<string | null>(null);
+  const [enhanceForm, setEnhanceForm] = useState({ brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false });
 
   const sendToPaperless = async (scanId: string) => {
     try {
@@ -38,6 +40,19 @@ export default function ScanList() {
       toast.show('Sent to Paperless-ngx', 'success');
     } catch {
       toast.show('Failed to send to Paperless-ngx');
+    }
+  };
+
+  const applyEnhance = async () => {
+    if (!enhanceScanId) return;
+    try {
+      await api.post(`/scanner/scans/${enhanceScanId}/enhance`, enhanceForm);
+      toast.show('Enhancement applied', 'success');
+      setEnhanceScanId(null);
+      setEnhanceForm({ brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false });
+      fetchScans();
+    } catch {
+      toast.show('Failed to apply enhancement');
     }
   };
 
@@ -182,6 +197,11 @@ export default function ScanList() {
                     OCR
                   </Button>
                 )}
+                {scan.format !== 'pdf' && (
+                  <Button size="sm" variant="secondary" onClick={() => setEnhanceScanId(scan.scan_id)}>
+                    Enhance
+                  </Button>
+                )}
                 <Button size="sm" variant="secondary" onClick={() => sendToPaperless(scan.scan_id)}>
                   Paperless
                 </Button>
@@ -208,6 +228,51 @@ export default function ScanList() {
         mimeType={scanMimeType(previewScan)}
         onClose={() => setPreviewScan(null)}
       />
+    )}
+    {enhanceScanId && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEnhanceScanId(null)}>
+        <div className="bg-white dark:bg-gray-900 rounded-xl p-6 w-full max-w-sm shadow-xl" onClick={(e) => e.stopPropagation()}>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Enhance Scan</h3>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Brightness ({enhanceForm.brightness.toFixed(1)})
+              </label>
+              <input type="range" min="0.1" max="3.0" step="0.1" value={enhanceForm.brightness}
+                onChange={(e) => setEnhanceForm({ ...enhanceForm, brightness: parseFloat(e.target.value) })}
+                className="w-full" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                Contrast ({enhanceForm.contrast.toFixed(1)})
+              </label>
+              <input type="range" min="0.1" max="3.0" step="0.1" value={enhanceForm.contrast}
+                onChange={(e) => setEnhanceForm({ ...enhanceForm, contrast: parseFloat(e.target.value) })}
+                className="w-full" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Rotation</label>
+              <div className="flex gap-2">
+                {[0, 90, 180, 270].map((deg) => (
+                  <button key={deg} onClick={() => setEnhanceForm({ ...enhanceForm, rotation: deg })}
+                    className={`px-3 py-1 text-sm rounded border ${enhanceForm.rotation === deg ? 'bg-blue-50 border-blue-300 text-blue-700 dark:bg-blue-950 dark:border-blue-700 dark:text-blue-300' : 'border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400'}`}
+                  >{deg}&deg;</button>
+                ))}
+              </div>
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={enhanceForm.auto_crop}
+                onChange={(e) => setEnhanceForm({ ...enhanceForm, auto_crop: e.target.checked })}
+                className="rounded border-gray-300 dark:border-gray-600" />
+              <span className="text-gray-700 dark:text-gray-300">Auto-crop whitespace</span>
+            </label>
+          </div>
+          <div className="flex gap-2 justify-end mt-5">
+            <Button size="sm" variant="secondary" onClick={() => setEnhanceScanId(null)}>Cancel</Button>
+            <Button size="sm" onClick={applyEnhance}>Apply</Button>
+          </div>
+        </div>
+      </div>
     )}
     </>
   );
