@@ -326,5 +326,17 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
                         filename=filename,
                         access_token_encrypted=provider.access_token_encrypted,
                     )
+                elif provider.provider == "webdav":
+                    from app.services.webdav_service import webdav_service
+                    from app.services.crypto import decrypt_value
+                    combined = decrypt_value(provider.access_token_encrypted)
+                    parts = combined.split("||", 1)
+                    if len(parts) == 2 and provider.refresh_token_encrypted:
+                        webdav_url, webdav_user = parts
+                        dest = config.get("webdav_folder", "/")
+                        await webdav_service.upload_file(
+                            webdav_url, webdav_user, provider.refresh_token_encrypted,
+                            scan_job.filepath, filename, dest,
+                        )
         except (CloudError, Exception):
             pass
