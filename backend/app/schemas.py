@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # --- Auth ---
@@ -67,26 +67,16 @@ class PrintJobResponse(BaseModel):
 
     model_config = {"from_attributes": True}
 
+    @model_validator(mode="wrap")
     @classmethod
-    def from_job(cls, job) -> "PrintJobResponse":
-        return cls(
-            id=job.id,
-            cups_job_id=job.cups_job_id,
-            title=job.title,
-            filename=job.filename,
-            file_size=job.file_size,
-            mime_type=job.mime_type,
-            status=job.status,
-            copies=job.copies,
-            duplex=job.duplex,
-            media=job.media,
-            source_type=job.source_type,
-            has_pin=bool(job.release_pin),
-            error_message=job.error_message,
-            created_at=job.created_at,
-            updated_at=job.updated_at,
-            completed_at=job.completed_at,
-        )
+    def _compute_has_pin(cls, values, handler):
+        obj = handler(values)
+        # Compute has_pin from the source ORM object or dict
+        if hasattr(values, "release_pin"):
+            obj.has_pin = bool(values.release_pin)
+        elif isinstance(values, dict) and "release_pin" in values:
+            obj.has_pin = bool(values["release_pin"])
+        return obj
 
 
 class PrintJobList(BaseModel):

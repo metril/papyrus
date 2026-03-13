@@ -2,12 +2,14 @@ import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.responses import FileResponse
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_permission
+from app.config import settings
 from app.database import get_db
 from app.services.audit_service import log_event
 from app.services.webhook_service import dispatch_webhook
@@ -100,13 +102,13 @@ async def upload_and_create_job(
     if not hold:
         await _process_job(job, db, default_printer)
 
-    resp = PrintJobResponse.from_job(job)
     # Return the PIN in the initial response so the user can note it
     if pin and hold:
-        resp_dict = resp.model_dump()
+        resp = PrintJobResponse.model_validate(job, from_attributes=True)
+        resp_dict = resp.model_dump(mode="json")
         resp_dict["release_pin"] = pin
-        return resp_dict
-    return resp
+        return JSONResponse(content=resp_dict, status_code=201)
+    return job
 
 
 async def get_default_printer(db: AsyncSession):
@@ -530,6 +532,15 @@ async def reprint_job(
 
     default_printer = await get_default_printer(db)
 
+    # Verify original printer still exists; fall back to default
+    reprint_printer_id = None
+    if original.printer_id:
+        existing_printer = await db.get(Printer, original.printer_id)
+        if existing_printer:
+            reprint_printer_id = existing_printer.id
+    if not reprint_printer_id and default_printer:
+        reprint_printer_id = default_printer.id
+
     new_job = PrintJob(
         user_id=user.id,
         title=original.title,
@@ -542,7 +553,7 @@ async def reprint_job(
         duplex=original.duplex,
         media=original.media,
         source_type="upload",
-        printer_id=original.printer_id or (default_printer.id if default_printer else None),
+        printer_id=reprint_printer_id,
     )
     db.add(new_job)
     await db.commit()
@@ -553,4 +564,4 @@ async def reprint_job(
         "data": {"id": new_job.id, "title": new_job.title, "status": "held", "source_type": "upload"},
     })
 
-    return PrintJobResponse.from_job(new_job)
+    return new_job

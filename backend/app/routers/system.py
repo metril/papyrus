@@ -1,3 +1,4 @@
+import asyncio
 import os
 import shutil
 import time
@@ -32,7 +33,6 @@ async def health_check():
 
     # Check scanner
     try:
-        import asyncio
         proc = await asyncio.create_subprocess_exec(
             "scanimage", "-L",
             stdout=asyncio.subprocess.PIPE,

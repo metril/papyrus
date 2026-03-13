@@ -33,6 +33,14 @@ export default function ScanList() {
   const [merging, setMerging] = useState(false);
   const [enhanceScanId, setEnhanceScanId] = useState<string | null>(null);
   const [enhanceForm, setEnhanceForm] = useState({ brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false, deskew: false });
+  const [enhancing, setEnhancing] = useState(false);
+
+  const defaultEnhanceForm = { brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false, deskew: false };
+
+  const closeEnhanceDialog = () => {
+    setEnhanceScanId(null);
+    setEnhanceForm(defaultEnhanceForm);
+  };
 
   const sendToPaperless = async (scanId: string) => {
     try {
@@ -44,15 +52,17 @@ export default function ScanList() {
   };
 
   const applyEnhance = async () => {
-    if (!enhanceScanId) return;
+    if (!enhanceScanId || enhancing) return;
+    setEnhancing(true);
     try {
       await api.post(`/scanner/scans/${enhanceScanId}/enhance`, enhanceForm);
       toast.show('Enhancement applied', 'success');
-      setEnhanceScanId(null);
-      setEnhanceForm({ brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false, deskew: false });
+      closeEnhanceDialog();
       fetchScans();
     } catch {
       toast.show('Failed to apply enhancement');
+    } finally {
+      setEnhancing(false);
     }
   };
 
@@ -230,7 +240,7 @@ export default function ScanList() {
       />
     )}
     {enhanceScanId && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEnhanceScanId(null)}>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={closeEnhanceDialog} role="dialog" aria-label="Enhance scan">
         <div className="bg-white dark:bg-gray-900 rounded-xl p-6 w-full max-w-sm shadow-xl" onClick={(e) => e.stopPropagation()}>
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Enhance Scan</h3>
           <div className="space-y-4">
@@ -240,7 +250,7 @@ export default function ScanList() {
               </label>
               <input type="range" min="0.1" max="3.0" step="0.1" value={enhanceForm.brightness}
                 onChange={(e) => setEnhanceForm({ ...enhanceForm, brightness: parseFloat(e.target.value) })}
-                className="w-full" />
+                aria-label="Brightness" className="w-full" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
@@ -248,13 +258,14 @@ export default function ScanList() {
               </label>
               <input type="range" min="0.1" max="3.0" step="0.1" value={enhanceForm.contrast}
                 onChange={(e) => setEnhanceForm({ ...enhanceForm, contrast: parseFloat(e.target.value) })}
-                className="w-full" />
+                aria-label="Contrast" className="w-full" />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Rotation</label>
-              <div className="flex gap-2">
+              <div className="flex gap-2" role="group" aria-label="Rotation angle">
                 {[0, 90, 180, 270].map((deg) => (
                   <button key={deg} onClick={() => setEnhanceForm({ ...enhanceForm, rotation: deg })}
+                    aria-pressed={enhanceForm.rotation === deg}
                     className={`px-3 py-1 text-sm rounded border ${enhanceForm.rotation === deg ? 'bg-blue-50 border-blue-300 text-blue-700 dark:bg-blue-950 dark:border-blue-700 dark:text-blue-300' : 'border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400'}`}
                   >{deg}&deg;</button>
                 ))}
@@ -274,8 +285,10 @@ export default function ScanList() {
             </label>
           </div>
           <div className="flex gap-2 justify-end mt-5">
-            <Button size="sm" variant="secondary" onClick={() => setEnhanceScanId(null)}>Cancel</Button>
-            <Button size="sm" onClick={applyEnhance}>Apply</Button>
+            <Button size="sm" variant="secondary" onClick={closeEnhanceDialog}>Cancel</Button>
+            <Button size="sm" onClick={applyEnhance} disabled={enhancing}>
+              {enhancing ? 'Applying...' : 'Apply'}
+            </Button>
           </div>
         </div>
       </div>

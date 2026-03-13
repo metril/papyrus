@@ -37,7 +37,7 @@ export const useJobStore = create<JobState>((set, get) => ({
   },
 
   releaseJob: async (id: number, pin?: string) => {
-    await api.post(`/jobs/${id}/release`, pin ? { pin } : {});
+    await api.post(`/jobs/${id}/release`, pin ? { pin } : undefined);
     await get().fetchJobs();
   },
 
