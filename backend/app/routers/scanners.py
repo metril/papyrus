@@ -217,6 +217,65 @@ async def probe_scanner_ip(
     return {"reachable": False, "device": f"airscan:e:Scanner_{ip.replace('.', '_')}:http://{ip}/eSCL", "make_model": None, "protocol": None, "airscan_url": None, "error": last_error}
 
 
+@router.get("/diagnostics")
+async def scanner_diagnostics(
+    _user: User = Depends(require_admin),
+) -> dict:
+    """Return scanner diagnostics: airscan.conf contents, scanimage -L, airscan-discover."""
+    # Read airscan.conf
+    airscan_conf = ""
+    try:
+        with open(AIRSCAN_CONF) as f:
+            airscan_conf = f.read()
+    except Exception as exc:
+        airscan_conf = f"Error reading: {exc}"
+
+    # Run scanimage -L
+    scanimage_list = ""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "scanimage", "-L",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+        scanimage_list = (stdout.decode() + stderr.decode()).strip()
+    except Exception as exc:
+        scanimage_list = f"Error: {exc}"
+
+    # Run airscan-discover
+    discover_output = ""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "airscan-discover",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        discover_output = (stdout.decode() + stderr.decode()).strip()
+    except Exception as exc:
+        discover_output = f"Error: {exc}"
+
+    # Check airscan.d/ directory
+    airscan_d_files: list[str] = []
+    try:
+        d = "/etc/sane.d/airscan.d"
+        if os.path.isdir(d):
+            for fname in os.listdir(d):
+                fpath = os.path.join(d, fname)
+                with open(fpath) as f:
+                    airscan_d_files.append(f"{fname}:\n{f.read()}")
+    except Exception as exc:
+        airscan_d_files.append(f"Error: {exc}")
+
+    return {
+        "airscan_conf": airscan_conf,
+        "scanimage_list": scanimage_list,
+        "airscan_discover": discover_output,
+        "airscan_d_files": airscan_d_files,
+    }
+
+
 @router.get("/{scanner_id}/test")
 async def test_scanner(
     scanner_id: int,
