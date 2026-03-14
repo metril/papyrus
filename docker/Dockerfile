@@ -65,7 +65,7 @@ COPY docker/avahi/escl.service /etc/avahi/services/escl.service
 COPY docker/avahi/airprint.service /etc/avahi/services/airprint.service
 COPY docker/cups/papyrus-backend /usr/lib/cups/backend/papyrus
 RUN chmod 700 /usr/lib/cups/backend/papyrus
-RUN mkdir -p /etc/cups/ppd
+RUN mkdir -p /etc/cups/ppd /etc/sane.d/airscan.d
 COPY docker/cups/papyrus.ppd /etc/cups/ppd/papyrus.ppd
 
 # Create data directories

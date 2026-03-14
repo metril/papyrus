@@ -15,7 +15,7 @@ from app.models import Scanner, User
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-AIRSCAN_CONF = "/etc/sane.d/airscan.conf"
+AIRSCAN_PAPYRUS_CONF = "/etc/sane.d/airscan.d/papyrus.conf"
 DEFAULT_WSD_PATH = "/WebServices/ScannerService"
 
 
@@ -62,39 +62,34 @@ def _ensure_airscan_config(scanner_name: str, device: str, post_scan_config: dic
 
 
 def _write_airscan_device(name: str, url: str, protocol: str) -> None:
-    """Add a device entry to the main airscan.conf file.
+    """Write a device entry to our own drop-in config file.
 
-    Ensures the [devices] section exists and adds/updates the entry.
+    Manages /etc/sane.d/airscan.d/papyrus.conf as a complete file.
+    Reads existing entries, adds/updates this one, writes the whole file.
     """
-    entry_line = f'"{name}" = {url}, {protocol}\n'
+    os.makedirs(os.path.dirname(AIRSCAN_PAPYRUS_CONF), exist_ok=True)
 
-    # Read existing config
+    # Read existing entries from our config file
+    devices: dict[str, str] = {}
     try:
-        with open(AIRSCAN_CONF) as f:
-            content = f.read()
+        with open(AIRSCAN_PAPYRUS_CONF) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('"') and "=" in line:
+                    devices[line.split("=")[0].strip()] = line.split("=", 1)[1].strip()
     except FileNotFoundError:
-        content = ""
+        pass
 
-    # Check if this device is already configured
-    if f'"{name}"' in content:
-        # Update existing entry
-        new_lines = []
-        for line in content.splitlines(True):
-            if line.strip().startswith(f'"{name}"'):
-                new_lines.append(entry_line)
-            else:
-                new_lines.append(line)
-        content = "".join(new_lines)
-    else:
-        # Add to [devices] section, or create it
-        if "[devices]" in content:
-            content = content.replace("[devices]\n", f"[devices]\n{entry_line}", 1)
-        else:
-            content = f"[devices]\n{entry_line}\n{content}"
+    # Add/update this device
+    devices[f'"{name}"'] = f"{url}, {protocol}"
 
-    with open(AIRSCAN_CONF, "w") as f:
-        f.write(content)
-    logger.info("Updated airscan.conf with device: %s = %s, %s", name, url, protocol)
+    # Write the complete file
+    with open(AIRSCAN_PAPYRUS_CONF, "w") as f:
+        f.write("[devices]\n")
+        for dev_name, dev_val in devices.items():
+            f.write(f"{dev_name} = {dev_val}\n")
+
+    logger.info("Wrote %s with %d device(s)", AIRSCAN_PAPYRUS_CONF, len(devices))
 
 
 class ScannerCreate(BaseModel):
@@ -264,11 +259,19 @@ async def probe_scanner_ip(
 async def scanner_diagnostics(
     _user: User = Depends(require_admin),
 ) -> dict:
-    """Return scanner diagnostics: airscan.conf contents, scanimage -L, airscan-discover."""
-    # Read airscan.conf
+    """Return scanner diagnostics: config files, scanimage -L, airscan-discover."""
+    # Read our papyrus.conf
+    papyrus_conf = ""
+    try:
+        with open(AIRSCAN_PAPYRUS_CONF) as f:
+            papyrus_conf = f.read()
+    except Exception as exc:
+        papyrus_conf = f"Error reading: {exc}"
+
+    # Read main airscan.conf
     airscan_conf = ""
     try:
-        with open(AIRSCAN_CONF) as f:
+        with open("/etc/sane.d/airscan.conf") as f:
             airscan_conf = f.read()
     except Exception as exc:
         airscan_conf = f"Error reading: {exc}"
@@ -312,6 +315,7 @@ async def scanner_diagnostics(
         airscan_d_files.append(f"Error: {exc}")
 
     return {
+        "papyrus_conf": papyrus_conf,
         "airscan_conf": airscan_conf,
         "scanimage_list": scanimage_list,
         "airscan_discover": discover_output,
