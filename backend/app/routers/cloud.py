@@ -13,6 +13,7 @@ from app.auth.dependencies import get_current_user
 from app.config import settings
 from app.database import get_db
 from app.models import CloudProvider, User
+from app.routers.settings import get_setting
 from app.schemas import CloudFileEntry, CloudProviderResponse
 from app.services.cloud_service import CloudError, cloud_service
 from app.services.crypto import decrypt_value, encrypt_value
@@ -81,19 +82,22 @@ async def authorize_provider(
     provider: str,
     request: Request,
     user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Redirect to cloud provider OAuth consent screen."""
     state = secrets.token_urlsafe(32)
     request.session["cloud_oauth_state"] = state
     request.session["cloud_oauth_provider"] = provider
 
-    redirect_uri = f"{settings.base_url}/api/cloud/callback/{provider}"
+    base_url = await get_setting(db, "base_url") or settings.base_url
+    redirect_uri = f"{base_url}/api/cloud/callback/{provider}"
 
     if provider == "gdrive":
-        if not settings.gdrive_client_id:
+        client_id = await get_setting(db, "gdrive_client_id")
+        if not client_id:
             raise HTTPException(status_code=400, detail="Google Drive not configured")
         params = {
-            "client_id": settings.gdrive_client_id,
+            "client_id": client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": GDRIVE_SCOPES,
@@ -105,10 +109,11 @@ async def authorize_provider(
         return RedirectResponse(url=url)
 
     elif provider == "dropbox":
-        if not settings.dropbox_app_key:
+        app_key = await get_setting(db, "dropbox_app_key")
+        if not app_key:
             raise HTTPException(status_code=400, detail="Dropbox not configured")
         params = {
-            "client_id": settings.dropbox_app_key,
+            "client_id": app_key,
             "redirect_uri": redirect_uri,
             "response_type": "code",
             "token_access_type": "offline",
@@ -118,10 +123,11 @@ async def authorize_provider(
         return RedirectResponse(url=url)
 
     elif provider == "onedrive":
-        if not settings.onedrive_client_id:
+        client_id = await get_setting(db, "onedrive_client_id")
+        if not client_id:
             raise HTTPException(status_code=400, detail="OneDrive not configured")
         params = {
-            "client_id": settings.onedrive_client_id,
+            "client_id": client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": ONEDRIVE_SCOPES,
@@ -147,14 +153,17 @@ async def oauth_callback(
     if state != expected_state:
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
-    redirect_uri = f"{settings.base_url}/api/cloud/callback/{provider}"
+    base_url = await get_setting(db, "base_url") or settings.base_url
+    redirect_uri = f"{base_url}/api/cloud/callback/{provider}"
 
     if provider == "gdrive":
+        client_id = await get_setting(db, "gdrive_client_id")
+        client_secret = await get_setting(db, "gdrive_client_secret")
         async with httpx.AsyncClient() as client:
             resp = await client.post(GDRIVE_TOKEN_URL, data={
                 "code": code,
-                "client_id": settings.gdrive_client_id,
-                "client_secret": settings.gdrive_client_secret,
+                "client_id": client_id,
+                "client_secret": client_secret,
                 "redirect_uri": redirect_uri,
                 "grant_type": "authorization_code",
             })
@@ -163,11 +172,13 @@ async def oauth_callback(
         data = resp.json()
 
     elif provider == "dropbox":
+        app_key = await get_setting(db, "dropbox_app_key")
+        app_secret = await get_setting(db, "dropbox_app_secret")
         async with httpx.AsyncClient() as client:
             resp = await client.post(DROPBOX_TOKEN_URL, data={
                 "code": code,
-                "client_id": settings.dropbox_app_key,
-                "client_secret": settings.dropbox_app_secret,
+                "client_id": app_key,
+                "client_secret": app_secret,
                 "redirect_uri": redirect_uri,
                 "grant_type": "authorization_code",
             })
@@ -176,11 +187,13 @@ async def oauth_callback(
         data = resp.json()
 
     elif provider == "onedrive":
+        client_id = await get_setting(db, "onedrive_client_id")
+        client_secret = await get_setting(db, "onedrive_client_secret")
         async with httpx.AsyncClient() as client:
             resp = await client.post(ONEDRIVE_TOKEN_URL, data={
                 "code": code,
-                "client_id": settings.onedrive_client_id,
-                "client_secret": settings.onedrive_client_secret,
+                "client_id": client_id,
+                "client_secret": client_secret,
                 "redirect_uri": redirect_uri,
                 "grant_type": "authorization_code",
                 "scope": ONEDRIVE_SCOPES,
@@ -244,16 +257,22 @@ async def _get_access_token(provider: CloudProvider, db: AsyncSession) -> str:
             )
 
         if provider.provider == "gdrive":
+            client_id = await get_setting(db, "gdrive_client_id")
+            client_secret = await get_setting(db, "gdrive_client_secret")
             new_token, expiry = await cloud_service.refresh_gdrive_token(
-                provider.refresh_token_encrypted
+                provider.refresh_token_encrypted, client_id, client_secret
             )
         elif provider.provider == "dropbox":
+            app_key = await get_setting(db, "dropbox_app_key")
+            app_secret = await get_setting(db, "dropbox_app_secret")
             new_token, expiry = await cloud_service.refresh_dropbox_token(
-                provider.refresh_token_encrypted
+                provider.refresh_token_encrypted, app_key, app_secret
             )
         elif provider.provider == "onedrive":
+            client_id = await get_setting(db, "onedrive_client_id")
+            client_secret = await get_setting(db, "onedrive_client_secret")
             new_token, expiry = await cloud_service.refresh_onedrive_token(
-                provider.refresh_token_encrypted
+                provider.refresh_token_encrypted, client_id, client_secret
             )
         else:
             raise HTTPException(status_code=400, detail="Unknown provider")

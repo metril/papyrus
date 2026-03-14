@@ -69,6 +69,19 @@ async def _load_db_values(db: AsyncSession) -> dict[str, str]:
     return {row.key: row.value for row in result.scalars()}
 
 
+async def get_setting(db: AsyncSession, key: str) -> str | None:
+    """Read a setting from DB (AppConfig), falling back to env-var config."""
+    _type, encrypted = CONFIGURABLE.get(key, (str, False))
+    db_key = _db_key(key, encrypted)
+    row = await db.get(AppConfig, db_key)
+    if row:
+        if encrypted:
+            return decrypt_value(row.value)
+        return row.value
+    val = getattr(settings, key, None)
+    return val if val else None
+
+
 @router.get("")
 async def get_settings(
     db: AsyncSession = Depends(get_db),

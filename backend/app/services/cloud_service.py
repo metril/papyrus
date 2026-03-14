@@ -16,14 +16,14 @@ class CloudService:
     async def refresh_gdrive_token(
         self,
         refresh_token_encrypted: str,
+        client_id: str | None = None,
+        client_secret: str | None = None,
     ) -> tuple[str, datetime | None]:
         """Refresh a Google Drive access token using the refresh token.
 
         Returns (new_access_token, expiry_datetime).
         """
-        from app.config import settings
-
-        if not settings.gdrive_client_id or not settings.gdrive_client_secret:
+        if not client_id or not client_secret:
             raise CloudError("Google Drive OAuth credentials not configured")
 
         refresh_token = decrypt_value(refresh_token_encrypted)
@@ -32,8 +32,8 @@ class CloudService:
             resp = await client.post(
                 "https://oauth2.googleapis.com/token",
                 data={
-                    "client_id": settings.gdrive_client_id,
-                    "client_secret": settings.gdrive_client_secret,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
                     "refresh_token": refresh_token,
                     "grant_type": "refresh_token",
                 },
@@ -178,11 +178,11 @@ class CloudService:
     async def refresh_dropbox_token(
         self,
         refresh_token_encrypted: str,
+        app_key: str | None = None,
+        app_secret: str | None = None,
     ) -> tuple[str, datetime | None]:
         """Refresh a Dropbox access token. Returns (new_access_token, expiry)."""
-        from app.config import settings
-
-        if not settings.dropbox_app_key or not settings.dropbox_app_secret:
+        if not app_key or not app_secret:
             raise CloudError("Dropbox OAuth credentials not configured")
 
         refresh_token = decrypt_value(refresh_token_encrypted)
@@ -193,8 +193,8 @@ class CloudService:
                 data={
                     "grant_type": "refresh_token",
                     "refresh_token": refresh_token,
-                    "client_id": settings.dropbox_app_key,
-                    "client_secret": settings.dropbox_app_secret,
+                    "client_id": app_key,
+                    "client_secret": app_secret,
                 },
             )
             if resp.status_code != 200:
@@ -294,11 +294,11 @@ class CloudService:
     async def refresh_onedrive_token(
         self,
         refresh_token_encrypted: str,
+        client_id: str | None = None,
+        client_secret: str | None = None,
     ) -> tuple[str, datetime | None]:
         """Refresh a OneDrive access token. Returns (new_access_token, expiry)."""
-        from app.config import settings
-
-        if not settings.onedrive_client_id or not settings.onedrive_client_secret:
+        if not client_id or not client_secret:
             raise CloudError("OneDrive OAuth credentials not configured")
 
         refresh_token = decrypt_value(refresh_token_encrypted)
@@ -309,8 +309,8 @@ class CloudService:
                 data={
                     "grant_type": "refresh_token",
                     "refresh_token": refresh_token,
-                    "client_id": settings.onedrive_client_id,
-                    "client_secret": settings.onedrive_client_secret,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
                     "scope": "Files.ReadWrite.All offline_access",
                 },
             )
