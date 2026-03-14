@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_current_user, require_permission
 from app.config import settings
 from app.database import get_db
 from app.models import CloudProvider, User
@@ -35,7 +35,7 @@ ONEDRIVE_SCOPES = "Files.ReadWrite.All offline_access"
 
 @router.get("/providers")
 async def list_providers(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
     """List connected cloud storage providers for the current user."""
@@ -58,7 +58,7 @@ async def list_providers(
 @router.delete("/disconnect/{provider_id}", status_code=204)
 async def disconnect_provider(
     provider_id: int,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
     """Disconnect a cloud storage provider."""
@@ -82,7 +82,7 @@ async def disconnect_provider(
 async def authorize_provider(
     provider: str,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
     """Redirect to cloud provider OAuth consent screen."""
@@ -146,7 +146,7 @@ async def oauth_callback(
     code: str,
     state: str,
     request: Request,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
     """Handle OAuth callback from cloud provider."""
@@ -291,7 +291,7 @@ async def list_files(
     provider_id: int,
     folder_id: str | None = None,
     path: str = "",
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
     """Browse files in a cloud storage provider."""
@@ -338,7 +338,7 @@ async def download_file(
     path: str | None = None,
     filename: str | None = None,
     mime_type: str | None = None,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
     """Download a file from cloud storage."""

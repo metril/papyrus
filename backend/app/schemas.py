@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # --- Auth ---
@@ -18,8 +18,20 @@ class UserResponse(BaseModel):
 
 class APITokenCreate(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    permissions: list[str] = Field(default_factory=lambda: ["print", "scan"])
-    expires_in_days: int | None = None
+    permissions: list[str] = Field(default_factory=list)
+    expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+
+    @field_validator("permissions")
+    @classmethod
+    def validate_permissions(cls, v: list[str]) -> list[str]:
+        from app.auth.dependencies import ALL_PERMISSIONS
+
+        if not v:
+            raise ValueError("At least one permission is required")
+        invalid = set(v) - set(ALL_PERMISSIONS)
+        if invalid:
+            raise ValueError(f"Unknown permissions: {', '.join(sorted(invalid))}")
+        return list(dict.fromkeys(v))  # dedupe preserving order
 
 
 class APITokenResponse(BaseModel):

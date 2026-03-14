@@ -12,6 +12,8 @@ from app.auth.tokens import validate_token
 
 DEV_OIDC_SUB = "dev-local"
 
+ALL_PERMISSIONS = ["print", "scan", "files", "admin", "email"]
+
 
 async def get_current_user(
     request: Request,
@@ -65,14 +67,20 @@ async def get_current_user(
 
 
 async def require_admin(
+    request: Request,
     user: User = Depends(get_current_user),
-    request: Request = None,
 ) -> User:
-    """Require that the current user is an admin."""
+    """Require that the current user is an admin (role + token permission)."""
     if user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
+        )
+    token_permissions = getattr(request.state, "token_permissions", None)
+    if token_permissions is not None and "admin" not in token_permissions:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Token missing required permission: admin",
         )
     return user
 

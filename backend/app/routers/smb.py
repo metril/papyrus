@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user, require_admin
+from app.auth.dependencies import require_admin, require_permission
 from app.database import get_db
 from app.models import SMBShare, User
 from app.schemas import SMBFileEntry, SMBShareCreate, SMBShareResponse
@@ -18,7 +18,7 @@ router = APIRouter()
 
 @router.get("/shares", response_model=list[SMBShareResponse])
 async def list_shares(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
     """List configured SMB shares."""
@@ -71,7 +71,7 @@ async def remove_share(
 async def browse_share(
     share_id: int,
     path: str = Query(default="/"),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
     """Browse files on an SMB share."""
@@ -98,7 +98,7 @@ async def browse_share(
 async def download_from_share(
     share_id: int,
     path: str = Query(...),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
     """Download a file from an SMB share (for printing or local use)."""
