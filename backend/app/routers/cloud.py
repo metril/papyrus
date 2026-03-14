@@ -337,6 +337,7 @@ async def download_file(
     file_id: str | None = None,
     path: str | None = None,
     filename: str | None = None,
+    mime_type: str | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -377,10 +378,22 @@ async def download_file(
 
     background_tasks.add_task(_cleanup_temp_file, local_path)
 
+    # Google Workspace types are exported as PDF by the download methods
+    google_export_types = {
+        "application/vnd.google-apps.document",
+        "application/vnd.google-apps.spreadsheet",
+        "application/vnd.google-apps.presentation",
+    }
+
     display_name = filename or (os.path.basename(path) if path else f"cloud_file_{file_id}")
     content_type, _ = mimetypes.guess_type(display_name)
     if not content_type:
-        content_type = "application/octet-stream"
+        if mime_type and mime_type in google_export_types:
+            content_type = "application/pdf"
+        elif mime_type:
+            content_type = mime_type
+        else:
+            content_type = "application/octet-stream"
 
     return FileResponse(
         local_path,

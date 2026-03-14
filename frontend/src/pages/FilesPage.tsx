@@ -216,7 +216,16 @@ function CloudBrowser() {
   const [loadingProviders, setLoadingProviders] = useState(true);
   const [previewFile, setPreviewFile] = useState<CloudFileEntry | null>(null);
 
+  const googleExportMimes: Record<string, string> = {
+    'application/vnd.google-apps.document': 'application/pdf',
+    'application/vnd.google-apps.spreadsheet': 'application/pdf',
+    'application/vnd.google-apps.presentation': 'application/pdf',
+  };
+
   const getPreviewMime = (entry: CloudFileEntry): string => {
+    if (entry.mime_type && googleExportMimes[entry.mime_type]) {
+      return googleExportMimes[entry.mime_type];
+    }
     if (entry.mime_type) return entry.mime_type;
     const ext = entry.name.split('.').pop()?.toLowerCase();
     const mimeMap: Record<string, string> = {
@@ -281,9 +290,17 @@ function CloudBrowser() {
     if (!selectedProvider) return;
     try {
       const isDropbox = selectedProvider.provider === 'dropbox';
-      const url = getDownloadUrl(selectedProvider.id, entry.id, isDropbox, entry.name);
-      const response = await api.get(url, { responseType: 'blob' });
-      const file = new File([response.data], entry.name);
+      const params = new URLSearchParams();
+      if (isDropbox) params.set('path', entry.id);
+      else params.set('file_id', entry.id);
+      params.set('filename', entry.name);
+      if (entry.mime_type) params.set('mime_type', entry.mime_type);
+      const response = await api.get(
+        `/cloud/download/${selectedProvider.id}?${params}`,
+        { responseType: 'blob' },
+      );
+      const resolvedMime = getPreviewMime(entry);
+      const file = new File([response.data], entry.name, { type: resolvedMime });
       const formData = new FormData();
       formData.append('file', file);
       formData.append('copies', '1');
@@ -400,7 +417,7 @@ function CloudBrowser() {
 
       {previewFile && selectedProvider && (
         <FilePreviewModal
-          url={getDownloadUrl(selectedProvider.id, previewFile.id, selectedProvider.provider === 'dropbox', previewFile.name)}
+          url={getDownloadUrl(selectedProvider.id, previewFile.id, selectedProvider.provider === 'dropbox', previewFile.name, previewFile.mime_type || undefined)}
           filename={previewFile.name}
           mimeType={getPreviewMime(previewFile)}
           onClose={() => setPreviewFile(null)}

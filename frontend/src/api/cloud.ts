@@ -27,6 +27,7 @@ export function getDownloadUrl(
   fileId: string,
   isDropbox: boolean = false,
   filename?: string,
+  mimeType?: string,
 ): string {
   const params = new URLSearchParams();
   if (isDropbox) {
@@ -36,6 +37,9 @@ export function getDownloadUrl(
   }
   if (filename) {
     params.set('filename', filename);
+  }
+  if (mimeType) {
+    params.set('mime_type', mimeType);
   }
   return `/api/cloud/download/${providerId}?${params.toString()}`;
 }
