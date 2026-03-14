@@ -114,7 +114,6 @@ async def probe_scanner_ip(
 
     # --- 2. Fallback: manual eSCL port probing ---
     loop = asyncio.get_event_loop()
-    fallback_device = f"airscan:e:Scanner_{ip.replace('.', '_')}:http://{ip}/eSCL"
     last_error: str = "No scanner found via discovery or eSCL probe"
 
     for base_url in [
@@ -158,7 +157,36 @@ async def probe_scanner_ip(
         except Exception as exc:
             last_error = f"{base_url}: {exc}"
 
-    return {"reachable": False, "device": fallback_device, "make_model": None, "protocol": None, "airscan_url": None, "error": last_error}
+    # --- 3. Fallback: try WSD on port 80 (many printers only support WSD) ---
+    try:
+        import socket
+        def _check_port(h: str = ip) -> bool:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(3)
+            try:
+                s.connect((h, 80))
+                return True
+            finally:
+                s.close()
+
+        reachable = await loop.run_in_executor(None, _check_port)
+        if reachable:
+            label = f"Scanner_{ip.replace('.', '_')}"
+            wsd_url = f"http://{ip}:80/wsd"
+            _write_airscan_device(label, wsd_url, "wsd")
+            device = f"airscan:w:{label}"
+            return {
+                "reachable": True,
+                "device": device,
+                "make_model": None,
+                "protocol": "wsd",
+                "airscan_url": wsd_url,
+                "error": "eSCL not available; configured as WSD (host reachable on port 80)",
+            }
+    except Exception as exc:
+        last_error = f"WSD fallback: {exc}"
+
+    return {"reachable": False, "device": f"airscan:e:Scanner_{ip.replace('.', '_')}:http://{ip}/eSCL", "make_model": None, "protocol": None, "airscan_url": None, "error": last_error}
 
 
 @router.get("/{scanner_id}/test")
