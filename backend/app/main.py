@@ -19,8 +19,6 @@ logger = logging.getLogger(__name__)
 async def _reconcile_on_startup() -> None:
     """Restore CUPS queues and sane-airscan device configs from the DB on startup."""
     import cups
-    import os
-    import re
     from sqlalchemy import select
     from app.database import async_session
     from app.models import Printer, Scanner
@@ -53,22 +51,16 @@ async def _reconcile_on_startup() -> None:
                 )
 
         # --- sane-airscan device configs ---
-        # Scanners with airscan:w: or airscan:e: device strings may need
-        # drop-in configs in /etc/sane.d/airscan.d/ (lost on container restart)
-        airscan_dir = "/etc/sane.d/airscan.d"
-        os.makedirs(airscan_dir, exist_ok=True)
+        # Restore WSD/eSCL device entries to /etc/sane.d/airscan.conf
+        from app.routers.scanners import _write_airscan_device
         result = await db.execute(select(Scanner))
         for scanner_obj in result.scalars():
             cfg = scanner_obj.post_scan_config or {}
             url = cfg.get("airscan_url")
             protocol = cfg.get("airscan_protocol")
             if url and protocol:
-                safe_name = re.sub(r"[^\w-]", "_", scanner_obj.name)
-                path = os.path.join(airscan_dir, f"{safe_name}.conf")
                 try:
-                    with open(path, "w") as f:
-                        f.write(f'[devices]\n"{scanner_obj.name}" = {url}, {protocol}\n')
-                    logger.info("Restored airscan config: %s", scanner_obj.name)
+                    _write_airscan_device(scanner_obj.name, url, protocol)
                 except Exception as exc:
                     logger.warning("Failed to write airscan config for '%s': %s", scanner_obj.name, exc)
 
