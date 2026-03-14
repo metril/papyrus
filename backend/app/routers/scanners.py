@@ -87,7 +87,7 @@ async def probe_scanner_ip(
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
         output = stdout.decode()
 
         # Parse lines like: "Brother DCP-L2540DW" = http://10.10.77.50:80/wsd, wsd
@@ -157,7 +157,36 @@ async def probe_scanner_ip(
         except Exception as exc:
             last_error = f"{base_url}: {exc}"
 
-    # --- 3. Fallback: try WSD on port 80 (many printers only support WSD) ---
+    # --- 3. Fallback: try known WSD URL paths on port 80 ---
+    # WSD paths vary by manufacturer; try common ones
+    wsd_paths = [
+        "/WebServices/ScannerService",  # Brother
+        "/wsd",                          # generic
+        "/WSDScanner",                   # Kyocera / others
+    ]
+    for wsd_path in wsd_paths:
+        wsd_url = f"http://{ip}:80{wsd_path}"
+        try:
+            def _wsd_check(u: str = wsd_url) -> bool:
+                with urlopen(u, timeout=5) as resp:
+                    return resp.status < 500
+
+            await loop.run_in_executor(None, _wsd_check)
+            label = f"Scanner_{ip.replace('.', '_')}"
+            _write_airscan_device(label, wsd_url, "wsd")
+            device = f"airscan:w:{label}"
+            return {
+                "reachable": True,
+                "device": device,
+                "make_model": None,
+                "protocol": "wsd",
+                "airscan_url": wsd_url,
+                "error": None,
+            }
+        except Exception:
+            pass
+
+    # --- 4. Last resort: check if host is reachable on port 80 at all ---
     try:
         import socket
         def _check_port(h: str = ip) -> bool:
@@ -171,8 +200,9 @@ async def probe_scanner_ip(
 
         reachable = await loop.run_in_executor(None, _check_port)
         if reachable:
+            # Host is up but no known WSD/eSCL path responded; try Brother path as best guess
             label = f"Scanner_{ip.replace('.', '_')}"
-            wsd_url = f"http://{ip}:80/wsd"
+            wsd_url = f"http://{ip}:80/WebServices/ScannerService"
             _write_airscan_device(label, wsd_url, "wsd")
             device = f"airscan:w:{label}"
             return {
@@ -181,7 +211,7 @@ async def probe_scanner_ip(
                 "make_model": None,
                 "protocol": "wsd",
                 "airscan_url": wsd_url,
-                "error": "eSCL not available; configured as WSD (host reachable on port 80)",
+                "error": "Host reachable but WSD path not confirmed; using Brother default",
             }
     except Exception as exc:
         last_error = f"WSD fallback: {exc}"
