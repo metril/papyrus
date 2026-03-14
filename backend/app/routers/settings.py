@@ -49,6 +49,12 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "ftp_protocol": (str, False),  # ftp, ftps, sftp
     "require_release_pin": (bool, False),
     "print_retention_days": (int, False),
+    # OIDC (runtime-configurable group mapping)
+    "oidc_admin_group": (str, False),
+    "oidc_groups_claim": (str, False),
+    "oidc_scopes": (str, False),
+    # Email webhook (encryption managed by email.py, not the generic CONFIGURABLE pattern)
+    "email_webhook_secret": (str, False),
 }
 
 _PLACEHOLDER = "*set*"
