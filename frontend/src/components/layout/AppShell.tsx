@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
 import { useThemeStore } from '../../store/themeStore';
 import { useAuthStore } from '../../store/authStore';
@@ -90,7 +91,8 @@ function ThemeToggle({ compact = false }: { compact?: boolean }) {
 
 export default function AppShell() {
   const toast = useToast();
-  const { user, logout } = useAuthStore();
+  const { user, logout, fetchUser } = useAuthStore();
+  useEffect(() => { fetchUser(); }, [fetchUser]);
   const isAdmin = user?.role === 'admin';
   const visibleNavItems = navItems.filter((item) => !item.adminOnly || isAdmin);
 
