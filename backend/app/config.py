@@ -17,10 +17,10 @@ class Settings(BaseSettings):
     session_secret: str = "change-me-in-production"
 
     # Printer fallback name (used if no default printer configured in DB)
-    printer_name: str = "Brother_DCP_L2540DW"
+    printer_name: str = ""
 
     # Scanner fallback device string (used if no default scanner configured in DB)
-    scanner_device: str = "airscan:w:Brother DCP-L2540DW"
+    scanner_device: str = ""
 
     # Storage
     scan_dir: str = "/app/data/scans"
