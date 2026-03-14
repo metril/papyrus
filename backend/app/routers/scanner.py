@@ -16,7 +16,6 @@ from app.services.cloud_service import CloudError, cloud_service
 from app.services.email_service import EmailError, email_service
 from app.services.file_service import cleanup_file
 from app.services.audit_service import log_event
-from app.routers.scanners import _ensure_airscan_config
 from app.services.scan_service import ScanError, scan_service, get_default_scanner, get_default_scanner_device, run_post_scan_actions
 from app.services.smb_service import SMBError, smb_service
 from app.services.webhook_service import dispatch_webhook
@@ -46,10 +45,6 @@ async def initiate_scan(
     """Initiate a single-page scan."""
     scanner = await get_default_scanner(db)
     device = scanner.device if scanner else await get_default_scanner_device(db)
-
-    # Ensure airscan.conf has this device (self-healing after container rebuild)
-    if scanner and device and device.startswith("airscan:"):
-        _ensure_airscan_config(scanner.name, device, scanner.post_scan_config)
 
     # Create scan job record
     job = ScanJob(

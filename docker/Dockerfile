@@ -46,6 +46,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Brother brscan4 network scanner driver (amd64 only)
+RUN curl -fsSL "https://download.brother.com/welcome/dlf105200/brscan4-0.4.11-1.amd64.deb" \
+      -o /tmp/brscan4.deb \
+    && dpkg -i /tmp/brscan4.deb \
+    && rm /tmp/brscan4.deb
+
 # Install pre-built Python wheels (no compilation needed)
 COPY --from=python-build /wheels /wheels
 RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
@@ -65,7 +71,7 @@ COPY docker/avahi/escl.service /etc/avahi/services/escl.service
 COPY docker/avahi/airprint.service /etc/avahi/services/airprint.service
 COPY docker/cups/papyrus-backend /usr/lib/cups/backend/papyrus
 RUN chmod 700 /usr/lib/cups/backend/papyrus
-RUN mkdir -p /etc/cups/ppd /etc/sane.d/airscan.d
+RUN mkdir -p /etc/cups/ppd
 COPY docker/cups/papyrus.ppd /etc/cups/ppd/papyrus.ppd
 
 # Create data directories

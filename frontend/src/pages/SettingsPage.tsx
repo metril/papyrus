@@ -22,6 +22,7 @@ import {
   discoverScanners,
   probeScanner,
   testScanner,
+  registerBrscan4,
 } from '../api/scanners';
 import type { ScannerTestResult } from '../api/scanners';
 import type { APIToken, CloudProvider, ManagedPrinter, ManagedScanner, DiscoveredDevice } from '../types';
@@ -289,7 +290,7 @@ function ScannersCard() {
   const toast = useToast();
   const [scanners, setScanners] = useState<ManagedScanner[]>([]);
   const [showAdd, setShowAdd] = useState(false);
-  const [addMode, setAddMode] = useState<'manual' | 'ip' | 'discover'>('manual');
+  const [addMode, setAddMode] = useState<'manual' | 'ip' | 'discover' | 'brother'>('manual');
   const [editId, setEditId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [discovered, setDiscovered] = useState<DiscoveredDevice[]>([]);
@@ -303,6 +304,11 @@ function ScannersCard() {
   const [probeDevice, setProbeDevice] = useState<string | null>(null);
   const [probeAirscanUrl, setProbeAirscanUrl] = useState<string | null>(null);
   const [probeProtocol, setProbeProtocol] = useState<string | null>(null);
+  // Brother mode state
+  const [brotherModel, setBrotherModel] = useState('');
+  const [brotherDevice, setBrotherDevice] = useState('');
+  const [brotherRegisterStatus, setBrotherRegisterStatus] = useState<'idle' | 'registering' | 'ok' | 'error'>('idle');
+  const [brotherError, setBrotherError] = useState<string | null>(null);
   // Test existing scanner state
   const [testResults, setTestResults] = useState<Record<number, ScannerTestResult | 'testing' | 'error'>>({});
 
@@ -315,6 +321,7 @@ function ScannersCard() {
     : '';
   const canAddScanner = form.name.trim() !== '' && (
     addMode === 'ip' ? ipAddress.trim() !== '' :
+    addMode === 'brother' ? brotherDevice.trim() !== '' :
     form.device.trim() !== ''
   );
 
@@ -344,6 +351,24 @@ function ScannersCard() {
     }
   };
 
+  const handleBrotherRegister = async () => {
+    setBrotherRegisterStatus('registering');
+    setBrotherError(null);
+    try {
+      const result = await registerBrscan4(form.name, brotherModel, ipAddress);
+      if (result.device) {
+        setBrotherDevice(result.device);
+        setBrotherRegisterStatus('ok');
+      } else {
+        setBrotherRegisterStatus('error');
+        setBrotherError(result.error ?? 'Unknown error');
+      }
+    } catch {
+      setBrotherRegisterStatus('error');
+      setBrotherError('Request failed');
+    }
+  };
+
   const handleTestScanner = async (id: number) => {
     setTestResults((r) => ({ ...r, [id]: 'testing' }));
     try {
@@ -364,9 +389,13 @@ function ScannersCard() {
   };
 
   const handleAdd = async () => {
-    const device = addMode === 'ip' ? (probeDevice || ipDevice) : form.device;
+    const device = addMode === 'ip' ? (probeDevice || ipDevice)
+      : addMode === 'brother' ? brotherDevice
+      : form.device;
     if (!form.name || !device) return;
-    const extra = addMode === 'ip' && probeAirscanUrl && probeProtocol
+    const extra = addMode === 'brother'
+      ? { post_scan_config: { brother_model: brotherModel, brother_ip: ipAddress } }
+      : addMode === 'ip' && probeAirscanUrl && probeProtocol
       ? { post_scan_config: { airscan_url: probeAirscanUrl, airscan_protocol: probeProtocol } }
       : {};
     try {
@@ -410,6 +439,10 @@ function ScannersCard() {
     setProbeDevice(null);
     setProbeAirscanUrl(null);
     setProbeProtocol(null);
+    setBrotherModel('');
+    setBrotherDevice('');
+    setBrotherRegisterStatus('idle');
+    setBrotherError(null);
     setForm({ name: '', device: '', description: '', auto_deliver: false });
   };
 
@@ -511,13 +544,13 @@ function ScannersCard() {
           <div className="p-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 space-y-3">
             {/* Mode tabs */}
             <div className="flex gap-1 text-xs">
-              {(['ip', 'manual', 'discover'] as const).map((m) => (
+              {(['ip', 'brother', 'manual', 'discover'] as const).map((m) => (
                 <button
                   key={m}
                   onClick={() => setAddMode(m)}
                   className={`px-3 py-1 rounded-full font-medium ${addMode === m ? 'bg-blue-600 text-white' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
                 >
-                  {m === 'ip' ? 'IP Address' : m === 'manual' ? 'Manual' : 'Discover'}
+                  {m === 'ip' ? 'IP Address' : m === 'brother' ? 'Brother' : m === 'manual' ? 'Manual' : 'Discover'}
                 </button>
               ))}
             </div>
@@ -590,6 +623,51 @@ function ScannersCard() {
                 )}
                 {discovered.length === 0 && !discovering && (
                   <p className="text-xs text-gray-500 dark:text-gray-400">Click "Scan Network" to find scanners via mDNS.</p>
+                )}
+              </div>
+            )}
+
+            {addMode === 'brother' && (
+              <div className="space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <SettingField label="Scanner Name" value={form.name}
+                    onChange={(v) => setForm((f) => ({ ...f, name: v }))}
+                    placeholder="Brother DCP-L2540DW" />
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Model</label>
+                    <input
+                      type="text"
+                      value={brotherModel}
+                      onChange={(e) => setBrotherModel(e.target.value)}
+                      placeholder="DCP-L2540DW"
+                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+                    />
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Exact Brother model name (e.g. DCP-L2540DW)</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP Address</label>
+                    <div className="flex gap-1">
+                      <input
+                        type="text"
+                        value={ipAddress}
+                        onChange={(e) => setIpAddress(e.target.value)}
+                        placeholder="10.10.77.50"
+                        className="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+                      />
+                      <Button size="sm" onClick={handleBrotherRegister}
+                        disabled={!ipAddress || !brotherModel || !form.name || brotherRegisterStatus === 'registering'}>
+                        {brotherRegisterStatus === 'registering' ? '...' : 'Register'}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+                {brotherRegisterStatus === 'ok' && (
+                  <p className="text-xs text-green-600 dark:text-green-400">
+                    Registered — device: <span className="font-mono">{brotherDevice}</span>
+                  </p>
+                )}
+                {brotherRegisterStatus === 'error' && (
+                  <p className="text-xs text-red-600 dark:text-red-400">{brotherError}</p>
                 )}
               </div>
             )}

@@ -57,3 +57,17 @@ export async function testScanner(id: number): Promise<ScannerTestResult> {
   const { data } = await api.get(`/scanners/${id}/test`);
   return data;
 }
+
+export interface Brscan4RegisterResult {
+  device: string | null;
+  error: string | null;
+}
+
+export async function registerBrscan4(
+  name: string,
+  model: string,
+  ip: string,
+): Promise<Brscan4RegisterResult> {
+  const { data } = await api.post('/scanners/register-brscan4', { name, model, ip });
+  return data;
+}

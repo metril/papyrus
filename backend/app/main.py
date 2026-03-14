@@ -50,20 +50,27 @@ async def _reconcile_on_startup() -> None:
                     "Failed to restore CUPS queue '%s': %s", printer_obj.cups_name, exc
                 )
 
-        # --- sane-airscan device configs ---
-        # Restore WSD/eSCL device entries to /etc/sane.d/airscan.conf
-        from app.routers.scanners import _ensure_airscan_config
+        # --- brscan4 registrations ---
         result = await db.execute(select(Scanner))
         for scanner_obj in result.scalars():
-            if scanner_obj.device.startswith("airscan:"):
-                try:
-                    _ensure_airscan_config(
-                        scanner_obj.name,
-                        scanner_obj.device,
-                        scanner_obj.post_scan_config,
-                    )
-                except Exception as exc:
-                    logger.warning("Failed to write airscan config for '%s': %s", scanner_obj.name, exc)
+            cfg = scanner_obj.post_scan_config or {}
+            model = cfg.get("brother_model")
+            ip = cfg.get("brother_ip")
+            if not model or not ip:
+                continue
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "brsaneconfig4", "-a",
+                    f"name={scanner_obj.name}", f"model={model}", f"ip={ip}",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await asyncio.wait_for(proc.communicate(), timeout=10)
+                logger.info("Restored brscan4 registration: %s", scanner_obj.name)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to restore brscan4 '%s': %s", scanner_obj.name, exc
+                )
 
 
 
