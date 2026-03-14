@@ -68,21 +68,38 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(User).where(User.oidc_sub == oidc_sub))
     user = result.scalar_one_or_none()
 
+    # Determine role from OIDC groups claim (if configured)
+    from app.routers.settings import get_setting
+    admin_group = await get_setting(db, "oidc_admin_group") or ""
+    groups_claim = await get_setting(db, "oidc_groups_claim") or "groups"
+    if admin_group:
+        groups = userinfo.get(groups_claim, [])
+        if isinstance(groups, str):
+            groups = [groups]
+        role = "admin" if admin_group in groups else "user"
+    else:
+        role = None  # don't override unless group mapping is configured
+
     if user is None:
-        # Check if this is the first user (make them admin)
-        count_result = await db.execute(select(User))
-        is_first_user = count_result.first() is None
+        # Check if this is the first user (make them admin if no group mapping)
+        if role is None:
+            count_result = await db.execute(select(User))
+            is_first_user = count_result.first() is None
+            role = "admin" if is_first_user else "user"
 
         user = User(
             oidc_sub=oidc_sub,
             email=email,
             display_name=display_name,
-            role="admin" if is_first_user else "user",
+            role=role,
         )
         db.add(user)
     else:
         user.email = email
         user.display_name = display_name
+        # Sync role from OIDC groups on every login
+        if role is not None:
+            user.role = role
 
     user.last_login = datetime.now(timezone.utc)
     await db.commit()
