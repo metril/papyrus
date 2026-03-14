@@ -1,4 +1,7 @@
 import asyncio
+import logging
+import os
+import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -9,7 +12,21 @@ from app.auth.dependencies import get_current_user, require_admin
 from app.database import get_db
 from app.models import Scanner, User
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+AIRSCAN_DROP_IN_DIR = "/etc/sane.d/airscan.d"
+
+
+def _write_airscan_device(name: str, url: str, protocol: str) -> None:
+    """Write a sane-airscan device config to the drop-in directory."""
+    safe_name = re.sub(r"[^\w-]", "_", name)
+    path = os.path.join(AIRSCAN_DROP_IN_DIR, f"{safe_name}.conf")
+    content = f'[devices]\n"{name}" = {url}, {protocol}\n'
+    os.makedirs(AIRSCAN_DROP_IN_DIR, exist_ok=True)
+    with open(path, "w") as f:
+        f.write(content)
+    logger.info("Wrote airscan device config: %s", path)
 
 
 class ScannerCreate(BaseModel):
@@ -55,18 +72,50 @@ async def probe_scanner_ip(
     ip: str,
     _user: User = Depends(require_admin),
 ) -> dict:
-    """Probe a scanner at the given IP address via eSCL.
+    """Probe a scanner at the given IP using airscan-discover (WSD + eSCL).
 
-    Tries port 80, 54921 (Brother/standard AirScan), and 8080 in order,
-    returning the first URL that yields a valid eSCL ScannerCapabilities response.
+    Falls back to manual eSCL port probing if airscan-discover doesn't find the device.
     """
     import xml.etree.ElementTree as ET
     from urllib.request import urlopen
     from urllib.error import URLError
 
-    fallback_device = f"airscan:e:Scanner_{ip.replace('.', '_')}:http://{ip}/eSCL"
+    # --- 1. Try airscan-discover (finds both WSD and eSCL devices) ---
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "airscan-discover",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+        output = stdout.decode()
+
+        # Parse lines like: "Brother DCP-L2540DW" = http://10.10.77.50:80/wsd, wsd
+        for line in output.splitlines():
+            if ip not in line:
+                continue
+            m = re.match(r'\s*"([^"]+)"\s*=\s*(\S+),\s*(\w+)', line)
+            if not m:
+                continue
+            name, url, protocol = m.group(1), m.group(2), m.group(3).lower()
+            prefix = "w" if protocol == "wsd" else "e"
+            device = f"airscan:{prefix}:{name}"
+            _write_airscan_device(name, url, protocol)
+            return {
+                "reachable": True,
+                "device": device,
+                "make_model": name,
+                "protocol": protocol,
+                "airscan_url": url,
+                "error": None,
+            }
+    except (asyncio.TimeoutError, FileNotFoundError) as exc:
+        logger.warning("airscan-discover failed: %s", exc)
+
+    # --- 2. Fallback: manual eSCL port probing ---
     loop = asyncio.get_event_loop()
-    last_error: str = "No eSCL endpoint responded on ports 80, 54921, or 8080"
+    fallback_device = f"airscan:e:Scanner_{ip.replace('.', '_')}:http://{ip}/eSCL"
+    last_error: str = "No scanner found via discovery or eSCL probe"
 
     for base_url in [
         f"http://{ip}/eSCL",
@@ -76,7 +125,7 @@ async def probe_scanner_ip(
         capabilities_url = base_url + "/ScannerCapabilities"
         try:
             def _fetch(u: str = capabilities_url) -> bytes:
-                with urlopen(u, timeout=3) as resp:
+                with urlopen(u, timeout=5) as resp:
                     return resp.read()
 
             raw = await loop.run_in_executor(None, _fetch)
@@ -91,7 +140,15 @@ async def probe_scanner_ip(
                 pass
             label = make_model or f"Scanner_{ip.replace('.', '_')}"
             device = f"airscan:e:{label}:{base_url}"
-            return {"reachable": True, "device": device, "make_model": make_model, "error": None}
+            _write_airscan_device(label, base_url, "eSCL")
+            return {
+                "reachable": True,
+                "device": device,
+                "make_model": make_model,
+                "protocol": "escl",
+                "airscan_url": base_url,
+                "error": None,
+            }
         except TimeoutError:
             last_error = f"{base_url}: timed out"
         except URLError as exc:
@@ -101,7 +158,7 @@ async def probe_scanner_ip(
         except Exception as exc:
             last_error = f"{base_url}: {exc}"
 
-    return {"reachable": False, "device": fallback_device, "make_model": None, "error": last_error}
+    return {"reachable": False, "device": fallback_device, "make_model": None, "protocol": None, "airscan_url": None, "error": last_error}
 
 
 @router.get("/{scanner_id}/test")

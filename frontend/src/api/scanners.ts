@@ -34,6 +34,8 @@ export interface ProbeResult {
   reachable: boolean;
   device: string;
   make_model: string | null;
+  protocol: string | null;
+  airscan_url: string | null;
   error: string | null;
 }
 

@@ -300,6 +300,9 @@ function ScannersCard() {
   const [ipAddress, setIpAddress] = useState('');
   const [probeStatus, setProbeStatus] = useState<'idle' | 'probing' | 'reachable' | 'unreachable'>('idle');
   const [probeError, setProbeError] = useState<string | null>(null);
+  const [probeDevice, setProbeDevice] = useState<string | null>(null);
+  const [probeAirscanUrl, setProbeAirscanUrl] = useState<string | null>(null);
+  const [probeProtocol, setProbeProtocol] = useState<string | null>(null);
   // Test existing scanner state
   const [testResults, setTestResults] = useState<Record<number, ScannerTestResult | 'testing' | 'error'>>({});
 
@@ -319,10 +322,16 @@ function ScannersCard() {
     if (!ipAddress) return;
     setProbeStatus('probing');
     setProbeError(null);
+    setProbeDevice(null);
+    setProbeAirscanUrl(null);
+    setProbeProtocol(null);
     try {
       const result = await probeScanner(ipAddress);
       if (result.reachable) {
         setProbeStatus('reachable');
+        setProbeDevice(result.device);
+        setProbeAirscanUrl(result.airscan_url);
+        setProbeProtocol(result.protocol);
         if (result.make_model && !form.name) {
           setForm((f) => ({ ...f, name: result.make_model! }));
         }
@@ -355,9 +364,11 @@ function ScannersCard() {
   };
 
   const handleAdd = async () => {
-    const device = addMode === 'ip' ? ipDevice : form.device;
+    const device = addMode === 'ip' ? (probeDevice || ipDevice) : form.device;
     if (!form.name || !device) return;
-    const extra = {};
+    const extra = addMode === 'ip' && probeAirscanUrl && probeProtocol
+      ? { post_scan_config: { airscan_url: probeAirscanUrl, airscan_protocol: probeProtocol } }
+      : {};
     try {
       await addScanner({ ...form, device, ...extra });
       setForm({ name: '', device: '', description: '', auto_deliver: false });
@@ -396,6 +407,9 @@ function ScannersCard() {
     setIpAddress('');
     setProbeStatus('idle');
     setProbeError(null);
+    setProbeDevice(null);
+    setProbeAirscanUrl(null);
+    setProbeProtocol(null);
     setForm({ name: '', device: '', description: '', auto_deliver: false });
   };
 
@@ -534,8 +548,8 @@ function ScannersCard() {
                   </div>
                   <SettingField label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="Brother DCP-L2540DW" />
                 </div>
-                {ipDevice && (
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Device string: <span className="font-mono">{ipDevice}</span></p>
+                {(probeDevice || ipDevice) && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Device string: <span className="font-mono">{probeDevice || ipDevice}</span></p>
                 )}
               </div>
             )}
@@ -902,6 +916,21 @@ export default function SettingsPage() {
           <p className="text-xs text-gray-500 dark:text-gray-400">When enabled, uploaded jobs get a randomly generated PIN required at release time.</p>
           <div className="flex justify-end">
             <SaveButton section="application" keys={['base_url', 'dev_mode', 'require_release_pin']} />
+          </div>
+        </div>
+      </Card>
+
+      {/* OIDC Authentication */}
+      <Card title="OIDC Authentication">
+        <div className="space-y-3">
+          <SettingField label="Admin Group" value={appSettings['oidc_admin_group'] ?? ''} onChange={set('oidc_admin_group')} placeholder="papyrus-admins" />
+          <p className="text-xs text-gray-500 dark:text-gray-400">Users in this OIDC group get admin role. Leave empty to use first-user-is-admin fallback.</p>
+          <SettingField label="Groups Claim" value={appSettings['oidc_groups_claim'] ?? 'groups'} onChange={set('oidc_groups_claim')} placeholder="groups" />
+          <p className="text-xs text-gray-500 dark:text-gray-400">OIDC claim name containing the user&apos;s group list. Authentik: &quot;groups&quot;, Keycloak: &quot;groups&quot; (add Group Membership mapper).</p>
+          <SettingField label="Scopes" value={appSettings['oidc_scopes'] ?? 'openid email profile'} onChange={set('oidc_scopes')} placeholder="openid email profile groups" />
+          <p className="text-xs text-gray-500 dark:text-gray-400">OIDC scopes to request. Add &quot;groups&quot; when using group-based admin mapping.</p>
+          <div className="flex justify-end">
+            <SaveButton section="oidc" keys={['oidc_admin_group', 'oidc_groups_claim', 'oidc_scopes']} />
           </div>
         </div>
       </Card>
