@@ -1,6 +1,18 @@
 import { Outlet, NavLink } from 'react-router-dom';
 import { useThemeStore } from '../../store/themeStore';
 import { useAuthStore } from '../../store/authStore';
+
+const UsersIcon = ({ className }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
+  </svg>
+);
+
+const LogoutIcon = ({ className }: { className?: string }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+  </svg>
+);
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { useToast } from '../common/Toast';
 import {
@@ -21,6 +33,7 @@ const navItems = [
   { to: '/files', label: 'Files', icon: FolderIcon },
   { to: '/history', label: 'History', icon: ClockIcon },
   { to: '/dashboard', label: 'Dashboard', icon: ChartIcon, adminOnly: true },
+  { to: '/users', label: 'Users', icon: UsersIcon, adminOnly: true },
   { to: '/audit', label: 'Audit', icon: ShieldIcon, adminOnly: true },
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
 ];
@@ -77,7 +90,7 @@ function ThemeToggle({ compact = false }: { compact?: boolean }) {
 
 export default function AppShell() {
   const toast = useToast();
-  const { user } = useAuthStore();
+  const { user, logout } = useAuthStore();
   const isAdmin = user?.role === 'admin';
   const visibleNavItems = navItems.filter((item) => !item.adminOnly || isAdmin);
 
@@ -115,7 +128,26 @@ export default function AppShell() {
             </NavLink>
           ))}
         </nav>
-        <div className="px-4 pb-4 pt-2 border-t border-gray-200 dark:border-gray-700">
+        <div className="px-4 pb-4 pt-2 border-t border-gray-200 dark:border-gray-700 space-y-2">
+          {user && (
+            <div className="flex items-center justify-between">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{user.display_name}</p>
+                <div className="flex items-center gap-1.5">
+                  <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${isAdmin ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}>
+                    {user.role}
+                  </span>
+                </div>
+              </div>
+              <button
+                onClick={logout}
+                title="Sign out"
+                className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+              >
+                <LogoutIcon className="w-4 h-4" />
+              </button>
+            </div>
+          )}
           <ThemeToggle />
         </div>
       </aside>
