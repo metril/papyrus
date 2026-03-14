@@ -52,15 +52,16 @@ async def _reconcile_on_startup() -> None:
 
         # --- sane-airscan device configs ---
         # Restore WSD/eSCL device entries to /etc/sane.d/airscan.conf
-        from app.routers.scanners import _write_airscan_device
+        from app.routers.scanners import _ensure_airscan_config
         result = await db.execute(select(Scanner))
         for scanner_obj in result.scalars():
-            cfg = scanner_obj.post_scan_config or {}
-            url = cfg.get("airscan_url")
-            protocol = cfg.get("airscan_protocol")
-            if url and protocol:
+            if scanner_obj.device.startswith("airscan:"):
                 try:
-                    _write_airscan_device(scanner_obj.name, url, protocol)
+                    _ensure_airscan_config(
+                        scanner_obj.name,
+                        scanner_obj.device,
+                        scanner_obj.post_scan_config,
+                    )
                 except Exception as exc:
                     logger.warning("Failed to write airscan config for '%s': %s", scanner_obj.name, exc)
 

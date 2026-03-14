@@ -16,6 +16,49 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 AIRSCAN_CONF = "/etc/sane.d/airscan.conf"
+DEFAULT_WSD_PATH = "/WebServices/ScannerService"
+
+
+def _extract_ip_from_device(device: str) -> str | None:
+    """Try to extract an IP address from an airscan device string or name."""
+    m = re.search(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", device)
+    return m.group(1) if m else None
+
+
+def _ensure_airscan_config(scanner_name: str, device: str, post_scan_config: dict | None) -> None:
+    """Ensure this scanner has a [devices] entry in airscan.conf.
+
+    Works for both new scanners (with post_scan_config) and legacy
+    scanners (without it, by deriving URL from the device string).
+    """
+    cfg = post_scan_config or {}
+    url = cfg.get("airscan_url")
+    protocol = cfg.get("airscan_protocol")
+
+    if not url:
+        # Derive from device string
+        ip = _extract_ip_from_device(device)
+        if not ip:
+            return
+        if device.startswith("airscan:w:"):
+            url = f"http://{ip}:80{DEFAULT_WSD_PATH}"
+            protocol = "wsd"
+        elif device.startswith("airscan:e:"):
+            # eSCL URL is embedded in the device string: airscan:e:Name:http://...
+            m = re.search(r"(https?://\S+)", device)
+            url = m.group(1) if m else f"http://{ip}/eSCL"
+            protocol = "eSCL"
+        else:
+            return
+
+    # Extract the display name from the device string (after "airscan:X:")
+    name = scanner_name
+    if device.startswith("airscan:"):
+        parts = device.split(":", 2)
+        if len(parts) >= 3:
+            name = parts[2]
+
+    _write_airscan_device(name, url, protocol)
 
 
 def _write_airscan_device(name: str, url: str, protocol: str) -> None:
@@ -292,6 +335,11 @@ async def test_scanner(
         raise HTTPException(status_code=404, detail="Scanner not found")
 
     device = scanner.device
+
+    # Ensure airscan.conf has this device's entry (self-healing after container rebuild)
+    if device.startswith("airscan:"):
+        _ensure_airscan_config(scanner.name, device, scanner.post_scan_config)
+
     escl_ok = False
     escl_error: str | None = None
     sane_ok = False
@@ -383,16 +431,29 @@ async def add_scanner(
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail=f"Scanner '{body.name}' already exists")
 
+    # Ensure post_scan_config has IP for airscan devices (needed for config restoration)
+    psc = body.post_scan_config or {}
+    if body.device.startswith("airscan:") and "airscan_url" not in psc:
+        ip = _extract_ip_from_device(body.device)
+        if ip and body.device.startswith("airscan:w:"):
+            psc["airscan_url"] = f"http://{ip}:80{DEFAULT_WSD_PATH}"
+            psc["airscan_protocol"] = "wsd"
+
     scanner = Scanner(
         name=body.name,
         device=body.device,
         description=body.description,
         auto_deliver=body.auto_deliver,
-        post_scan_config=body.post_scan_config,
+        post_scan_config=psc if psc else None,
     )
     db.add(scanner)
     await db.commit()
     await db.refresh(scanner)
+
+    # Write airscan.conf entry immediately
+    if body.device.startswith("airscan:"):
+        _ensure_airscan_config(scanner.name, scanner.device, scanner.post_scan_config)
+
     return _scanner_response(scanner)
 
 
