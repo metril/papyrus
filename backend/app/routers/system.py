@@ -3,9 +3,10 @@ import os
 import shutil
 import time
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
+from app.database import get_db
 from app.schemas import HealthResponse
 from app.services.ws_manager import ws_manager
 
@@ -15,7 +16,7 @@ _start_time = time.monotonic()
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health_check():
+async def health_check(db: AsyncSession = Depends(get_db)):
     """Detailed health check with subsystem status."""
     cups_ok = False
     scanner_ok = False
@@ -55,7 +56,9 @@ async def health_check():
 
     # Disk space
     try:
-        usage = shutil.disk_usage(settings.scan_dir)
+        from app.routers.settings import get_setting
+        scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
+        usage = shutil.disk_usage(scan_dir)
         disk_free_mb = usage.free // (1024 * 1024)
     except Exception:
         pass

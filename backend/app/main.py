@@ -74,19 +74,57 @@ async def _reconcile_on_startup() -> None:
 
 
 
+async def _seed_defaults() -> None:
+    """Seed default settings into AppConfig on first run (empty table)."""
+    from sqlalchemy import select, func
+    from app.database import async_session
+    from app.models import AppConfig
+
+    defaults = {
+        "scan_dir": "/app/data/scans",
+        "upload_dir": "/app/data/uploads",
+        "max_upload_size_mb": "50",
+        "scan_retention_days": "7",
+        "print_retention_days": "30",
+        "scan_filename_template": "scan_{date}_{time}_{id}",
+        "base_url": "http://localhost:8080",
+        "dev_mode": "false",
+        "require_release_pin": "false",
+        "smtp_port": "587",
+        "ocr_enabled": "false",
+        "ocr_language": "eng",
+        "ftp_port": "21",
+        "ftp_remote_dir": "/",
+        "ftp_protocol": "ftp",
+        "email_webhook_rate_limit": "10",
+        "escl_enabled": "true",
+        "oidc_scopes": "openid email profile",
+        "oidc_groups_claim": "groups",
+    }
+
+    async with async_session() as db:
+        count = (await db.execute(select(func.count()).select_from(AppConfig))).scalar() or 0
+        if count > 0:
+            return  # Already initialized
+
+        for key, value in defaults.items():
+            db.add(AppConfig(key=key, value=value))
+        await db.commit()
+        logger.info("Seeded %d default settings", len(defaults))
+
+
 async def _retention_loop() -> None:
     """Background task that runs retention cleanup once per hour."""
     from app.database import async_session
+    from app.routers.settings import get_setting
     from app.services.retention_service import run_retention
 
     while True:
         await asyncio.sleep(3600)  # every hour
         try:
             async with async_session() as db:
-                from app.routers.settings import _load_db_values
-                db_values = await _load_db_values(db)
-                scan_days = int(db_values.get("scan_retention_days", "0") or 0) or settings.scan_retention_days
-                print_days = int(db_values.get("print_retention_days", "0") or 0) or settings.print_retention_days
+                scan_days = int(await get_setting(db, "scan_retention_days") or 7)
+                print_days = int(await get_setting(db, "print_retention_days") or 30)
                 await run_retention(db, scan_days=scan_days, print_days=print_days)
         except Exception as exc:
             logger.warning("Retention cleanup failed: %s", exc)
@@ -94,9 +132,17 @@ async def _retention_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    os.makedirs(settings.scan_dir, exist_ok=True)
-    os.makedirs(settings.upload_dir, exist_ok=True)
+    # Startup: seed defaults, create dirs, reconcile hardware
+    await _seed_defaults()
+
+    from app.database import async_session
+    from app.routers.settings import get_setting
+    async with async_session() as db:
+        scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
+        upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
+    os.makedirs(scan_dir, exist_ok=True)
+    os.makedirs(upload_dir, exist_ok=True)
+
     setup_oauth()
     await _reconcile_on_startup()
     retention_task = asyncio.create_task(_retention_loop())

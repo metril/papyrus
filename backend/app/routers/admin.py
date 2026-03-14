@@ -10,7 +10,6 @@ from sqlalchemy import func, select, cast, Date
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_admin
-from app.config import settings
 from app.database import get_db
 from app.models import AuditEntry, AppConfig, PrintJob, ScanJob, User
 
@@ -179,13 +178,11 @@ async def trigger_retention(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Manually trigger retention cleanup."""
-    from app.routers.settings import _load_db_values
+    from app.routers.settings import get_setting
     from app.services.retention_service import run_retention
 
-    db_values = await _load_db_values(db)
-
-    scan_days = int(db_values.get("scan_retention_days", "0") or 0) or settings.scan_retention_days
-    print_days = int(db_values.get("print_retention_days", "0") or 0) or settings.print_retention_days
+    scan_days = int(await get_setting(db, "scan_retention_days") or 7)
+    print_days = int(await get_setting(db, "print_retention_days") or 30)
 
     result = await run_retention(db, scan_days=scan_days, print_days=print_days)
     return result

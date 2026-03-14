@@ -15,8 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.database import async_session, get_db
+from app.routers.settings import get_setting
 from app.models import ScanJob
 from app.services.scan_service import ScanError, get_default_scanner_device, scan_service
 from app.services.ws_manager import ws_manager
@@ -57,9 +57,10 @@ def _xml_response(root: Element) -> Response:
 
 
 @router.get("/ScannerCapabilities")
-async def scanner_capabilities():
+async def scanner_capabilities(db: AsyncSession = Depends(get_db)):
     """Return scanner capabilities in eSCL XML format."""
-    if not settings.escl_enabled:
+    escl_enabled = (await get_setting(db, "escl_enabled") or "").lower() in ("true", "1", "yes")
+    if not escl_enabled:
         raise HTTPException(status_code=503, detail="eSCL scanner disabled")
 
     root = Element("scan:ScannerCapabilities")
@@ -150,9 +151,10 @@ async def scanner_capabilities():
 
 
 @router.get("/ScannerStatus")
-async def scanner_status():
+async def scanner_status(db: AsyncSession = Depends(get_db)):
     """Return current scanner status in eSCL XML format."""
-    if not settings.escl_enabled:
+    escl_enabled = (await get_setting(db, "escl_enabled") or "").lower() in ("true", "1", "yes")
+    if not escl_enabled:
         raise HTTPException(status_code=503, detail="eSCL scanner disabled")
 
     state = "Processing" if scan_service._lock.locked() else "Idle"
@@ -302,9 +304,10 @@ async def _run_scan(job_id: str) -> None:
 
 
 @router.post("/ScanJobs")
-async def create_scan_job(request: Request):
+async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
     """Create a new eSCL scan job and immediately start scanning in the background."""
-    if not settings.escl_enabled:
+    escl_enabled = (await get_setting(db, "escl_enabled") or "").lower() in ("true", "1", "yes")
+    if not escl_enabled:
         raise HTTPException(status_code=503, detail="eSCL scanner disabled")
 
     # Parse scan settings from request body XML

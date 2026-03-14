@@ -9,7 +9,6 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_permission
-from app.config import settings
 from app.database import get_db
 from app.services.audit_service import log_event
 from app.services.webhook_service import dispatch_webhook
@@ -51,10 +50,13 @@ async def upload_and_create_job(
             detail=f"Unsupported file type: {mime_type}. Accepted: PDF, images, office documents.",
         )
 
-    upload_path = get_upload_path(file.filename)
+    from app.routers.settings import get_setting
+    _upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
+    _max_mb = int(await get_setting(db, "max_upload_size_mb") or 50)
+    upload_path = get_upload_path(file.filename, upload_dir=_upload_dir)
     content = await file.read()
 
-    if not validate_upload_size(len(content)):
+    if not validate_upload_size(len(content), max_upload_size_mb=_max_mb):
         raise HTTPException(status_code=413, detail="File too large")
 
     with open(upload_path, "wb") as f:
@@ -66,11 +68,9 @@ async def upload_and_create_job(
     # Determine PIN: use provided value, or check if global setting requires one
     pin = release_pin.strip() if release_pin else None
     if not pin:
-        from app.routers.settings import _load_db_values
-        db_values = await _load_db_values(db)
-        require_pin = db_values.get("require_release_pin", "").lower() in ("true", "1", "yes")
-        if not require_pin:
-            require_pin = settings.require_release_pin
+        from app.routers.settings import get_setting
+        require_pin_val = await get_setting(db, "require_release_pin") or ""
+        require_pin = require_pin_val.lower() in ("true", "1", "yes")
         if require_pin:
             import secrets
             pin = f"{secrets.randbelow(10000):04d}"
@@ -203,7 +203,9 @@ async def ingest_network_job(
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
 
-    upload_path = get_upload_path(file.filename)
+    from app.routers.settings import get_setting
+    _upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
+    upload_path = get_upload_path(file.filename, upload_dir=_upload_dir)
     with open(upload_path, "wb") as f:
         f.write(content)
 

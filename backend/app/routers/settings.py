@@ -5,7 +5,6 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_admin
-from app.config import settings
 from app.database import get_db
 from app.models import AppConfig, User
 from app.services.audit_service import log_event
@@ -76,7 +75,7 @@ async def _load_db_values(db: AsyncSession) -> dict[str, str]:
 
 
 async def get_setting(db: AsyncSession, key: str) -> str | None:
-    """Read a setting from DB (AppConfig), falling back to env-var config."""
+    """Read a setting from the AppConfig database table (DB is single source of truth)."""
     _type, encrypted = CONFIGURABLE.get(key, (str, False))
     db_key = _db_key(key, encrypted)
     row = await db.get(AppConfig, db_key)
@@ -84,8 +83,7 @@ async def get_setting(db: AsyncSession, key: str) -> str | None:
         if encrypted:
             return decrypt_value(row.value)
         return row.value
-    val = getattr(settings, key, None)
-    return val if val else None
+    return None
 
 
 @router.get("")

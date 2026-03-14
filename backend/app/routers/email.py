@@ -8,7 +8,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_admin
-from app.config import settings
 from app.database import get_db
 from app.models import AppConfig, PrintJob, User
 from app.schemas import EmailConfig, EmailConfigStatus
@@ -97,14 +96,13 @@ async def _get_webhook_secret(db: AsyncSession) -> str:
     row = result.scalar_one_or_none()
     if row:
         return decrypt_value(row.value)
-    return settings.email_webhook_secret
+    return ""
 
 
-def _check_rate_limit(client_ip: str) -> bool:
+def _check_rate_limit(client_ip: str, max_requests: int = 10) -> bool:
     """Check if client IP is within rate limit. Returns True if allowed."""
     now = time.time()
     window = 60.0  # 1 minute
-    max_requests = settings.email_webhook_rate_limit
 
     # Clean old entries
     _webhook_requests[client_ip] = [
@@ -134,8 +132,10 @@ async def receive_email(
     a shared secret token, not OIDC.
     """
     # Rate limit
+    from app.routers.settings import get_setting
+    rate_limit = int(await get_setting(db, "email_webhook_rate_limit") or 10)
     client_ip = request.client.host if request.client else "unknown"
-    if not _check_rate_limit(client_ip):
+    if not _check_rate_limit(client_ip, max_requests=rate_limit):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     # Validate webhook token
@@ -146,7 +146,8 @@ async def receive_email(
         raise HTTPException(status_code=403, detail="Invalid webhook token")
 
     # Ensure upload directory exists
-    os.makedirs(settings.upload_dir, exist_ok=True)
+    upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
+    os.makedirs(upload_dir, exist_ok=True)
 
     created_jobs = []
     for upload_file in files:
@@ -158,7 +159,7 @@ async def receive_email(
             continue
 
         # Save file
-        filepath = get_upload_path(upload_file.filename)
+        filepath = get_upload_path(upload_file.filename, upload_dir=upload_dir)
         content = await upload_file.read()
 
         if not content:
@@ -197,15 +198,13 @@ async def get_webhook_info(
     db: AsyncSession = Depends(get_db),
 ):
     """Get webhook URL and configuration status (admin only)."""
-    result = await db.execute(
-        select(AppConfig).where(AppConfig.key == "email_webhook_secret")
-    )
-    has_secret = result.scalar_one_or_none() is not None or bool(
-        settings.email_webhook_secret
-    )
+    from app.routers.settings import get_setting
+    webhook_secret = await get_setting(db, "email_webhook_secret")
+    has_secret = bool(webhook_secret)
+    base_url = await get_setting(db, "base_url") or "http://localhost:8080"
 
     return {
-        "webhook_url": f"{settings.base_url}/api/email/receive",
+        "webhook_url": f"{base_url}/api/email/receive",
         "configured": has_secret,
     }
 
@@ -231,7 +230,10 @@ async def generate_webhook_secret(
 
     await db.commit()
 
+    from app.routers.settings import get_setting
+    base_url = await get_setting(db, "base_url") or "http://localhost:8080"
+
     return {
         "secret": new_secret,
-        "webhook_url": f"{settings.base_url}/api/email/receive",
+        "webhook_url": f"{base_url}/api/email/receive",
     }

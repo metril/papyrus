@@ -8,7 +8,6 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_permission
-from app.config import settings
 from app.database import get_db
 from app.models import CloudProvider, ScanJob, ScanProfile, SMBShare, User
 from app.schemas import BulkDeleteScansRequest, BulkDeleteResponse, CollateRequest, EmailSendRequest, ScanBatchRequest, ScanList, ScanProfileCreate, ScanProfileResponse, ScanRequest, ScanResponse
@@ -43,8 +42,16 @@ async def initiate_scan(
     db: AsyncSession = Depends(get_db),
 ):
     """Initiate a single-page scan."""
+    from app.routers.settings import get_setting
     scanner = await get_default_scanner(db)
     device = scanner.device if scanner else await get_default_scanner_device(db)
+
+    # Configure scan service from DB settings
+    scan_service.configure(
+        scan_dir=await get_setting(db, "scan_dir") or "/app/data/scans",
+        scanner_device=device or "",
+        filename_template=await get_setting(db, "scan_filename_template") or "scan_{date}_{time}_{id}",
+    )
 
     # Create scan job record
     job = ScanJob(
@@ -354,17 +361,10 @@ async def send_scan_to_paperless(
 
     db_values = await _load_db_values(db)
 
-    paperless_url = db_values.get("paperless_url") or ""
-    if not paperless_url:
-        from app.config import settings as app_settings
-        paperless_url = app_settings.paperless_url
-
-    api_token_key = _db_key("paperless_api_token", True)
-    api_token_encrypted = db_values.get(api_token_key) or ""
-    if not api_token_encrypted:
-        from app.config import settings as app_settings
-        if app_settings.paperless_api_token:
-            api_token_encrypted = encrypt_value(app_settings.paperless_api_token)
+    from app.routers.settings import get_setting
+    paperless_url = await get_setting(db, "paperless_url") or ""
+    api_token = await get_setting(db, "paperless_api_token") or ""
+    api_token_encrypted = encrypt_value(api_token) if api_token else ""
 
     if not paperless_url or not api_token_encrypted:
         raise HTTPException(status_code=400, detail="Paperless-ngx not configured")
@@ -404,7 +404,8 @@ async def apply_ocr_to_scan(
     from app.routers.settings import _load_db_values
 
     db_values = await _load_db_values(db)
-    language = db_values.get("ocr_language") or settings.ocr_language
+    from app.routers.settings import get_setting
+    language = await get_setting(db, "ocr_language") or "eng"
 
     try:
         await ocr_service.apply_ocr(job.filepath, language=language)
@@ -553,7 +554,9 @@ async def collate_scans(
         ordered_jobs.append(job)
 
     scan_id = str(_uuid.uuid4())
-    out_path = os.path.join(settings.scan_dir, f"{scan_id}.pdf")
+    from app.routers.settings import get_setting
+    _scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
+    out_path = os.path.join(_scan_dir, f"{scan_id}.pdf")
     writer = PdfWriter()
 
     for job in ordered_jobs:

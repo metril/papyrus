@@ -2,12 +2,9 @@ import cups
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-
-
 class CupsService:
     def __init__(self, printer_name: str | None = None):
-        self.printer_name = printer_name or settings.printer_name
+        self.printer_name = printer_name or ""
 
     def _conn(self) -> cups.Connection:
         return cups.Connection()
@@ -136,4 +133,4 @@ async def get_default_printer(db: AsyncSession):
 async def get_default_printer_name(db: AsyncSession) -> str:
     """Return the CUPS queue name of the default physical printer."""
     printer = await get_default_printer(db)
-    return printer.cups_name if printer else settings.printer_name
+    return printer.cups_name if printer else ""

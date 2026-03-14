@@ -7,7 +7,7 @@ from typing import Callable, Awaitable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
+_DEFAULT_SCAN_DIR = "/app/data/scans"
 
 
 class ScanError(Exception):
@@ -17,6 +17,15 @@ class ScanError(Exception):
 class ScanService:
     def __init__(self):
         self._lock = asyncio.Lock()
+        self._scan_dir = _DEFAULT_SCAN_DIR
+        self._scanner_device = ""
+        self._filename_template = "scan_{date}_{time}_{id}"
+
+    def configure(self, scan_dir: str, scanner_device: str, filename_template: str) -> None:
+        """Update runtime config from DB values."""
+        self._scan_dir = scan_dir or _DEFAULT_SCAN_DIR
+        self._scanner_device = scanner_device or ""
+        self._filename_template = filename_template or "scan_{date}_{time}_{id}"
 
     async def check_device(self) -> dict:
         """Check if the scanner device is available."""
@@ -27,7 +36,7 @@ class ScanService:
         )
         stdout, stderr = await process.communicate()
         output = stdout.decode() + stderr.decode()
-        device = settings.scanner_device
+        device = self._scanner_device
 
         return {
             "available": device.split(":")[-1].strip() in output or process.returncode == 0,
@@ -74,7 +83,7 @@ class ScanService:
 
         async with self._lock:
             scan_id = str(uuid.uuid4())
-            _device = device or settings.scanner_device
+            _device = device or self._scanner_device
 
             # brscan4 uses "FlatBed" (capital B); map common "Flatbed" spelling
             _source = source
@@ -87,7 +96,7 @@ class ScanService:
                 _mode = {"Color": "24bit Color", "Gray": "True Gray", "Lineart": "Black & White"}.get(mode, mode)
 
             # Scan to TIFF as intermediate format, then convert to requested output
-            tiff_file = os.path.join(settings.scan_dir, f"{scan_id}.tiff")
+            tiff_file = os.path.join(self._scan_dir, f"{scan_id}.tiff")
 
             cmd = [
                 "scanimage",
@@ -143,7 +152,7 @@ class ScanService:
             if fmt in ("pdf", "png", "jpeg"):
                 from PIL import Image
                 ext = {"jpeg": "jpg"}.get(fmt, fmt)  # jpeg→jpg, pdf→pdf, png→png
-                out_file = os.path.join(settings.scan_dir, f"{scan_id}.{ext}")
+                out_file = os.path.join(self._scan_dir, f"{scan_id}.{ext}")
                 with Image.open(tiff_file) as img:
                     if fmt == "jpeg":
                         # img.copy() forces full pixel decode so Pillow re-encodes
@@ -182,10 +191,10 @@ class ScanService:
 
         async with self._lock:
             scan_id = str(uuid.uuid4())
-            page_dir = os.path.join(settings.scan_dir, f"batch_{scan_id}")
+            page_dir = os.path.join(self._scan_dir, f"batch_{scan_id}")
             os.makedirs(page_dir, exist_ok=True)
 
-            _device = device or settings.scanner_device
+            _device = device or self._scanner_device
             # scanimage --batch mode scans all pages from ADF
             cmd = [
                 "scanimage",
@@ -223,7 +232,7 @@ class ScanService:
                 raise ScanError("No pages scanned from ADF")
 
             # Merge all pages into a single PDF
-            pdf_file = os.path.join(settings.scan_dir, f"{scan_id}.pdf")
+            pdf_file = os.path.join(self._scan_dir, f"{scan_id}.pdf")
             page_paths = [os.path.join(page_dir, p) for p in pages]
 
             pdf_process = await asyncio.create_subprocess_exec(
@@ -252,7 +261,7 @@ async def get_default_scanner_device(db: AsyncSession) -> str:
     from app.models import Scanner  # avoid circular import at module level
     result = await db.execute(select(Scanner).where(Scanner.is_default == True))
     s = result.scalar_one_or_none()
-    return s.device if s else settings.scanner_device
+    return s.device if s else self._scanner_device
 
 
 async def get_default_scanner(db: AsyncSession):
@@ -317,7 +326,7 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
     config = scanner.post_scan_config
 
     # Use template naming if configured, otherwise fall back to default
-    template = config.get("filename_template") or settings.scan_filename_template
+    template = config.get("filename_template") or self._filename_template
     filename = render_scan_filename(template, scan_job)
 
     # OCR — apply before other delivery actions so recipients get searchable PDF

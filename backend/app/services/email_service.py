@@ -5,7 +5,6 @@ from email.mime.text import MIMEText
 
 import aiosmtplib
 
-from app.config import settings
 from app.services.crypto import decrypt_value
 
 
@@ -15,13 +14,13 @@ class EmailError(Exception):
 
 class EmailService:
     def _get_config(self, db_config: dict | None = None) -> dict:
-        """Get SMTP config from settings or database override."""
+        """Get SMTP config from database values."""
         config = {
-            "host": settings.smtp_host,
-            "port": settings.smtp_port,
-            "user": settings.smtp_user,
-            "password": settings.smtp_password,
-            "from_addr": settings.smtp_from,
+            "host": "",
+            "port": 587,
+            "user": "",
+            "password": "",
+            "from_addr": "",
         }
         if db_config:
             if db_config.get("smtp_host"):

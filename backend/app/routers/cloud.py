@@ -11,7 +11,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_permission
-from app.config import settings
 from app.database import get_db
 from app.models import CloudProvider, User
 from app.routers.settings import get_setting
@@ -90,7 +89,7 @@ async def authorize_provider(
     request.session["cloud_oauth_state"] = state
     request.session["cloud_oauth_provider"] = provider
 
-    base_url = await get_setting(db, "base_url") or settings.base_url
+    base_url = await get_setting(db, "base_url") or "http://localhost:8080"
     redirect_uri = f"{base_url}/api/cloud/callback/{provider}"
 
     if provider == "gdrive":
@@ -154,7 +153,7 @@ async def oauth_callback(
     if state != expected_state:
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
-    base_url = await get_setting(db, "base_url") or settings.base_url
+    base_url = await get_setting(db, "base_url") or "http://localhost:8080"
     redirect_uri = f"{base_url}/api/cloud/callback/{provider}"
 
     if provider == "gdrive":
