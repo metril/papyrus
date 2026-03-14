@@ -6,18 +6,30 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# Stage 2: Runtime
-FROM python:3.12-slim-bookworm
-
-# Install system dependencies: CUPS, SANE, brlaser, sane-airscan, LibreOffice, smbclient
+# Stage 2: Build Python wheels (includes build-time deps only)
+FROM python:3.12-slim-bookworm AS python-build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    libcups2-dev \
+    libsane-dev \
+    libsmbclient-dev \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app/backend
+COPY backend/pyproject.toml ./
+RUN mkdir -p app && touch app/__init__.py \
+    && pip wheel --no-cache-dir -w /wheels ".[cloud,ocr,sftp]"
+
+# Stage 3: Runtime (no build tools, no -dev packages)
+FROM python:3.12-slim-bookworm
+
+# Install runtime-only system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
     cups-client \
-    libcups2-dev \
+    libcups2 \
     sane-utils \
     sane-airscan \
-    libsane-dev \
+    libsane1 \
     img2pdf \
     ghostscript \
     libreoffice-core \
@@ -25,7 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice-calc \
     libreoffice-impress \
     smbclient \
-    libsmbclient-dev \
+    libsmbclient \
     avahi-daemon \
     avahi-utils \
     libnss-mdns \
@@ -34,12 +46,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Python dependencies (create minimal package for dependency caching layer)
-WORKDIR /app/backend
-COPY backend/pyproject.toml ./
-RUN mkdir -p app && touch app/__init__.py && pip install --no-cache-dir ".[cloud,ocr,sftp]"
+# Install pre-built Python wheels (no compilation needed)
+COPY --from=python-build /wheels /wheels
+RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
 
-# Copy backend code (overwrites minimal stub)
+# Copy backend code
+WORKDIR /app/backend
 COPY backend/ ./
 
 # Copy built frontend
