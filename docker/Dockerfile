@@ -34,12 +34,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Brother brscan4 network scanner driver
-RUN curl -fsSL "https://download.brother.com/welcome/dlf105200/brscan4-0.4.11-1.amd64.deb" \
-      -o /tmp/brscan4.deb \
-    && dpkg -i /tmp/brscan4.deb \
-    && rm /tmp/brscan4.deb
-
 # Python dependencies (create minimal package for dependency caching layer)
 WORKDIR /app/backend
 COPY backend/pyproject.toml ./

@@ -104,52 +104,6 @@ async def probe_scanner_ip(
     return {"reachable": False, "device": fallback_device, "make_model": None, "error": last_error}
 
 
-class Brscan4Register(BaseModel):
-    name: str
-    model: str
-    ip: str
-
-
-@router.post("/register-brscan4")
-async def register_brscan4(
-    body: Brscan4Register,
-    _user: User = Depends(require_admin),
-) -> dict:
-    """Register a Brother scanner with brsaneconfig4 and return its SANE device string."""
-    import re
-    if not re.match(r"^[\d.]+$", body.ip):
-        raise HTTPException(status_code=400, detail="Invalid IP address")
-
-    proc = await asyncio.create_subprocess_exec(
-        "brsaneconfig4", "-a",
-        f"name={body.name}", f"model={body.model}", f"ip={body.ip}",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
-    if proc.returncode != 0:
-        return {"device": None, "error": stderr.decode().strip() or "brsaneconfig4 failed"}
-
-    proc2 = await asyncio.create_subprocess_exec(
-        "scanimage", "-L",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    stdout2, _ = await asyncio.wait_for(proc2.communicate(), timeout=15)
-    output = stdout2.decode()
-
-    device = None
-    for line in output.splitlines():
-        m = re.search(r"device `(brother4:[^']+)'", line)
-        if m:
-            device = m.group(1)
-            break
-
-    if not device:
-        return {"device": None, "error": "Registered but device not found in scanimage -L"}
-    return {"device": device, "error": None}
-
-
 @router.get("/{scanner_id}/test")
 async def test_scanner(
     scanner_id: int,

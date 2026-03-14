@@ -22,7 +22,6 @@ import {
   discoverScanners,
   probeScanner,
   testScanner,
-  registerBrscan4,
 } from '../api/scanners';
 import type { ScannerTestResult } from '../api/scanners';
 import type { APIToken, CloudProvider, ManagedPrinter, ManagedScanner, DiscoveredDevice } from '../types';
@@ -290,7 +289,7 @@ function ScannersCard() {
   const toast = useToast();
   const [scanners, setScanners] = useState<ManagedScanner[]>([]);
   const [showAdd, setShowAdd] = useState(false);
-  const [addMode, setAddMode] = useState<'manual' | 'ip' | 'discover' | 'brother'>('manual');
+  const [addMode, setAddMode] = useState<'manual' | 'ip' | 'discover'>('manual');
   const [editId, setEditId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [discovered, setDiscovered] = useState<DiscoveredDevice[]>([]);
@@ -301,11 +300,6 @@ function ScannersCard() {
   const [ipAddress, setIpAddress] = useState('');
   const [probeStatus, setProbeStatus] = useState<'idle' | 'probing' | 'reachable' | 'unreachable'>('idle');
   const [probeError, setProbeError] = useState<string | null>(null);
-  // Brother mode state
-  const [brotherModel, setBrotherModel] = useState('');
-  const [brotherDevice, setBrotherDevice] = useState('');
-  const [brotherRegisterStatus, setBrotherRegisterStatus] = useState<'idle' | 'registering' | 'ok' | 'error'>('idle');
-  const [brotherError, setBrotherError] = useState<string | null>(null);
   // Test existing scanner state
   const [testResults, setTestResults] = useState<Record<number, ScannerTestResult | 'testing' | 'error'>>({});
 
@@ -318,7 +312,6 @@ function ScannersCard() {
     : '';
   const canAddScanner = form.name.trim() !== '' && (
     addMode === 'ip' ? ipAddress.trim() !== '' :
-    addMode === 'brother' ? brotherDevice.trim() !== '' :
     form.device.trim() !== ''
   );
 
@@ -342,24 +335,6 @@ function ScannersCard() {
     }
   };
 
-  const handleBrotherRegister = async () => {
-    setBrotherRegisterStatus('registering');
-    setBrotherError(null);
-    try {
-      const result = await registerBrscan4(form.name, brotherModel, ipAddress);
-      if (result.device) {
-        setBrotherDevice(result.device);
-        setBrotherRegisterStatus('ok');
-      } else {
-        setBrotherRegisterStatus('error');
-        setBrotherError(result.error ?? 'Unknown error');
-      }
-    } catch {
-      setBrotherRegisterStatus('error');
-      setBrotherError('Request failed');
-    }
-  };
-
   const handleTestScanner = async (id: number) => {
     setTestResults((r) => ({ ...r, [id]: 'testing' }));
     try {
@@ -380,13 +355,9 @@ function ScannersCard() {
   };
 
   const handleAdd = async () => {
-    const device = addMode === 'ip' ? ipDevice
-      : addMode === 'brother' ? brotherDevice
-      : form.device;
+    const device = addMode === 'ip' ? ipDevice : form.device;
     if (!form.name || !device) return;
-    const extra = addMode === 'brother'
-      ? { post_scan_config: { brother_model: brotherModel, brother_ip: ipAddress } }
-      : {};
+    const extra = {};
     try {
       await addScanner({ ...form, device, ...extra });
       setForm({ name: '', device: '', description: '', auto_deliver: false });
@@ -425,10 +396,6 @@ function ScannersCard() {
     setIpAddress('');
     setProbeStatus('idle');
     setProbeError(null);
-    setBrotherModel('');
-    setBrotherDevice('');
-    setBrotherRegisterStatus('idle');
-    setBrotherError(null);
     setForm({ name: '', device: '', description: '', auto_deliver: false });
   };
 
@@ -530,13 +497,13 @@ function ScannersCard() {
           <div className="p-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 space-y-3">
             {/* Mode tabs */}
             <div className="flex gap-1 text-xs">
-              {(['ip', 'manual', 'discover', 'brother'] as const).map((m) => (
+              {(['ip', 'manual', 'discover'] as const).map((m) => (
                 <button
                   key={m}
                   onClick={() => setAddMode(m)}
                   className={`px-3 py-1 rounded-full font-medium ${addMode === m ? 'bg-blue-600 text-white' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
                 >
-                  {m === 'ip' ? 'IP Address' : m === 'manual' ? 'Manual' : m === 'discover' ? 'Discover' : 'Brother'}
+                  {m === 'ip' ? 'IP Address' : m === 'manual' ? 'Manual' : 'Discover'}
                 </button>
               ))}
             </div>
@@ -609,51 +576,6 @@ function ScannersCard() {
                 )}
                 {discovered.length === 0 && !discovering && (
                   <p className="text-xs text-gray-500 dark:text-gray-400">Click "Scan Network" to find scanners via mDNS.</p>
-                )}
-              </div>
-            )}
-
-            {addMode === 'brother' && (
-              <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <SettingField label="Scanner Name" value={form.name}
-                    onChange={(v) => setForm((f) => ({ ...f, name: v }))}
-                    placeholder="Brother L2540DW" />
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Model</label>
-                    <input
-                      type="text"
-                      value={brotherModel}
-                      onChange={(e) => setBrotherModel(e.target.value)}
-                      placeholder="DCP-L2540DW"
-                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
-                    />
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Exact Brother model name (e.g. DCP-L2540DW)</p>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP Address</label>
-                    <div className="flex gap-1">
-                      <input
-                        type="text"
-                        value={ipAddress}
-                        onChange={(e) => setIpAddress(e.target.value)}
-                        placeholder="10.10.77.50"
-                        className="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
-                      />
-                      <Button size="sm" onClick={handleBrotherRegister}
-                        disabled={!ipAddress || !brotherModel || !form.name || brotherRegisterStatus === 'registering'}>
-                        {brotherRegisterStatus === 'registering' ? '…' : 'Register'}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-                {brotherRegisterStatus === 'ok' && (
-                  <p className="text-xs text-green-600 dark:text-green-400">
-                    Registered — device: <span className="font-mono">{brotherDevice}</span>
-                  </p>
-                )}
-                {brotherRegisterStatus === 'error' && (
-                  <p className="text-xs text-red-600 dark:text-red-400">{brotherError}</p>
                 )}
               </div>
             )}
@@ -809,6 +731,8 @@ export default function SettingsPage() {
   const [appSettings, setAppSettings] = useState<AppSettings>({});
   const [tokens, setTokens] = useState<APIToken[]>([]);
   const [newTokenName, setNewTokenName] = useState('');
+  const [newTokenPermissions, setNewTokenPermissions] = useState<string[]>([]);
+  const [newTokenExpiry, setNewTokenExpiry] = useState<number | null>(null);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
   const [cloudProviders, setCloudProviders] = useState<CloudProvider[]>([]);
   const [webhookInfo, setWebhookInfo] = useState<{ webhook_url: string; configured: boolean } | null>(null);
@@ -855,15 +779,29 @@ export default function SettingsPage() {
 
   const toast = useToast();
 
+  const allPermissions = ['print', 'scan', 'files', 'admin', 'email'] as const;
+  const permissionLabels: Record<string, string> = {
+    print: 'Print', scan: 'Scan', files: 'Files', admin: 'Admin', email: 'Email',
+  };
+
+  const togglePermission = (perm: string) => {
+    setNewTokenPermissions((prev) =>
+      prev.includes(perm) ? prev.filter((p) => p !== perm) : [...prev, perm]
+    );
+  };
+
   const createToken = async () => {
-    if (!newTokenName) return;
+    if (!newTokenName || newTokenPermissions.length === 0) return;
     try {
       const { data } = await api.post('/auth/tokens', {
         name: newTokenName,
-        permissions: ['print', 'scan'],
+        permissions: newTokenPermissions,
+        expires_in_days: newTokenExpiry,
       });
       setCreatedToken(data.token);
       setNewTokenName('');
+      setNewTokenPermissions([]);
+      setNewTokenExpiry(null);
       const { data: refreshed } = await api.get('/auth/tokens');
       setTokens(refreshed);
     } catch {
@@ -1274,15 +1212,49 @@ export default function SettingsPage() {
       {/* API Tokens */}
       <Card title="API Tokens">
         <div className="space-y-4">
-          <div className="flex gap-2">
+          <div className="space-y-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
             <input
               type="text"
               placeholder="Token name"
               value={newTokenName}
               onChange={(e) => setNewTokenName(e.target.value)}
-              className="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
             />
-            <Button size="sm" onClick={createToken}>Create</Button>
+            <div>
+              <p className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">Permissions</p>
+              <div className="flex flex-wrap gap-2">
+                {allPermissions.map((perm) => (
+                  <label key={perm} className="flex items-center gap-1.5 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={newTokenPermissions.includes(perm)}
+                      onChange={() => togglePermission(perm)}
+                      className="rounded border-gray-300 dark:border-gray-600"
+                    />
+                    <span className="text-gray-700 dark:text-gray-300">{permissionLabels[perm]}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              <div>
+                <p className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Expires</p>
+                <select
+                  value={newTokenExpiry ?? ''}
+                  onChange={(e) => setNewTokenExpiry(e.target.value ? Number(e.target.value) : null)}
+                  className="rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+                >
+                  <option value="">Never</option>
+                  <option value="7">7 days</option>
+                  <option value="30">30 days</option>
+                  <option value="90">90 days</option>
+                  <option value="365">1 year</option>
+                </select>
+              </div>
+              <div className="self-end">
+                <Button size="sm" onClick={createToken} disabled={!newTokenName || newTokenPermissions.length === 0}>Create</Button>
+              </div>
+            </div>
           </div>
           {createdToken && (
             <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
@@ -1300,8 +1272,13 @@ export default function SettingsPage() {
                 <div key={token.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-200 dark:border-gray-700">
                   <div>
                     <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{token.name}</div>
-                    <div className="text-xs text-gray-500 dark:text-gray-400">
-                      {token.permissions.join(', ')}
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {token.permissions.map((p) => (
+                        <span key={p} className="text-xs px-1.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">{p}</span>
+                      ))}
+                    </div>
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      {token.expires_at ? `Expires: ${new Date(token.expires_at).toLocaleDateString()}` : 'No expiry'}
                       {token.last_used_at && ` · Last used: ${new Date(token.last_used_at).toLocaleDateString()}`}
                     </div>
                   </div>

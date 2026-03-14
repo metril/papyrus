@@ -75,18 +75,10 @@ class ScanService:
         async with self._lock:
             scan_id = str(uuid.uuid4())
             _device = device or settings.scanner_device
-
-            # brscan4 uses "FlatBed" (capital B); map common "Flatbed" spelling
             _source = source
-            if _device.startswith("brother4:") and source.lower() == "flatbed":
-                _source = "FlatBed"
-
-            # brscan4 uses different mode names than standard SANE
             _mode = mode
-            if _device.startswith("brother4:"):
-                _mode = {"Color": "24bit Color", "Gray": "True Gray", "Lineart": "Black & White"}.get(mode, mode)
 
-            # Always scan to TIFF; brscan4 only reliably outputs TIFF natively
+            # Scan to TIFF as intermediate format, then convert to requested output
             tiff_file = os.path.join(settings.scan_dir, f"{scan_id}.tiff")
 
             cmd = [

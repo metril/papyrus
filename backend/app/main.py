@@ -17,11 +17,11 @@ logger = logging.getLogger(__name__)
 
 
 async def _reconcile_on_startup() -> None:
-    """Restore CUPS queues and brscan4 registrations from the DB on startup."""
+    """Restore CUPS queues from the DB on startup."""
     import cups
     from sqlalchemy import select
     from app.database import async_session
-    from app.models import Printer, Scanner
+    from app.models import Printer
     from app.services import cups_admin
 
     async with async_session() as db:
@@ -50,27 +50,6 @@ async def _reconcile_on_startup() -> None:
                     "Failed to restore CUPS queue '%s': %s", printer_obj.cups_name, exc
                 )
 
-        # --- brscan4 registrations ---
-        result = await db.execute(select(Scanner))
-        for scanner_obj in result.scalars():
-            cfg = scanner_obj.post_scan_config or {}
-            model = cfg.get("brother_model")
-            ip = cfg.get("brother_ip")
-            if not model or not ip:
-                continue
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "brsaneconfig4", "-a",
-                    f"name={scanner_obj.name}", f"model={model}", f"ip={ip}",
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await asyncio.wait_for(proc.communicate(), timeout=10)
-                logger.info("Restored brscan4 registration: %s", scanner_obj.name)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to restore brscan4 '%s': %s", scanner_obj.name, exc
-                )
 
 
 async def _retention_loop() -> None:
