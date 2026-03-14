@@ -1,3 +1,4 @@
+import mimetypes
 import os
 import secrets
 import tempfile
@@ -335,6 +336,7 @@ async def download_file(
     background_tasks: BackgroundTasks,
     file_id: str | None = None,
     path: str | None = None,
+    filename: str | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -375,5 +377,14 @@ async def download_file(
 
     background_tasks.add_task(_cleanup_temp_file, local_path)
 
-    filename = os.path.basename(path) if path else f"cloud_file_{file_id}"
-    return FileResponse(local_path, filename=filename)
+    display_name = filename or (os.path.basename(path) if path else f"cloud_file_{file_id}")
+    content_type, _ = mimetypes.guess_type(display_name)
+    if not content_type:
+        content_type = "application/octet-stream"
+
+    return FileResponse(
+        local_path,
+        filename=display_name,
+        media_type=content_type,
+        content_disposition_type="inline",
+    )

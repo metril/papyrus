@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
+import FilePreviewModal from '../components/common/FilePreviewModal';
 import api from '../api/client';
 import { listProviders, listFiles, getDownloadUrl } from '../api/cloud';
 import type { SMBShare, SMBFileEntry, CloudProvider, CloudFileEntry } from '../types';
@@ -213,6 +214,17 @@ function CloudBrowser() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadingProviders, setLoadingProviders] = useState(true);
+  const [previewFile, setPreviewFile] = useState<CloudFileEntry | null>(null);
+
+  const getPreviewMime = (entry: CloudFileEntry): string => {
+    if (entry.mime_type) return entry.mime_type;
+    const ext = entry.name.split('.').pop()?.toLowerCase();
+    const mimeMap: Record<string, string> = {
+      pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg',
+      jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+    };
+    return mimeMap[ext || ''] || 'application/octet-stream';
+  };
 
   useEffect(() => {
     listProviders()
@@ -269,7 +281,7 @@ function CloudBrowser() {
     if (!selectedProvider) return;
     try {
       const isDropbox = selectedProvider.provider === 'dropbox';
-      const url = getDownloadUrl(selectedProvider.id, entry.id, isDropbox);
+      const url = getDownloadUrl(selectedProvider.id, entry.id, isDropbox, entry.name);
       const response = await api.get(url, { responseType: 'blob' });
       const file = new File([response.data], entry.name);
       const formData = new FormData();
@@ -369,9 +381,14 @@ function CloudBrowser() {
               )}
             </button>
             {!entry.is_directory && (
-              <Button size="sm" variant="secondary" onClick={() => printCloudFile(entry)}>
-                Print
-              </Button>
+              <div className="flex gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setPreviewFile(entry)}>
+                  View
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => printCloudFile(entry)}>
+                  Print
+                </Button>
+              </div>
             )}
           </div>
         ))}
@@ -380,6 +397,15 @@ function CloudBrowser() {
           <p className="text-gray-500 text-sm">Empty folder.</p>
         )}
       </div>
+
+      {previewFile && selectedProvider && (
+        <FilePreviewModal
+          url={getDownloadUrl(selectedProvider.id, previewFile.id, selectedProvider.provider === 'dropbox', previewFile.name)}
+          filename={previewFile.name}
+          mimeType={getPreviewMime(previewFile)}
+          onClose={() => setPreviewFile(null)}
+        />
+      )}
     </Card>
   );
 }

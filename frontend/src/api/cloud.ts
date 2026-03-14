@@ -26,9 +26,16 @@ export function getDownloadUrl(
   providerId: number,
   fileId: string,
   isDropbox: boolean = false,
+  filename?: string,
 ): string {
+  const params = new URLSearchParams();
   if (isDropbox) {
-    return `/api/cloud/download/${providerId}?path=${encodeURIComponent(fileId)}`;
+    params.set('path', fileId);
+  } else {
+    params.set('file_id', fileId);
   }
-  return `/api/cloud/download/${providerId}?file_id=${encodeURIComponent(fileId)}`;
+  if (filename) {
+    params.set('filename', filename);
+  }
+  return `/api/cloud/download/${providerId}?${params.toString()}`;
 }
