@@ -74,44 +74,27 @@ async def _reconcile_on_startup() -> None:
 
 
 async def _seed_defaults() -> None:
-    """Seed default settings into AppConfig on first run (empty table)."""
-    from sqlalchemy import select, func
+    """Seed missing default settings into AppConfig (fills gaps, not all-or-nothing)."""
+    from sqlalchemy import select
     from app.database import async_session
     from app.models import AppConfig
-
-    defaults = {
-        "scan_dir": "/app/data/scans",
-        "upload_dir": "/app/data/uploads",
-        "max_upload_size_mb": "50",
-        "scan_retention_days": "7",
-        "print_retention_days": "30",
-        "scan_filename_template": "scan_{date}_{time}_{id}",
-        "dev_mode": "false",
-        "require_release_pin": "false",
-        "smtp_port": "587",
-        "ocr_enabled": "false",
-        "ocr_language": "eng",
-        "ftp_port": "21",
-        "ftp_remote_dir": "/",
-        "ftp_protocol": "ftp",
-        "email_webhook_rate_limit": "10",
-        "escl_enabled": "true",
-        "local_auth_enabled": "true",
-        "oidc_enabled": "false",
-        "oidc_scopes": "openid email profile",
-        "oidc_groups_claim": "groups",
-    }
+    from app.routers.settings import DEFAULTS
 
     async with async_session() as db:
-        count = (await db.execute(select(func.count()).select_from(AppConfig))).scalar() or 0
-        if count > 0:
-            logger.info("AppConfig table has %d rows — skipping seed", count)
-            return
+        result = await db.execute(select(AppConfig.key))
+        existing_keys = {row[0] for row in result.all()}
 
-        for key, value in defaults.items():
-            db.add(AppConfig(key=key, value=value))
-        await db.commit()
-        logger.info("Seeded %d default settings", len(defaults))
+        added = 0
+        for key, value in DEFAULTS.items():
+            if key not in existing_keys:
+                db.add(AppConfig(key=key, value=value))
+                added += 1
+
+        if added:
+            await db.commit()
+            logger.info("Seeded %d missing default settings", added)
+        else:
+            logger.info("AppConfig has all %d defaults — nothing to seed", len(DEFAULTS))
 
 
 async def _ensure_local_admin() -> None:

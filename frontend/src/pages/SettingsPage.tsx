@@ -1038,14 +1038,14 @@ export default function SettingsPage() {
       <Card title="Authentication">
         <div className="space-y-3">
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={(appSettings['local_auth_enabled'] ?? 'true') === 'true'} onChange={(e) => set('local_auth_enabled')(e.target.checked ? 'true' : 'false')} className="rounded border-gray-300 dark:border-gray-600" />
+            <input type="checkbox" checked={appSettings['local_auth_enabled'] === true || appSettings['local_auth_enabled'] === 'true' || appSettings['local_auth_enabled'] === undefined} onChange={(e) => set('local_auth_enabled')(e.target.checked ? 'true' : 'false')} className="rounded border-gray-300 dark:border-gray-600" />
             <span className="font-medium text-gray-700 dark:text-gray-300">Enable local login</span>
           </label>
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={(appSettings['oidc_enabled'] ?? 'false') === 'true'} onChange={(e) => set('oidc_enabled')(e.target.checked ? 'true' : 'false')} className="rounded border-gray-300 dark:border-gray-600" />
+            <input type="checkbox" checked={appSettings['oidc_enabled'] === true || appSettings['oidc_enabled'] === 'true'} onChange={(e) => set('oidc_enabled')(e.target.checked ? 'true' : 'false')} className="rounded border-gray-300 dark:border-gray-600" />
             <span className="font-medium text-gray-700 dark:text-gray-300">Enable OIDC / SSO</span>
           </label>
-          {(appSettings['oidc_enabled'] ?? 'false') === 'true' && (
+          {(appSettings['oidc_enabled'] === true || appSettings['oidc_enabled'] === 'true') && (
             <div className="space-y-2 pl-6 border-l-2 border-blue-200 dark:border-blue-800">
               <SettingField label="Issuer URL" value={appSettings['oidc_issuer'] ?? ''} onChange={set('oidc_issuer')} placeholder="https://auth.example.com/application/o/papyrus/" />
               <div className="grid grid-cols-2 gap-2">
