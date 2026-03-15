@@ -120,16 +120,24 @@ async def _ensure_local_admin() -> None:
     from app.models import User
 
     async with async_session() as db:
-        # Check if any admin exists
-        result = await db.execute(select(User).where(User.role == "admin"))
-        if result.scalar_one_or_none():
-            return  # Admin already exists
-
         if not settings.admin_username or not settings.admin_password:
-            logger.warning(
-                "No admin user exists and PAPYRUS_ADMIN_USERNAME/PAPYRUS_ADMIN_PASSWORD not set. "
-                "Set these env vars to create an initial admin account."
-            )
+            return
+
+        # Check if this local admin already exists
+        result = await db.execute(
+            select(User).where(User.username == settings.admin_username, User.is_local == True)
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            # Update password if it changed
+            from argon2 import PasswordHasher
+            ph = PasswordHasher()
+            try:
+                ph.verify(existing.password_hash, settings.admin_password)
+            except Exception:
+                existing.password_hash = ph.hash(settings.admin_password)
+                await db.commit()
+                logger.info("Updated local admin password: %s", settings.admin_username)
             return
 
         from argon2 import PasswordHasher
