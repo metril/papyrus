@@ -45,8 +45,7 @@ async def login(request: Request, db: AsyncSession = Depends(get_db)):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="OIDC not configured",
         )
-    from app.routers.settings import get_setting
-    base_url = await get_setting(db, "base_url") or "http://localhost:8080"
+    base_url = settings.base_url
     redirect_uri = f"{base_url}/api/auth/callback"
     return await oauth.papyrus.authorize_redirect(request, redirect_uri)
 

@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     oidc_client_secret: str = ""
 
     # Server
+    base_url: str = "http://localhost:8080"
     host: str = "0.0.0.0"
     port: int = 8080
 

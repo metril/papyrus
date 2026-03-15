@@ -201,10 +201,9 @@ async def get_webhook_info(
     from app.routers.settings import get_setting
     webhook_secret = await get_setting(db, "email_webhook_secret")
     has_secret = bool(webhook_secret)
-    base_url = await get_setting(db, "base_url") or "http://localhost:8080"
-
+    from app.config import settings
     return {
-        "webhook_url": f"{base_url}/api/email/receive",
+        "webhook_url": f"{settings.base_url}/api/email/receive",
         "configured": has_secret,
     }
 
@@ -230,10 +229,8 @@ async def generate_webhook_secret(
 
     await db.commit()
 
-    from app.routers.settings import get_setting
-    base_url = await get_setting(db, "base_url") or "http://localhost:8080"
-
+    from app.config import settings
     return {
         "secret": new_secret,
-        "webhook_url": f"{base_url}/api/email/receive",
+        "webhook_url": f"{settings.base_url}/api/email/receive",
     }

@@ -87,7 +87,6 @@ async def _seed_defaults() -> None:
         "scan_retention_days": "7",
         "print_retention_days": "30",
         "scan_filename_template": "scan_{date}_{time}_{id}",
-        "base_url": "http://localhost:8080",
         "dev_mode": "false",
         "require_release_pin": "false",
         "smtp_port": "587",
