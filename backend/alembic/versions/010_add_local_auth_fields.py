@@ -2,15 +2,15 @@
 
 Make oidc_sub nullable, add username, password_hash, is_local.
 
-Revision ID: 006
-Revises: 005
+Revision ID: 010
+Revises: 009
 Create Date: 2026-03-14
 """
 from alembic import op
 import sqlalchemy as sa
 
-revision = "006"
-down_revision = "005"
+revision = "010"
+down_revision = "009"
 branch_labels = None
 depends_on = None
 
