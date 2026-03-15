@@ -63,7 +63,7 @@ export default function UsersPage() {
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Users</h2>
+      <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Users</h2>
 
       <Card>
         <div className="space-y-2">

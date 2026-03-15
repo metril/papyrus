@@ -52,7 +52,7 @@ export default function AuditPage() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Audit Log</h2>
+      <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Audit Log</h2>
 
       <Card>
         <div className="space-y-4">

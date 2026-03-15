@@ -34,7 +34,7 @@ export default function CopyPage() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Copy</h2>
+      <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Copy</h2>
 
       <Card title="Quick Copy">
         <div className="space-y-4">

@@ -119,17 +119,20 @@ function LoginScreen() {
   if (!providers) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
-        <div className="text-gray-400 text-sm">Loading...</div>
+        <div className="w-6 h-6 border-2 border-gray-200 border-t-blue-500 rounded-full animate-spinner dark:border-gray-700 dark:border-t-blue-400" />
       </div>
     );
   }
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
-      <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 p-8 w-full max-w-sm space-y-6">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl shadow-gray-300/30 dark:shadow-black/30 border border-gray-100 dark:border-gray-800 p-8 w-full max-w-sm space-y-6">
         <div className="text-center">
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Papyrus</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Print &amp; Scan Server</p>
+          <div className="mx-auto w-12 h-12 bg-blue-50 dark:bg-blue-950/50 rounded-xl flex items-center justify-center mb-3">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0110.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0l.229 2.523a1.125 1.125 0 01-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0021 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 00-1.913-.247M6.34 18H5.25A2.25 2.25 0 013 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 011.913-.247m10.5 0a48.536 48.536 0 00-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18 10.5h.008v.008H18V10.5zm-3 0h.008v.008H15V10.5z" /></svg>
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">Papyrus</h1>
+          <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">Print & Scan Server</p>
         </div>
 
         {(providers.local_enabled || providers.admin_override) && (
@@ -153,7 +156,7 @@ function LoginScreen() {
             <button
               type="submit"
               disabled={loggingIn || !username || !password}
-              className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-lg transition-colors"
+              className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-lg transition-all duration-150 shadow-sm shadow-blue-600/25 hover:shadow-md active:scale-[0.98] dark:bg-blue-500 dark:hover:bg-blue-400"
             >
               {loggingIn ? 'Signing in...' : 'Sign in'}
             </button>
@@ -206,7 +209,7 @@ export default function AppShell() {
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
-        <div className="text-gray-400 text-sm">Loading...</div>
+        <div className="w-6 h-6 border-2 border-gray-200 border-t-blue-500 rounded-full animate-spinner dark:border-gray-700 dark:border-t-blue-400" />
       </div>
     );
   }
@@ -218,9 +221,10 @@ export default function AppShell() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex">
       {/* Desktop sidebar */}
-      <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 bg-white dark:bg-gray-900 border-r border-gray-200 dark:border-gray-700">
-        <div className="flex items-center h-16 px-6 border-b border-gray-200 dark:border-gray-700">
-          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">Papyrus</h1>
+      <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800">
+        <div className="flex flex-col justify-center h-16 px-6 border-b border-gray-100 dark:border-gray-800">
+          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">Papyrus</h1>
+          <p className="text-xs text-gray-400 dark:text-gray-500 -mt-0.5">Print & Scan</p>
         </div>
         <nav className="flex-1 px-4 py-4 space-y-1">
           {visibleNavItems.map(({ to, label, icon: Icon }) => (
@@ -228,10 +232,10 @@ export default function AppShell() {
               key={to}
               to={to}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
                   isActive
-                    ? 'bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
-                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100'
+                    ? 'bg-blue-50/70 text-blue-700 border-l-2 border-blue-600 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-400'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 border-l-2 border-transparent dark:text-gray-400 dark:hover:bg-gray-800/50 dark:hover:text-gray-100'
                 }`
               }
             >
@@ -240,7 +244,7 @@ export default function AppShell() {
             </NavLink>
           ))}
         </nav>
-        <div className="px-4 pb-4 pt-2 border-t border-gray-200 dark:border-gray-700 space-y-2">
+        <div className="px-4 pb-4 pt-2 border-t border-gray-100 dark:border-gray-800 space-y-2">
           {user && (
             <div className="flex items-center justify-between">
               <div className="min-w-0">
@@ -272,7 +276,7 @@ export default function AppShell() {
       </main>
 
       {/* Mobile bottom navigation */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-700 flex justify-around py-2 z-50">
+      <nav className="md:hidden fixed bottom-0 inset-x-0 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex justify-around py-2 z-50">
         {visibleNavItems.slice(0, 3).map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}

@@ -59,17 +59,20 @@ function ToastBanner({ toast, onDismiss }: { toast: ToastItem; onDismiss: (id: n
     }
   }, []);
 
-  const colors: Record<ToastType, string> = {
-    error: 'bg-red-50 dark:bg-red-950 border-red-200 dark:border-red-800 text-red-800 dark:text-red-200',
-    success: 'bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800 text-green-800 dark:text-green-200',
-    info: 'bg-blue-50 dark:bg-blue-950 border-blue-200 dark:border-blue-800 text-blue-800 dark:text-blue-200',
+  const colors: Record<ToastType, { bg: string; bar: string }> = {
+    error: { bg: 'bg-white dark:bg-gray-900 border-gray-100 dark:border-gray-700 text-gray-800 dark:text-gray-200', bar: 'bg-red-500' },
+    success: { bg: 'bg-white dark:bg-gray-900 border-gray-100 dark:border-gray-700 text-gray-800 dark:text-gray-200', bar: 'bg-green-500' },
+    info: { bg: 'bg-white dark:bg-gray-900 border-gray-100 dark:border-gray-700 text-gray-800 dark:text-gray-200', bar: 'bg-blue-500' },
   };
+
+  const { bg, bar } = colors[toast.type];
 
   return (
     <div
       ref={ref}
-      className={`pointer-events-auto flex items-start gap-3 rounded-lg border px-4 py-3 shadow-lg text-sm ${colors[toast.type]}`}
+      className={`pointer-events-auto flex items-start gap-3 rounded-lg border pl-0 pr-4 py-3 shadow-xl text-sm overflow-hidden ${bg}`}
     >
+      <div className={`w-1 self-stretch rounded-r ${bar}`} />
       <span className="flex-1">{toast.message}</span>
       <button
         onClick={() => onDismiss(toast.id)}

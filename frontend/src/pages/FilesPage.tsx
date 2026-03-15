@@ -15,7 +15,7 @@ export default function FilesPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Files</h2>
+        <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Files</h2>
         <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
           <button
             onClick={() => setActiveTab('network')}

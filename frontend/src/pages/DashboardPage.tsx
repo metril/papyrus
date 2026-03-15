@@ -28,7 +28,7 @@ export default function DashboardPage() {
   if (loading) {
     return (
       <div className="space-y-6">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h2>
+        <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Dashboard</h2>
         <p className="text-gray-500 text-sm">Loading...</p>
       </div>
     );
@@ -37,7 +37,7 @@ export default function DashboardPage() {
   if (!stats) {
     return (
       <div className="space-y-6">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h2>
+        <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Dashboard</h2>
         <p className="text-gray-500 text-sm">Failed to load stats. Admin access required.</p>
       </div>
     );
@@ -55,7 +55,7 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h2>
+      <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Dashboard</h2>
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

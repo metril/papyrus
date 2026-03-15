@@ -960,7 +960,7 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Settings</h2>
+      <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Settings</h2>
 
       {settingsLoading && (
         <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 px-4 py-3 rounded">

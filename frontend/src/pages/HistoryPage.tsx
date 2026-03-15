@@ -206,7 +206,7 @@ export default function HistoryPage() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">History</h2>
+      <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">History</h2>
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3">
