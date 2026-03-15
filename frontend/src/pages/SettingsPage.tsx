@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
+import Toggle from '../components/common/Toggle';
 import { useToast } from '../components/common/Toast';
 import api from '../api/client';
 import { listProviders, disconnectProvider, getAuthorizeUrl } from '../api/cloud';
@@ -51,15 +52,11 @@ function SettingField({
 }) {
   if (type === 'checkbox') {
     return (
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={Boolean(value)}
-          onChange={(e) => onChange(String(e.target.checked))}
-          className="rounded border-gray-300 dark:border-gray-600"
-        />
-        <span className="font-medium text-gray-700 dark:text-gray-300">{label}</span>
-      </label>
+      <Toggle
+        checked={Boolean(value)}
+        onChange={(v) => onChange(String(v))}
+        label={label}
+      />
     );
   }
   return (
@@ -164,10 +161,9 @@ function PrintersCard() {
                   <SettingField label="Display Name" value={editForm.display_name} onChange={(v) => setEditForm((f) => ({ ...f, display_name: v }))} />
                   {!p.is_network_queue && <SettingField label="URI" value={editForm.uri} onChange={(v) => setEditForm((f) => ({ ...f, uri: v }))} placeholder="ipp://10.0.0.1/ipp" />}
                   <SettingField label="Description" value={editForm.description} onChange={(v) => setEditForm((f) => ({ ...f, description: v }))} />
-                  <label className="flex items-center gap-2 text-sm self-center">
-                    <input type="checkbox" checked={editForm.auto_release} onChange={(e) => setEditForm((f) => ({ ...f, auto_release: e.target.checked }))} className="rounded border-gray-300 dark:border-gray-600" />
-                    <span className="font-medium text-gray-700 dark:text-gray-300">Auto-release</span>
-                  </label>
+                  <div className="self-center">
+                    <Toggle checked={editForm.auto_release} onChange={(v) => setEditForm((f) => ({ ...f, auto_release: v }))} label="Auto-release" />
+                  </div>
                 </div>
                 <div className="flex gap-2">
                   <Button size="sm" onClick={() => handleUpdate(p.id)}>Save</Button>
@@ -264,14 +260,8 @@ function PrintersCard() {
             )}
 
             <div className="flex gap-4">
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={form.is_network_queue} onChange={(e) => setForm((f) => ({ ...f, is_network_queue: e.target.checked }))} className="rounded border-gray-300 dark:border-gray-600" />
-                <span className="font-medium text-gray-700 dark:text-gray-300">Network queue only (no physical printer)</span>
-              </label>
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={form.auto_release} onChange={(e) => setForm((f) => ({ ...f, auto_release: e.target.checked }))} className="rounded border-gray-300 dark:border-gray-600" />
-                <span className="font-medium text-gray-700 dark:text-gray-300">Auto-release jobs</span>
-              </label>
+              <Toggle checked={form.is_network_queue} onChange={(v) => setForm((f) => ({ ...f, is_network_queue: v }))} label="Network queue only" />
+              <Toggle checked={form.auto_release} onChange={(v) => setForm((f) => ({ ...f, auto_release: v }))} label="Auto-release jobs" />
             </div>
             <div className="flex gap-2">
               <Button size="sm" onClick={handleAdd} disabled={!canAddPrinter}>Add Printer</Button>
@@ -458,10 +448,9 @@ function ScannersCard() {
                   <SettingField label="Name" value={editForm.name} onChange={(v) => setEditForm((f) => ({ ...f, name: v }))} />
                   <SettingField label="SANE Device" value={editForm.device} onChange={(v) => setEditForm((f) => ({ ...f, device: v }))} placeholder="airscan:w:Brother DCP-L2540DW" />
                   <SettingField label="Description" value={editForm.description} onChange={(v) => setEditForm((f) => ({ ...f, description: v }))} />
-                  <label className="flex items-center gap-2 text-sm self-center">
-                    <input type="checkbox" checked={editForm.auto_deliver} onChange={(e) => setEditForm((f) => ({ ...f, auto_deliver: e.target.checked }))} className="rounded border-gray-300 dark:border-gray-600" />
-                    <span className="font-medium text-gray-700 dark:text-gray-300">Auto-deliver</span>
-                  </label>
+                  <div className="self-center">
+                    <Toggle checked={editForm.auto_deliver} onChange={(v) => setEditForm((f) => ({ ...f, auto_deliver: v }))} label="Auto-deliver" />
+                  </div>
                 </div>
                 <div className="flex gap-2">
                   <Button size="sm" onClick={() => handleUpdate(s.id)}>Save</Button>
@@ -674,10 +663,9 @@ function ScannersCard() {
 
             <div className="grid grid-cols-2 gap-2">
               <SettingField label="Description (optional)" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
-              <label className="flex items-center gap-2 text-sm self-center">
-                <input type="checkbox" checked={form.auto_deliver} onChange={(e) => setForm((f) => ({ ...f, auto_deliver: e.target.checked }))} className="rounded border-gray-300 dark:border-gray-600" />
-                <span className="font-medium text-gray-700 dark:text-gray-300">Auto-deliver scans</span>
-              </label>
+              <div className="self-center">
+                <Toggle checked={form.auto_deliver} onChange={(v) => setForm((f) => ({ ...f, auto_deliver: v }))} label="Auto-deliver scans" />
+              </div>
             </div>
 
             <div className="flex gap-2">
@@ -1037,14 +1025,16 @@ export default function SettingsPage() {
       {/* Authentication */}
       <Card title="Authentication">
         <div className="space-y-3">
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={appSettings['local_auth_enabled'] === true || appSettings['local_auth_enabled'] === 'true' || appSettings['local_auth_enabled'] === undefined} onChange={(e) => set('local_auth_enabled')(e.target.checked ? 'true' : 'false')} className="rounded border-gray-300 dark:border-gray-600" />
-            <span className="font-medium text-gray-700 dark:text-gray-300">Enable local login</span>
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={appSettings['oidc_enabled'] === true || appSettings['oidc_enabled'] === 'true'} onChange={(e) => set('oidc_enabled')(e.target.checked ? 'true' : 'false')} className="rounded border-gray-300 dark:border-gray-600" />
-            <span className="font-medium text-gray-700 dark:text-gray-300">Enable OIDC / SSO</span>
-          </label>
+          <Toggle
+            checked={appSettings['local_auth_enabled'] === true || appSettings['local_auth_enabled'] === 'true' || appSettings['local_auth_enabled'] === undefined}
+            onChange={(v) => set('local_auth_enabled')(v ? 'true' : 'false')}
+            label="Enable local login"
+          />
+          <Toggle
+            checked={appSettings['oidc_enabled'] === true || appSettings['oidc_enabled'] === 'true'}
+            onChange={(v) => set('oidc_enabled')(v ? 'true' : 'false')}
+            label="Enable OIDC / SSO"
+          />
           {(appSettings['oidc_enabled'] === true || appSettings['oidc_enabled'] === 'true') && (
             <div className="space-y-2 pl-6 border-l-2 border-blue-200 dark:border-blue-800">
               <SettingField label="Issuer URL" value={appSettings['oidc_issuer'] ?? ''} onChange={set('oidc_issuer')} placeholder="https://auth.example.com/application/o/papyrus/" />
@@ -1224,15 +1214,11 @@ export default function SettingsPage() {
           <p className="text-sm text-gray-500 dark:text-gray-400">
             Apply Tesseract OCR to scanned PDFs to make them searchable. Requires tesseract-ocr and ocrmypdf.
           </p>
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={appSettings.ocr_enabled === true || appSettings.ocr_enabled === 'true'}
-              onChange={(e) => set('ocr_enabled')(String(e.target.checked))}
-              className="rounded border-gray-300 dark:border-gray-600"
-            />
-            <span className="text-sm text-gray-700 dark:text-gray-300">Enable OCR for auto-deliver scans</span>
-          </label>
+          <Toggle
+            checked={appSettings.ocr_enabled === true || appSettings.ocr_enabled === 'true'}
+            onChange={(v) => set('ocr_enabled')(String(v))}
+            label="Enable OCR for auto-deliver scans"
+          />
           <SettingField
             label="OCR Language"
             value={appSettings.ocr_language ?? 'eng'}

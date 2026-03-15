@@ -4,6 +4,7 @@ import { useWebSocket } from '../../hooks/useWebSocket';
 import { getScanDownloadUrl } from '../../api/scanner';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
+import Toggle from '../common/Toggle';
 import FilePreviewModal from '../common/FilePreviewModal';
 import EmailScanDialog from './EmailScanDialog';
 import CloudSaveDialog from './CloudSaveDialog';
@@ -332,18 +333,8 @@ export default function ScanList() {
                 ))}
               </div>
             </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={enhanceForm.auto_crop}
-                onChange={(e) => setEnhanceForm({ ...enhanceForm, auto_crop: e.target.checked })}
-                className="rounded border-gray-300 dark:border-gray-600" />
-              <span className="text-gray-700 dark:text-gray-300">Auto-crop whitespace</span>
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={enhanceForm.deskew}
-                onChange={(e) => setEnhanceForm({ ...enhanceForm, deskew: e.target.checked })}
-                className="rounded border-gray-300 dark:border-gray-600" />
-              <span className="text-gray-700 dark:text-gray-300">Auto-deskew (straighten)</span>
-            </label>
+            <Toggle checked={enhanceForm.auto_crop} onChange={(v) => setEnhanceForm({ ...enhanceForm, auto_crop: v })} label="Auto-crop whitespace" />
+            <Toggle checked={enhanceForm.deskew} onChange={(v) => setEnhanceForm({ ...enhanceForm, deskew: v })} label="Auto-deskew (straighten)" />
           </div>
           <div className="flex gap-2 justify-end mt-5">
             <Button size="sm" variant="secondary" onClick={closeEnhanceDialog}>Cancel</Button>

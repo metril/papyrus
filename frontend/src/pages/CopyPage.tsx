@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
+import Toggle from '../components/common/Toggle';
 import ProgressBar from '../components/common/ProgressBar';
 import api from '../api/client';
 
@@ -105,16 +106,7 @@ export default function CopyPage() {
               </select>
             </div>
             <div className="flex items-end">
-              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                <input
-                  type="checkbox"
-                  checked={duplex}
-                  onChange={(e) => setDuplex(e.target.checked)}
-                  disabled={copying}
-                  className="rounded border-gray-300"
-                />
-                Duplex
-              </label>
+              <Toggle checked={duplex} onChange={setDuplex} disabled={copying} label="Duplex" />
             </div>
           </div>
 

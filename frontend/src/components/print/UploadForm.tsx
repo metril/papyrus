@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import Button from '../common/Button';
+import Toggle from '../common/Toggle';
 import { uploadPrintJob } from '../../api/printer';
 import { useJobStore } from '../../store/jobStore';
 
@@ -106,15 +107,7 @@ export default function UploadForm() {
               </select>
             </div>
             <div className="flex items-end">
-              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
-                <input
-                  type="checkbox"
-                  checked={duplex}
-                  onChange={(e) => setDuplex(e.target.checked)}
-                  className="rounded border-gray-300"
-                />
-                Duplex
-              </label>
+              <Toggle checked={duplex} onChange={setDuplex} label="Duplex" />
             </div>
           </div>
 
