@@ -97,8 +97,6 @@ async def _seed_defaults() -> None:
         "ftp_protocol": "ftp",
         "email_webhook_rate_limit": "10",
         "escl_enabled": "true",
-        "oidc_scopes": "openid email profile",
-        "oidc_groups_claim": "groups",
     }
 
     async with async_session() as db:

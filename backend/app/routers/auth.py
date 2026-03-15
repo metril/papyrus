@@ -70,9 +70,8 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)):
     user = result.scalar_one_or_none()
 
     # Determine role from OIDC groups claim (if configured)
-    from app.routers.settings import get_setting
-    admin_group = await get_setting(db, "oidc_admin_group") or ""
-    groups_claim = await get_setting(db, "oidc_groups_claim") or "groups"
+    admin_group = settings.oidc_admin_group
+    groups_claim = settings.oidc_groups_claim
     if admin_group:
         groups = userinfo.get(groups_claim, [])
         if isinstance(groups, str):

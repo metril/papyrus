@@ -998,21 +998,6 @@ export default function SettingsPage() {
         </div>
       </Card>
 
-      {/* OIDC Authentication */}
-      <Card title="OIDC Authentication">
-        <div className="space-y-3">
-          <SettingField label="Admin Group" value={appSettings['oidc_admin_group'] ?? ''} onChange={set('oidc_admin_group')} placeholder="papyrus-admins" />
-          <p className="text-xs text-gray-500 dark:text-gray-400">Users in this OIDC group get admin role. Leave empty to use first-user-is-admin fallback.</p>
-          <SettingField label="Groups Claim" value={appSettings['oidc_groups_claim'] ?? 'groups'} onChange={set('oidc_groups_claim')} placeholder="groups" />
-          <p className="text-xs text-gray-500 dark:text-gray-400">OIDC claim name containing the user&apos;s group list. Authentik: &quot;groups&quot;, Keycloak: &quot;groups&quot; (add Group Membership mapper).</p>
-          <SettingField label="Scopes" value={appSettings['oidc_scopes'] ?? 'openid email profile'} onChange={set('oidc_scopes')} placeholder="openid email profile groups" />
-          <p className="text-xs text-gray-500 dark:text-gray-400">OIDC scopes to request. Add &quot;groups&quot; when using group-based admin mapping.</p>
-          <div className="flex justify-end">
-            <SaveButton section="oidc" keys={['oidc_admin_group', 'oidc_groups_claim', 'oidc_scopes']} />
-          </div>
-        </div>
-      </Card>
-
       {/* Email / SMTP */}
       <Card title="Email (SMTP)">
         <div className="space-y-3">

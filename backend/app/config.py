@@ -17,10 +17,13 @@ class Settings(BaseSettings):
     # Encryption
     encryption_key: str = ""  # Fernet key for encrypting secrets at rest
 
-    # OIDC (registered at startup — cannot change at runtime)
+    # OIDC (all env-var only — needed at startup before login)
     oidc_issuer: str = ""
     oidc_client_id: str = ""
     oidc_client_secret: str = ""
+    oidc_scopes: str = "openid email profile"
+    oidc_admin_group: str = ""        # OIDC group name that grants admin role
+    oidc_groups_claim: str = "groups"  # claim name containing group list
 
     # Server
     base_url: str = "http://localhost:8080"

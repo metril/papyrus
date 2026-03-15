@@ -72,6 +72,9 @@ Only infrastructure settings use env vars (`PAPYRUS_` prefix). All other setting
 - `PAPYRUS_SESSION_SECRET` — Session cookie encryption key
 - `PAPYRUS_BASE_URL` — Public URL for OIDC callbacks and webhooks
 - `PAPYRUS_OIDC_ISSUER`, `PAPYRUS_OIDC_CLIENT_ID`, `PAPYRUS_OIDC_CLIENT_SECRET` — OIDC provider
+- `PAPYRUS_OIDC_SCOPES` — OIDC scopes (default: `openid email profile`)
+- `PAPYRUS_OIDC_ADMIN_GROUP` — OIDC group name that grants admin role
+- `PAPYRUS_OIDC_GROUPS_CLAIM` — Claim name containing group list (default: `groups`)
 - `PAPYRUS_DEV_MODE` — Development mode (bypass OIDC)
 
 **UI-managed settings** (stored in DB, configured via Settings page):
