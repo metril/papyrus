@@ -33,7 +33,9 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Detailed Health Check**: System health endpoint with CUPS, scanner, database, disk, and uptime status
 - **PWA Support**: Installable as a Progressive Web App on mobile and desktop
 - **Responsive Design**: Works on phones, tablets, and desktops
-- **Authentication**: OIDC (Authentik/Keycloak) for users, API tokens for programmatic access
+- **Authentication**: OIDC (Authentik/Keycloak) with group-based role mapping, API tokens with fine-grained permissions
+- **User Management**: Admin user list with role management, user profile display with logout
+- **Login Screen**: Clean SSO login page for unauthenticated users
 
 ## Supported Hardware
 
@@ -86,18 +88,34 @@ npm run dev
 
 ## Configuration
 
-All configuration is via environment variables with the `PAPYRUS_` prefix. See [.env.example](.env.example) for all available options.
+Infrastructure settings use environment variables (`PAPYRUS_` prefix). All other settings (SMTP, cloud storage, scanner, printer, OCR, retention, etc.) are configured via the **Settings UI** and stored in the database.
 
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `PAPYRUS_DB_URL` | PostgreSQL connection URL | Yes |
-| `PAPYRUS_OIDC_ISSUER` | OIDC provider issuer URL | Yes |
-| `PAPYRUS_OIDC_CLIENT_ID` | OIDC client ID | Yes |
-| `PAPYRUS_OIDC_CLIENT_SECRET` | OIDC client secret | Yes |
-| `PAPYRUS_PRINTER_URI` | Printer IPP URI (e.g., `ipp://192.168.1.100/ipp`) | Yes |
-| `PAPYRUS_SCANNER_DEVICE` | SANE scanner device string | Yes |
-| `PAPYRUS_ENCRYPTION_KEY` | Fernet key for encrypting secrets at rest | Yes |
-| `PAPYRUS_BASE_URL` | Public URL for OAuth callbacks | Yes |
+See [.env.example](.env.example) for the full list.
+
+### Required Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `PAPYRUS_DB_URL` | PostgreSQL connection URL |
+| `PAPYRUS_ENCRYPTION_KEY` | Fernet key for encrypting secrets at rest |
+| `PAPYRUS_SESSION_SECRET` | Session cookie encryption key |
+| `PAPYRUS_BASE_URL` | Public URL (for OIDC callbacks and webhooks) |
+| `PAPYRUS_OIDC_ISSUER` | OIDC provider issuer URL |
+| `PAPYRUS_OIDC_CLIENT_ID` | OIDC client ID |
+| `PAPYRUS_OIDC_CLIENT_SECRET` | OIDC client secret |
+
+### Settings UI
+
+After first login, configure everything else via **Settings**:
+- **Printers**: Add/manage CUPS printers
+- **Scanners**: Register Brother scanners (brscan4), probe by IP, or discover via mDNS
+- **OIDC**: Admin group mapping, groups claim name, scopes
+- **Email**: SMTP, webhook secret
+- **Cloud**: Google Drive, Dropbox, OneDrive OAuth credentials
+- **OCR**: Enable/disable, language
+- **FTP/SFTP**: Upload targets
+- **Paperless-ngx**: URL and API token
+- **Retention**: Scan and print job cleanup periods
 
 ## License
 

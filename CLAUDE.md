@@ -12,7 +12,7 @@ Papyrus is a web-based print and scan server for network-connected Brother DCP-L
 - **Network Discovery**: Avahi mDNS (AirPrint `_ipp._tcp`, eSCL `_uscan._tcp`)
 - **Doc Conversion**: LibreOffice headless (DOCX/ODT/XLSX/PPTX → PDF)
 - **OCR**: Tesseract + ocrmypdf for searchable PDFs
-- **Auth**: OIDC (Authentik/Keycloak) via authlib + admin-generated API tokens
+- **Auth**: OIDC (Authentik/Keycloak) via authlib + admin-generated API tokens + group-based role mapping
 - **SMB**: pysmb for network share browsing/read/write
 - **WebDAV**: httpx-based WebDAV client for Nextcloud and other WebDAV servers
 - **FTP/SFTP**: stdlib ftplib + optional paramiko for file uploads
@@ -23,7 +23,7 @@ Papyrus is a web-based print and scan server for network-connected Brother DCP-L
 ## Project Structure
 - `backend/app/` — FastAPI application
   - `main.py` — App factory, lifespan, middleware
-  - `config.py` — Pydantic Settings (`PAPYRUS_` env prefix)
+  - `config.py` — Infrastructure-only Pydantic Settings (`PAPYRUS_` env prefix); UI-managed settings are in AppConfig DB
   - `auth/` — OIDC + API token auth
   - `routers/` — API route handlers
   - `services/` — Business logic (CUPS, scanning, SMB, email, cloud, Paperless-ngx, OCR, audit, WebDAV, FTP, image enhancement, webhooks, retention)
@@ -64,16 +64,18 @@ cd frontend && npm test
 ```
 
 ## Environment Variables
-All backend config uses `PAPYRUS_` prefix. See `backend/app/config.py` for full list.
-Key vars: `PAPYRUS_DB_URL`, `PAPYRUS_OIDC_ISSUER`, `PAPYRUS_OIDC_CLIENT_ID`, `PAPYRUS_OIDC_CLIENT_SECRET`, `PAPYRUS_PRINTER_URI`, `PAPYRUS_SCANNER_DEVICE`, `PAPYRUS_ENCRYPTION_KEY`, `PAPYRUS_BASE_URL`
-Cloud OAuth: `PAPYRUS_GDRIVE_CLIENT_ID`, `PAPYRUS_GDRIVE_CLIENT_SECRET`, `PAPYRUS_DROPBOX_APP_KEY`, `PAPYRUS_DROPBOX_APP_SECRET`, `PAPYRUS_ONEDRIVE_CLIENT_ID`, `PAPYRUS_ONEDRIVE_CLIENT_SECRET`
-Paperless-ngx: `PAPYRUS_PAPERLESS_URL`, `PAPYRUS_PAPERLESS_API_TOKEN`
-OCR: `PAPYRUS_OCR_ENABLED`, `PAPYRUS_OCR_LANGUAGE`
-FTP/SFTP: `PAPYRUS_FTP_HOST`, `PAPYRUS_FTP_PORT`, `PAPYRUS_FTP_USERNAME`, `PAPYRUS_FTP_PASSWORD`, `PAPYRUS_FTP_REMOTE_DIR`, `PAPYRUS_FTP_PROTOCOL`
-Scan naming: `PAPYRUS_SCAN_FILENAME_TEMPLATE`
-Print: `PAPYRUS_REQUIRE_RELEASE_PIN`, `PAPYRUS_PRINT_RETENTION_DAYS`
-Email webhook: `PAPYRUS_EMAIL_WEBHOOK_SECRET`, `PAPYRUS_EMAIL_WEBHOOK_RATE_LIMIT`
-Network: `PAPYRUS_NETWORK_PRINTER_ENABLED`, `PAPYRUS_NETWORK_PRINTER_NAME`, `PAPYRUS_ESCL_ENABLED`
+Only infrastructure settings use env vars (`PAPYRUS_` prefix). All other settings are managed via the Settings UI and stored in the AppConfig database table.
+
+**Infrastructure env vars** (see `backend/app/config.py`):
+- `PAPYRUS_DB_URL` — PostgreSQL connection URL
+- `PAPYRUS_ENCRYPTION_KEY` — Fernet key for encrypting secrets at rest
+- `PAPYRUS_SESSION_SECRET` — Session cookie encryption key
+- `PAPYRUS_BASE_URL` — Public URL for OIDC callbacks and webhooks
+- `PAPYRUS_OIDC_ISSUER`, `PAPYRUS_OIDC_CLIENT_ID`, `PAPYRUS_OIDC_CLIENT_SECRET` — OIDC provider
+- `PAPYRUS_DEV_MODE` — Development mode (bypass OIDC)
+
+**UI-managed settings** (stored in DB, configured via Settings page):
+SMTP, cloud OAuth, scanner/printer config, OCR, FTP/SFTP, Paperless-ngx, retention, webhooks, OIDC group mapping, etc. Use `get_setting(db, key)` from `app.routers.settings` to read them in code.
 
 ## Development Rules
 - **Commits**: Commit frequently as work progresses. Never mention AI assistants in commit messages.
