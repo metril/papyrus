@@ -25,6 +25,7 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "max_upload_size_mb": (int, False),
     "scan_retention_days": (int, False),
     "escl_enabled": (bool, False),
+    "base_url": (str, False),
     "dev_mode": (bool, False),
     "smtp_host": (str, False),
     "smtp_port": (int, False),

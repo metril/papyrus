@@ -32,9 +32,12 @@ async def get_providers(db: AsyncSession = Depends(get_db)) -> dict:
     local_enabled = (await get_setting(db, "local_auth_enabled") or "true").lower() in ("true", "1", "yes")
     oidc_enabled = (await get_setting(db, "oidc_enabled") or "false").lower() in ("true", "1", "yes")
     oidc_issuer = await get_setting(db, "oidc_issuer") or ""
+    # Env var admin can always log in, even if local auth is disabled
+    admin_override = bool(settings.admin_username)
     return {
         "local_enabled": local_enabled,
         "oidc_enabled": oidc_enabled and bool(oidc_issuer),
+        "admin_override": admin_override,
     }
 
 
@@ -53,9 +56,15 @@ async def local_login(
     db: AsyncSession = Depends(get_db),
 ):
     """Authenticate with username and password."""
-    local_enabled = (await get_setting(db, "local_auth_enabled") or "true").lower() in ("true", "1", "yes")
-    if not local_enabled:
-        raise HTTPException(status_code=403, detail="Local login is disabled")
+    # Env var admin can always log in, even if local auth is disabled
+    is_env_admin = (
+        settings.admin_username
+        and body.username == settings.admin_username
+    )
+    if not is_env_admin:
+        local_enabled = (await get_setting(db, "local_auth_enabled") or "true").lower() in ("true", "1", "yes")
+        if not local_enabled:
+            raise HTTPException(status_code=403, detail="Local login is disabled")
 
     result = await db.execute(
         select(User).where(User.username == body.username, User.is_local == True)

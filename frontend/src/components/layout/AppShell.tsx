@@ -91,7 +91,7 @@ function ThemeToggle({ compact = false }: { compact?: boolean }) {
 }
 
 function LoginScreen() {
-  const [providers, setProviders] = useState<{ local_enabled: boolean; oidc_enabled: boolean } | null>(null);
+  const [providers, setProviders] = useState<{ local_enabled: boolean; oidc_enabled: boolean; admin_override: boolean } | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -99,7 +99,7 @@ function LoginScreen() {
   const { fetchUser } = useAuthStore();
 
   useEffect(() => {
-    api.get('/auth/providers').then(({ data }) => setProviders(data)).catch(() => setProviders({ local_enabled: true, oidc_enabled: false }));
+    api.get('/auth/providers').then(({ data }) => setProviders(data)).catch(() => setProviders({ local_enabled: true, oidc_enabled: false, admin_override: false }));
   }, []);
 
   const handleLocalLogin = async (e: React.FormEvent) => {
@@ -132,7 +132,7 @@ function LoginScreen() {
           <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Print &amp; Scan Server</p>
         </div>
 
-        {providers.local_enabled && (
+        {(providers.local_enabled || providers.admin_override) && (
           <form onSubmit={handleLocalLogin} className="space-y-3">
             <input
               type="text"
@@ -160,7 +160,7 @@ function LoginScreen() {
           </form>
         )}
 
-        {providers.local_enabled && providers.oidc_enabled && (
+        {(providers.local_enabled || providers.admin_override) && providers.oidc_enabled && (
           <div className="flex items-center gap-3">
             <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
             <span className="text-xs text-gray-400">or</span>
@@ -177,7 +177,7 @@ function LoginScreen() {
           </button>
         )}
 
-        {!providers.local_enabled && !providers.oidc_enabled && (
+        {!providers.local_enabled && !providers.oidc_enabled && !providers.admin_override && (
           <p className="text-sm text-red-600 dark:text-red-400 text-center">
             No authentication methods configured. Set PAPYRUS_ADMIN_USERNAME and PAPYRUS_ADMIN_PASSWORD environment variables.
           </p>

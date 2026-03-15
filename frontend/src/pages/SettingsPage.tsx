@@ -865,6 +865,9 @@ export default function SettingsPage() {
     try {
       const payload = Object.fromEntries(keys.map((k) => [k, appSettings[k]]));
       await api.put('/settings', payload);
+      // Refresh settings from backend to reflect actual stored values
+      const { data } = await api.get('/settings');
+      setAppSettings(data);
       setSaveStatus((s) => ({ ...s, [section]: 'saved' }));
       setTimeout(() => setSaveStatus((s) => ({ ...s, [section]: undefined as unknown as 'saved' })), 2000);
     } catch {
