@@ -832,9 +832,25 @@ export default function SettingsPage() {
   const [saveStatus, setSaveStatus] = useState<Record<string, 'saving' | 'saved' | 'error'>>({});
   const [showWebdav, setShowWebdav] = useState(false);
   const [webdavForm, setWebdavForm] = useState({ url: '', username: '', password: '' });
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.get('/settings').then(({ data }) => setAppSettings(data)).catch(() => {});
+    setSettingsLoading(true);
+    setSettingsError(null);
+    api.get('/settings')
+      .then(({ data }) => {
+        setAppSettings(data);
+        setSettingsLoading(false);
+      })
+      .catch((err) => {
+        if (err.response?.status !== 401) {
+          setSettingsError(
+            `Failed to load settings: ${err.response?.data?.detail || err.message}`
+          );
+        }
+        setSettingsLoading(false);
+      });
     api.get('/auth/tokens').then(({ data }) => setTokens(data)).catch(() => {});
     listProviders().then(setCloudProviders).catch(() => {});
     api.get('/email/webhook-info').then(({ data }) => setWebhookInfo(data)).catch(() => {});
@@ -861,7 +877,7 @@ export default function SettingsPage() {
     return (
       <Button
         onClick={() => saveSection(section, keys)}
-        disabled={status === 'saving'}
+        disabled={status === 'saving' || !!settingsError}
         variant={status === 'error' ? 'danger' : 'primary'}
       >
         {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved ✓' : status === 'error' ? 'Error' : 'Save'}
@@ -954,6 +970,23 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Settings</h2>
+
+      {settingsLoading && (
+        <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 px-4 py-3 rounded">
+          Loading settings...
+        </div>
+      )}
+      {settingsError && (
+        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 px-4 py-3 rounded flex items-center justify-between">
+          <span>{settingsError}</span>
+          <button
+            className="ml-4 px-3 py-1 bg-red-100 dark:bg-red-800 hover:bg-red-200 dark:hover:bg-red-700 rounded text-sm"
+            onClick={() => window.location.reload()}
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <PrintersCard />
       <ScannersCard />

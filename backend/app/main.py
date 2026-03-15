@@ -105,7 +105,8 @@ async def _seed_defaults() -> None:
     async with async_session() as db:
         count = (await db.execute(select(func.count()).select_from(AppConfig))).scalar() or 0
         if count > 0:
-            return  # Already initialized
+            logger.info("AppConfig table has %d rows — skipping seed", count)
+            return
 
         for key, value in defaults.items():
             db.add(AppConfig(key=key, value=value))
@@ -176,6 +177,11 @@ async def _retention_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: seed defaults, create dirs, reconcile hardware
+    if not settings.encryption_key:
+        logger.warning(
+            "PAPYRUS_ENCRYPTION_KEY is not set — encrypted settings "
+            "(SMTP password, OAuth secrets, etc.) cannot be stored"
+        )
     await _seed_defaults()
 
     from app.database import async_session

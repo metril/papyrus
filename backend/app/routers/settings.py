@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,8 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import require_admin
 from app.database import get_db
 from app.models import AppConfig, User
+from app.config import settings
 from app.services.audit_service import log_event
 from app.services.crypto import decrypt_value, encrypt_value
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -86,7 +90,13 @@ async def get_setting(db: AsyncSession, key: str) -> str | None:
     row = await db.get(AppConfig, db_key)
     if row:
         if encrypted:
-            return decrypt_value(row.value)
+            try:
+                return decrypt_value(row.value)
+            except Exception:
+                logger.warning(
+                    "Failed to decrypt setting '%s' — encryption key may have changed", key
+                )
+                return None
         return row.value
     return None
 
@@ -104,7 +114,10 @@ async def get_settings(
             if encrypted:
                 out[key] = _PLACEHOLDER
             else:
-                out[key] = _coerce(db_values[db_row_key], type_)
+                try:
+                    out[key] = _coerce(db_values[db_row_key], type_)
+                except (ValueError, TypeError):
+                    out[key] = db_values[db_row_key]
         else:
             env_val = getattr(settings, key, None)
             if encrypted:
