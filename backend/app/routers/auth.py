@@ -2,15 +2,17 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import DEV_OIDC_SUB, get_current_user, require_admin
-from app.auth.oidc import oauth
+from app.auth.dependencies import get_current_user, require_admin
+from app.auth.oidc import ensure_oidc_registered, oauth
 from app.auth.tokens import generate_token
 from app.config import settings
 from app.database import get_db
 from app.models import APIToken, User
+from app.routers.settings import get_setting
 from app.schemas import (
     APITokenCreate,
     APITokenCreated,
@@ -21,38 +23,110 @@ from app.schemas import (
 router = APIRouter()
 
 
+# --- Auth Providers ---
+
+
+@router.get("/providers")
+async def get_providers(db: AsyncSession = Depends(get_db)) -> dict:
+    """Return available auth methods (public, no auth required)."""
+    local_enabled = (await get_setting(db, "local_auth_enabled") or "true").lower() in ("true", "1", "yes")
+    oidc_enabled = (await get_setting(db, "oidc_enabled") or "false").lower() in ("true", "1", "yes")
+    oidc_issuer = await get_setting(db, "oidc_issuer") or ""
+    return {
+        "local_enabled": local_enabled,
+        "oidc_enabled": oidc_enabled and bool(oidc_issuer),
+    }
+
+
+# --- Local Login ---
+
+
+class LocalLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@router.post("/local-login")
+async def local_login(
+    body: LocalLoginRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Authenticate with username and password."""
+    local_enabled = (await get_setting(db, "local_auth_enabled") or "true").lower() in ("true", "1", "yes")
+    if not local_enabled:
+        raise HTTPException(status_code=403, detail="Local login is disabled")
+
+    result = await db.execute(
+        select(User).where(User.username == body.username, User.is_local == True)
+    )
+    user = result.scalar_one_or_none()
+    if not user or not user.password_hash:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    from argon2 import PasswordHasher
+    from argon2.exceptions import VerifyMismatchError
+    ph = PasswordHasher()
+    try:
+        ph.verify(user.password_hash, body.password)
+    except VerifyMismatchError:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    # Rehash if needed (argon2-cffi best practice)
+    if ph.check_needs_rehash(user.password_hash):
+        user.password_hash = ph.hash(body.password)
+
+    user.last_login = datetime.now(timezone.utc)
+    await db.commit()
+
+    request.session["user_id"] = str(user.id)
+    return {"message": "logged in", "user_id": str(user.id)}
+
+
+# --- OIDC Login ---
+
+
 @router.get("/login")
-async def login(request: Request, db: AsyncSession = Depends(get_db)):
+async def oidc_login(request: Request, db: AsyncSession = Depends(get_db)):
     """Redirect to OIDC provider for authentication."""
-    if not settings.oidc_issuer:
-        if settings.dev_mode:
-            # Auto-login as dev admin
-            result = await db.execute(select(User).where(User.oidc_sub == DEV_OIDC_SUB))
-            user = result.scalar_one_or_none()
-            if user is None:
-                user = User(
-                    oidc_sub=DEV_OIDC_SUB,
-                    email="dev@papyrus.local",
-                    display_name="Dev Admin",
-                    role="admin",
-                )
-                db.add(user)
-                await db.commit()
-                await db.refresh(user)
-            request.session["user_id"] = str(user.id)
-            return RedirectResponse(url="/", status_code=302)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="OIDC not configured",
-        )
-    base_url = settings.base_url
-    redirect_uri = f"{base_url}/api/auth/callback"
+    # Dev mode auto-login
+    if settings.dev_mode:
+        result = await db.execute(select(User).where(User.username == "dev-admin"))
+        user = result.scalar_one_or_none()
+        if user is None:
+            user = User(
+                username="dev-admin",
+                email="dev@papyrus.local",
+                display_name="Dev Admin",
+                role="admin",
+                is_local=True,
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+        request.session["user_id"] = str(user.id)
+        return RedirectResponse(url="/", status_code=302)
+
+    # Check OIDC config from DB
+    oidc_enabled = (await get_setting(db, "oidc_enabled") or "false").lower() in ("true", "1", "yes")
+    if not oidc_enabled:
+        raise HTTPException(status_code=503, detail="OIDC not enabled")
+
+    issuer = await get_setting(db, "oidc_issuer") or ""
+    client_id = await get_setting(db, "oidc_client_id") or ""
+    client_secret = await get_setting(db, "oidc_client_secret") or ""
+    scopes = await get_setting(db, "oidc_scopes") or "openid email profile"
+
+    if not ensure_oidc_registered(issuer, client_id, client_secret, scopes):
+        raise HTTPException(status_code=503, detail="OIDC not configured")
+
+    redirect_uri = f"{settings.base_url}/api/auth/callback"
     return await oauth.papyrus.authorize_redirect(request, redirect_uri)
 
 
 @router.get("/callback")
-async def callback(request: Request, db: AsyncSession = Depends(get_db)):
-    """Handle OIDC callback and create/update local user."""
+async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
+    """Handle OIDC callback and create/update user."""
     token = await oauth.papyrus.authorize_access_token(request)
     userinfo = token.get("userinfo")
     if not userinfo:
@@ -70,34 +144,27 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)):
     user = result.scalar_one_or_none()
 
     # Determine role from OIDC groups claim (if configured)
-    admin_group = settings.oidc_admin_group
-    groups_claim = settings.oidc_groups_claim
+    admin_group = await get_setting(db, "oidc_admin_group") or ""
+    groups_claim = await get_setting(db, "oidc_groups_claim") or "groups"
+    role: str | None = None
     if admin_group:
         groups = userinfo.get(groups_claim, [])
         if isinstance(groups, str):
             groups = [groups]
         role = "admin" if admin_group in groups else "user"
-    else:
-        role = None  # don't override unless group mapping is configured
 
     if user is None:
-        # Check if this is the first user (make them admin if no group mapping)
-        if role is None:
-            count_result = await db.execute(select(User))
-            is_first_user = count_result.first() is None
-            role = "admin" if is_first_user else "user"
-
         user = User(
             oidc_sub=oidc_sub,
             email=email,
             display_name=display_name,
-            role=role,
+            role=role or "user",
+            is_local=False,
         )
         db.add(user)
     else:
         user.email = email
         user.display_name = display_name
-        # Sync role from OIDC groups on every login
         if role is not None:
             user.role = role
 
@@ -105,9 +172,7 @@ async def callback(request: Request, db: AsyncSession = Depends(get_db)):
     await db.commit()
     await db.refresh(user)
 
-    # Set session
     request.session["user_id"] = str(user.id)
-
     return RedirectResponse(url="/", status_code=302)
 
 

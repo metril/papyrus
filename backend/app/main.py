@@ -9,7 +9,6 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import FileResponse
 
-from app.auth.oidc import setup_oauth
 from app.config import settings
 from app.routers import admin, auth, cloud, copy, email, escl, jobs, printer, printers, scanner, scanners, settings as settings_router, smb, system, webdav, webhooks
 
@@ -97,6 +96,10 @@ async def _seed_defaults() -> None:
         "ftp_protocol": "ftp",
         "email_webhook_rate_limit": "10",
         "escl_enabled": "true",
+        "local_auth_enabled": "true",
+        "oidc_enabled": "false",
+        "oidc_scopes": "openid email profile",
+        "oidc_groups_claim": "groups",
     }
 
     async with async_session() as db:
@@ -108,6 +111,41 @@ async def _seed_defaults() -> None:
             db.add(AppConfig(key=key, value=value))
         await db.commit()
         logger.info("Seeded %d default settings", len(defaults))
+
+
+async def _ensure_local_admin() -> None:
+    """Create local admin account if none exists and env vars are set."""
+    from sqlalchemy import select
+    from app.database import async_session
+    from app.models import User
+
+    async with async_session() as db:
+        # Check if any admin exists
+        result = await db.execute(select(User).where(User.role == "admin"))
+        if result.scalar_one_or_none():
+            return  # Admin already exists
+
+        if not settings.admin_username or not settings.admin_password:
+            logger.warning(
+                "No admin user exists and PAPYRUS_ADMIN_USERNAME/PAPYRUS_ADMIN_PASSWORD not set. "
+                "Set these env vars to create an initial admin account."
+            )
+            return
+
+        from argon2 import PasswordHasher
+        ph = PasswordHasher()
+        admin = User(
+            username=settings.admin_username,
+            email=f"{settings.admin_username}@local",
+            display_name=settings.admin_username,
+            role="admin",
+            is_local=True,
+            password_hash=ph.hash(settings.admin_password),
+            oidc_sub=None,
+        )
+        db.add(admin)
+        await db.commit()
+        logger.info("Created local admin account: %s", settings.admin_username)
 
 
 async def _retention_loop() -> None:
@@ -140,7 +178,7 @@ async def lifespan(app: FastAPI):
     os.makedirs(scan_dir, exist_ok=True)
     os.makedirs(upload_dir, exist_ok=True)
 
-    setup_oauth()
+    await _ensure_local_admin()
     await _reconcile_on_startup()
     retention_task = asyncio.create_task(_retention_loop())
     yield

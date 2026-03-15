@@ -5,12 +5,9 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.database import get_db
 from app.models import User
 from app.auth.tokens import validate_token
-
-DEV_OIDC_SUB = "dev-local"
 
 ALL_PERMISSIONS = ["print", "scan", "files", "admin", "email"]
 
@@ -56,10 +53,6 @@ async def get_current_user(
             request.state.token_permissions = None  # Full access via session
             return user
 
-    # Dev mode: auto-authenticate as admin when OIDC is not configured
-    if settings.dev_mode and not settings.oidc_issuer:
-        return await _get_or_create_dev_user(db, request)
-
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Not authenticated",
@@ -104,21 +97,3 @@ def require_permission(permission: str):
         return user
 
     return checker
-
-
-async def _get_or_create_dev_user(db: AsyncSession, request: Request) -> User:
-    """Get or create the dev-mode admin user."""
-    result = await db.execute(select(User).where(User.oidc_sub == DEV_OIDC_SUB))
-    user = result.scalar_one_or_none()
-    if user is None:
-        user = User(
-            oidc_sub=DEV_OIDC_SUB,
-            email="dev@papyrus.local",
-            display_name="Dev Admin",
-            role="admin",
-        )
-        db.add(user)
-        await db.commit()
-        await db.refresh(user)
-    request.state.token_permissions = None
-    return user

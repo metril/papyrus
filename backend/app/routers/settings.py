@@ -49,6 +49,16 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "print_retention_days": (int, False),
     # Email webhook (encryption managed by email.py, not the generic CONFIGURABLE pattern)
     "email_webhook_secret": (str, False),
+    # OIDC (configured via Settings UI)
+    "oidc_enabled": (bool, False),
+    "oidc_issuer": (str, False),
+    "oidc_client_id": (str, False),
+    "oidc_client_secret": (str, True),
+    "oidc_scopes": (str, False),
+    "oidc_admin_group": (str, False),
+    "oidc_groups_claim": (str, False),
+    # Local auth
+    "local_auth_enabled": (bool, False),
 }
 
 _PLACEHOLDER = "*set*"

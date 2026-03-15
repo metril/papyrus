@@ -1,5 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
+import api from '../../api/client';
 import { useThemeStore } from '../../store/themeStore';
 import { useAuthStore } from '../../store/authStore';
 
@@ -89,6 +90,103 @@ function ThemeToggle({ compact = false }: { compact?: boolean }) {
   );
 }
 
+function LoginScreen() {
+  const [providers, setProviders] = useState<{ local_enabled: boolean; oidc_enabled: boolean } | null>(null);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loggingIn, setLoggingIn] = useState(false);
+  const { fetchUser } = useAuthStore();
+
+  useEffect(() => {
+    api.get('/auth/providers').then(({ data }) => setProviders(data)).catch(() => setProviders({ local_enabled: true, oidc_enabled: false }));
+  }, []);
+
+  const handleLocalLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoggingIn(true);
+    try {
+      await api.post('/auth/local-login', { username, password });
+      await fetchUser();
+    } catch (err) {
+      setError('Invalid username or password');
+    } finally {
+      setLoggingIn(false);
+    }
+  };
+
+  if (!providers) {
+    return (
+      <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
+        <div className="text-gray-400 text-sm">Loading...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 p-8 w-full max-w-sm space-y-6">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Papyrus</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Print &amp; Scan Server</p>
+        </div>
+
+        {providers.local_enabled && (
+          <form onSubmit={handleLocalLogin} className="space-y-3">
+            <input
+              type="text"
+              placeholder="Username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2.5 bg-white dark:bg-gray-800 dark:text-gray-100"
+              autoFocus
+            />
+            <input
+              type="password"
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2.5 bg-white dark:bg-gray-800 dark:text-gray-100"
+            />
+            {error && <p className="text-xs text-red-600 dark:text-red-400">{error}</p>}
+            <button
+              type="submit"
+              disabled={loggingIn || !username || !password}
+              className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-lg transition-colors"
+            >
+              {loggingIn ? 'Signing in...' : 'Sign in'}
+            </button>
+          </form>
+        )}
+
+        {providers.local_enabled && providers.oidc_enabled && (
+          <div className="flex items-center gap-3">
+            <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
+            <span className="text-xs text-gray-400">or</span>
+            <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700" />
+          </div>
+        )}
+
+        {providers.oidc_enabled && (
+          <button
+            onClick={() => { window.location.href = '/api/auth/login'; }}
+            className="w-full px-4 py-2.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-gray-100 font-medium rounded-lg transition-colors border border-gray-300 dark:border-gray-600"
+          >
+            Sign in with SSO
+          </button>
+        )}
+
+        {!providers.local_enabled && !providers.oidc_enabled && (
+          <p className="text-sm text-red-600 dark:text-red-400 text-center">
+            No authentication methods configured. Set PAPYRUS_ADMIN_USERNAME and PAPYRUS_ADMIN_PASSWORD environment variables.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function AppShell() {
   const toast = useToast();
   const { user, loading, logout, fetchUser } = useAuthStore();
@@ -114,22 +212,7 @@ export default function AppShell() {
   }
 
   if (!user) {
-    return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
-        <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-lg border border-gray-200 dark:border-gray-700 p-8 w-full max-w-sm text-center space-y-6">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">Papyrus</h1>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Print &amp; Scan Server</p>
-          </div>
-          <button
-            onClick={() => { window.location.href = '/api/auth/login'; }}
-            className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
-          >
-            Sign in with SSO
-          </button>
-        </div>
-      </div>
-    );
+    return <LoginScreen />;
   }
 
   return (
