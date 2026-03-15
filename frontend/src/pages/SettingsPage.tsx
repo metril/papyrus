@@ -735,7 +735,7 @@ function WebhooksCard() {
   };
 
   return (
-    <Card title="Webhooks">
+    <Card title="Webhooks" collapsible>
       <div className="space-y-4">
         <p className="text-sm text-gray-500 dark:text-gray-400">
           Send HTTP POST notifications when events occur. Payloads are signed with HMAC-SHA256 if a secret is set.
@@ -983,7 +983,7 @@ export default function SettingsPage() {
       <ScannersCard />
 
       {/* Network Services */}
-      <Card title="Network Services">
+      <Card title="Network Services" collapsible defaultOpen>
         <div className="space-y-3">
           <p className="text-sm text-gray-600 dark:text-gray-400">eSCL (AirScan) enables network scanner discovery by macOS and iOS.</p>
           <SettingField label="Enable eSCL Scanner (AirScan)" value={appSettings['escl_enabled'] ?? true} onChange={set('escl_enabled')} type="checkbox" />
@@ -994,7 +994,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Storage */}
-      <Card title="Storage">
+      <Card title="Storage" collapsible defaultOpen>
         <div className="space-y-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <SettingField label="Scan Output Directory" value={appSettings['scan_dir'] ?? ''} onChange={set('scan_dir')} placeholder="/app/data/scans" />
@@ -1010,7 +1010,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Application */}
-      <Card title="Application">
+      <Card title="Application" collapsible defaultOpen>
         <div className="space-y-3">
           <SettingField label="Base URL" value={appSettings['base_url'] ?? ''} onChange={set('base_url')} placeholder="https://papyrus.example.com" />
           <SettingField label="Development Mode" value={appSettings['dev_mode'] ?? false} onChange={set('dev_mode')} type="checkbox" />
@@ -1023,7 +1023,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Authentication */}
-      <Card title="Authentication">
+      <Card title="Authentication" collapsible defaultOpen>
         <div className="space-y-3">
           <Toggle
             checked={appSettings['local_auth_enabled'] === true || appSettings['local_auth_enabled'] === 'true' || appSettings['local_auth_enabled'] === undefined}
@@ -1057,7 +1057,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Email / SMTP */}
-      <Card title="Email (SMTP)">
+      <Card title="Email (SMTP)" collapsible>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <SettingField label="SMTP Host" value={appSettings['smtp_host'] ?? ''} onChange={set('smtp_host')} placeholder="smtp.example.com" />
@@ -1074,7 +1074,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Email Webhook */}
-      <Card title="Email Webhook">
+      <Card title="Email Webhook" collapsible>
         <div className="space-y-3">
           <p className="text-sm text-gray-600 dark:text-gray-400">
             External services can forward email attachments to Papyrus for automatic printing.
@@ -1120,7 +1120,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Cloud OAuth Credentials */}
-      <Card title="Cloud OAuth Credentials">
+      <Card title="Cloud OAuth Credentials" collapsible>
         <div className="space-y-4">
           <p className="text-sm text-gray-600 dark:text-gray-400">
             Configure OAuth app credentials to enable Google Drive, Dropbox, and OneDrive integration.
@@ -1153,7 +1153,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Cloud Storage — connect/disconnect */}
-      <Card title="Cloud Storage">
+      <Card title="Cloud Storage" collapsible>
         <div className="space-y-4">
           {cloudProviders.length > 0 && (
             <div className="space-y-2">
@@ -1209,7 +1209,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* OCR */}
-      <Card title="OCR / Searchable PDFs">
+      <Card title="OCR / Searchable PDFs" collapsible>
         <div className="space-y-3">
           <p className="text-sm text-gray-500 dark:text-gray-400">
             Apply Tesseract OCR to scanned PDFs to make them searchable. Requires tesseract-ocr and ocrmypdf.
@@ -1232,7 +1232,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Scan Filename Template */}
-      <Card title="Scan Filename Template">
+      <Card title="Scan Filename Template" collapsible>
         <div className="space-y-3">
           <p className="text-sm text-gray-500 dark:text-gray-400">
             Template for naming delivered scan files. Variables: {'{date}'}, {'{time}'}, {'{datetime}'}, {'{id}'}, {'{resolution}'}, {'{mode}'}, {'{format}'}, {'{pages}'}, {'{counter}'}.
@@ -1250,7 +1250,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* Paperless-ngx */}
-      <Card title="Paperless-ngx">
+      <Card title="Paperless-ngx" collapsible>
         <div className="space-y-3">
           <p className="text-sm text-gray-500 dark:text-gray-400">
             Send scans directly to your Paperless-ngx instance for archiving and OCR.
@@ -1275,7 +1275,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* FTP/SFTP */}
-      <Card title="FTP / SFTP">
+      <Card title="FTP / SFTP" collapsible>
         <div className="space-y-3">
           <p className="text-sm text-gray-500 dark:text-gray-400">
             Upload scans to an FTP or SFTP server. Used as a post-scan delivery target.
@@ -1310,7 +1310,7 @@ export default function SettingsPage() {
       <WebhooksCard />
 
       {/* Backup / Restore */}
-      <Card title="Backup / Restore">
+      <Card title="Backup / Restore" collapsible>
         <div className="space-y-3">
           <p className="text-sm text-gray-600 dark:text-gray-400">Export all application settings as JSON, or restore from a previous backup.</p>
           <div className="flex gap-2">
@@ -1356,7 +1356,7 @@ export default function SettingsPage() {
       </Card>
 
       {/* API Tokens */}
-      <Card title="API Tokens">
+      <Card title="API Tokens" collapsible>
         <div className="space-y-4">
           <div className="space-y-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
             <input
