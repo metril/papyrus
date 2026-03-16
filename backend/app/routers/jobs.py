@@ -417,13 +417,19 @@ async def release_job(
     if job.printer_id:
         printer = await db.get(Printer, job.printer_id)
 
+    # Capture scalars before commits expire objects
+    job_id = job.id
+    job_title = job.title
+    job_copies = job.copies
+    user_id = user.id
+
     try:
         print_path = job.filepath
         if needs_conversion(job.mime_type):
             job.status = "converting"
             await db.commit()
             await ws_manager.broadcast("jobs", {
-                "type": "job_updated", "data": {"id": job.id, "status": "converting"}
+                "type": "job_updated", "data": {"id": job_id, "status": "converting"}
             })
             output_dir = os.path.dirname(job.filepath)
             print_path = await convert_to_pdf(job.filepath, output_dir)
@@ -437,8 +443,8 @@ async def release_job(
         svc = CupsService(printer_name=queue)
         cups_job_id = svc.create_held_job(
             filepath=print_path,
-            title=job.title,
-            copies=job.copies,
+            title=job_title,
+            copies=job_copies,
             duplex=job.duplex,
             media=job.media,
         )
@@ -447,12 +453,13 @@ async def release_job(
 
         job.status = "printing"
         await db.commit()
-        await log_event(db, "print.release", "print_job", str(job.id), user_id=user.id,
-                        detail={"title": job.title, "copies": job.copies})
+        await db.refresh(job)
+        await log_event(db, "print.release", "print_job", str(job_id),
+                        user_id=user_id, detail={"title": job_title, "copies": job_copies})
         await db.commit()
-        await dispatch_webhook(db, "print.release", {"id": job.id, "title": job.title, "copies": job.copies})
+        await dispatch_webhook(db, "print.release", {"id": job_id, "title": job_title, "copies": job_copies})
         await ws_manager.broadcast("jobs", {
-            "type": "job_updated", "data": {"id": job.id, "status": "printing"}
+            "type": "job_updated", "data": {"id": job_id, "status": "printing"}
         })
 
     except Exception as e:
@@ -463,7 +470,7 @@ async def release_job(
             await db.commit()
             await ws_manager.broadcast("jobs", {
                 "type": "job_updated",
-                "data": {"id": job.id, "status": "failed", "error": str(e)},
+                "data": {"id": job_id, "status": "failed", "error": str(e)},
             })
         except Exception:
             pass
@@ -494,13 +501,19 @@ async def cancel_job(
             pass
 
     job.status = "cancelled"
+    # Capture scalars before commit expires objects
+    job_id = job.id
+    job_title = job.title
+    user_id = user.id
     await db.commit()
+    await db.refresh(job)
+
     try:
         await ws_manager.broadcast("jobs", {
-            "type": "job_updated", "data": {"id": job.id, "status": "cancelled"}
+            "type": "job_updated", "data": {"id": job_id, "status": "cancelled"}
         })
-        await log_event(db, "print.cancel", "print_job", str(job.id), user_id=user.id,
-                        detail={"title": job.title})
+        await log_event(db, "print.cancel", "print_job", str(job_id),
+                        user_id=user_id, detail={"title": job_title})
         await db.commit()
     except Exception:
         await db.rollback()
@@ -563,12 +576,13 @@ async def delete_job(
     cleanup_file(job.filepath)
     job_id_copy = job.id
     title_copy = job.title
+    user_id = user.id
     await db.delete(job)
     await db.commit()
 
     try:
-        await log_event(db, "print.delete", "print_job", str(job_id_copy), user_id=user.id,
-                        detail={"title": title_copy})
+        await log_event(db, "print.delete", "print_job", str(job_id_copy),
+                        user_id=user_id, detail={"title": title_copy})
         await db.commit()
         await dispatch_webhook(db, "print.delete", {"id": job_id_copy, "title": title_copy})
         await ws_manager.broadcast("jobs", {

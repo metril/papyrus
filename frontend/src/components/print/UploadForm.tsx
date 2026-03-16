@@ -105,7 +105,7 @@ export default function UploadForm() {
                 <button
                   type="button"
                   onClick={() => removeFile(f.name)}
-                  className="ml-2 text-gray-400 hover:text-red-500 dark:hover:text-red-400 shrink-0"
+                  className="ml-2 text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-950/50 rounded-full w-6 h-6 flex items-center justify-center shrink-0 text-base font-bold"
                   title="Remove file"
                 >
                   &times;
