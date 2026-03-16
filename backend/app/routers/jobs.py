@@ -59,8 +59,12 @@ async def upload_and_create_job(
     if not validate_upload_size(len(content), max_upload_size_mb=_max_mb):
         raise HTTPException(status_code=413, detail="File too large")
 
-    with open(upload_path, "wb") as f:
-        f.write(content)
+    os.makedirs(os.path.dirname(upload_path), exist_ok=True)
+    try:
+        with open(upload_path, "wb") as f:
+            f.write(content)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
 
     # Assign to default printer
     default_printer = await get_default_printer(db)
@@ -403,6 +407,7 @@ async def release_job(
         await db.commit()
         await log_event(db, "print.release", "print_job", str(job.id), user_id=user.id,
                         detail={"title": job.title, "copies": job.copies})
+        await db.commit()
         await dispatch_webhook(db, "print.release", {"id": job.id, "title": job.title, "copies": job.copies})
         await ws_manager.broadcast("jobs", {
             "type": "job_updated", "data": {"id": job.id, "status": "printing"}
@@ -444,11 +449,15 @@ async def cancel_job(
 
     job.status = "cancelled"
     await db.commit()
-    await ws_manager.broadcast("jobs", {
-        "type": "job_updated", "data": {"id": job.id, "status": "cancelled"}
-    })
-    await log_event(db, "print.cancel", "print_job", str(job.id), user_id=user.id,
-                    detail={"title": job.title})
+    try:
+        await ws_manager.broadcast("jobs", {
+            "type": "job_updated", "data": {"id": job.id, "status": "cancelled"}
+        })
+        await log_event(db, "print.cancel", "print_job", str(job.id), user_id=user.id,
+                        detail={"title": job.title})
+        await db.commit()
+    except Exception:
+        pass
     return job
 
 
@@ -511,13 +520,16 @@ async def delete_job(
     await db.delete(job)
     await db.commit()
 
-    await log_event(db, "print.delete", "print_job", str(job_id_copy), user_id=user.id,
-                    detail={"title": title_copy})
-    await dispatch_webhook(db, "print.delete", {"id": job_id_copy, "title": title_copy})
-
-    await ws_manager.broadcast("jobs", {
-        "type": "job_deleted", "data": {"id": job_id_copy}
-    })
+    try:
+        await log_event(db, "print.delete", "print_job", str(job_id_copy), user_id=user.id,
+                        detail={"title": title_copy})
+        await db.commit()
+        await dispatch_webhook(db, "print.delete", {"id": job_id_copy, "title": title_copy})
+        await ws_manager.broadcast("jobs", {
+            "type": "job_deleted", "data": {"id": job_id_copy}
+        })
+    except Exception:
+        pass
 
 
 @router.post("/{job_id}/reprint", response_model=PrintJobResponse, status_code=201)

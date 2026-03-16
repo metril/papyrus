@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import FileResponse
 
@@ -222,12 +221,10 @@ app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])
 app.include_router(escl.router, tags=["escl"])
 
 # Serve frontend static files (built React app) with SPA fallback
+# All static files (including /assets/*) are served through spa_fallback.
+# This avoids StaticFiles returning JSON 404s for stale hashed asset requests.
 static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 if os.path.isdir(static_dir):
-    assets_dir = os.path.join(static_dir, "assets")
-    if os.path.isdir(assets_dir):
-        app.mount("/assets", StaticFiles(directory=assets_dir), name="static-assets")
-
     @app.get("/{path:path}")
     async def spa_fallback(path: str):
         file_path = os.path.join(static_dir, path)
