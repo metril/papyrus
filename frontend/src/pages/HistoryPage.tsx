@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useJobStore } from '../store/jobStore';
 import { useScanStore } from '../store/scanStore';
 import { useWebSocket } from '../hooks/useWebSocket';
-import { getScanDownloadUrl, getJobDownloadUrl } from '../api/scanner';
+import { getScanDownloadUrl, getJobDownloadUrl, getJobPreviewUrl } from '../api/scanner';
 import Card from '../components/common/Card';
 import StatusBadge from '../components/common/StatusBadge';
 import Button from '../components/common/Button';
@@ -24,6 +24,7 @@ interface HistoryItem {
   time: string;
   detail: string;
   downloadUrl: string;
+  previewUrl?: string;
   mimeType: string;
   filename: string;
   raw: PrintJob | ScanJob;
@@ -101,6 +102,7 @@ export default function HistoryPage() {
       time: j.created_at,
       detail: `${j.copies} cop${j.copies > 1 ? 'ies' : 'y'} · ${j.media}${j.duplex ? ' · Duplex' : ''}${j.file_size ? ` · ${formatSize(j.file_size)}` : ''}`,
       downloadUrl: getJobDownloadUrl(j.id),
+      previewUrl: getJobPreviewUrl(j.id),
       mimeType: j.mime_type,
       filename: j.filename,
       raw: j,
@@ -356,6 +358,7 @@ export default function HistoryPage() {
       {previewItem && (
         <FilePreviewModal
           url={previewItem.downloadUrl}
+          previewUrl={previewItem.previewUrl}
           filename={previewItem.filename}
           mimeType={previewItem.mimeType}
           onClose={() => setPreviewItem(null)}

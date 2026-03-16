@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useJobStore } from '../../store/jobStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
-import { getJobDownloadUrl } from '../../api/scanner';
+import { getJobDownloadUrl, getJobPreviewUrl } from '../../api/scanner';
 import { listPrinters, assignJobPrinter } from '../../api/printers';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
@@ -231,6 +231,7 @@ export default function JobQueue() {
     {previewJob && (
       <FilePreviewModal
         url={getJobDownloadUrl(previewJob.id)}
+        previewUrl={getJobPreviewUrl(previewJob.id)}
         filename={previewJob.filename}
         mimeType={previewJob.mime_type}
         onClose={() => setPreviewJob(null)}

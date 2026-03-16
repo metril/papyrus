@@ -14,7 +14,7 @@ from app.services.audit_service import log_event
 from app.services.webhook_service import dispatch_webhook
 from app.models import Printer, PrintJob, User
 from app.schemas import BulkDeleteJobsRequest, BulkDeleteResponse, PrintJobList, PrintJobResponse
-from app.services.convert_service import convert_to_pdf, is_printable, needs_conversion
+from app.services.convert_service import CONVERTIBLE_MIMES, convert_to_pdf, is_printable, needs_conversion
 from app.services.cups_service import CupsService, get_default_printer_name
 from app.services.file_service import (
     cleanup_file,
@@ -307,6 +307,48 @@ async def download_job_file(
         job.filepath,
         filename=job.filename,
         media_type=job.mime_type,
+        content_disposition_type="inline",
+    )
+
+
+@router.get("/{job_id}/preview")
+async def preview_job_file(
+    job_id: int,
+    user: User = Depends(require_permission("print")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Preview a print job's file. Converts office docs to PDF on the fly."""
+    result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not job.filepath or not os.path.exists(job.filepath):
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    # PDF and images can be served directly
+    if job.mime_type not in CONVERTIBLE_MIMES:
+        return FileResponse(
+            job.filepath,
+            filename=job.filename,
+            media_type=job.mime_type,
+            content_disposition_type="inline",
+        )
+
+    # Office docs: convert to PDF, cache as .preview.pdf
+    preview_path = job.filepath + ".preview.pdf"
+    if not os.path.exists(preview_path):
+        try:
+            output_dir = os.path.dirname(job.filepath)
+            converted = await convert_to_pdf(job.filepath, output_dir)
+            os.rename(converted, preview_path)
+        except RuntimeError as e:
+            raise HTTPException(status_code=500, detail=f"Preview conversion failed: {e}")
+
+    pdf_name = os.path.splitext(job.filename)[0] + ".pdf"
+    return FileResponse(
+        preview_path,
+        filename=pdf_name,
+        media_type="application/pdf",
         content_disposition_type="inline",
     )
 

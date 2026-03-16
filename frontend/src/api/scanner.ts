@@ -43,6 +43,10 @@ export function getJobDownloadUrl(jobId: number): string {
   return `/api/jobs/${jobId}/download`;
 }
 
+export function getJobPreviewUrl(jobId: number): string {
+  return `/api/jobs/${jobId}/preview`;
+}
+
 export async function emailScan(
   scanId: string,
   to: string,
