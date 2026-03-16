@@ -218,7 +218,7 @@ export default function JobQueue() {
                 <Button size="sm" variant="secondary" onClick={() => handleAction(() => reprintJob(job.id), job.id)} disabled={busyJobId === job.id}>
                   {busyJobId === job.id ? 'Reprinting...' : 'Reprint'}
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => handleAction(() => deleteJob(job.id), job.id)} disabled={busyJobId === job.id}>
+                <Button size="sm" variant="danger" onClick={() => handleAction(() => deleteJob(job.id), job.id)} disabled={busyJobId === job.id}>
                   Delete
                 </Button>
               </>

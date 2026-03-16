@@ -343,7 +343,7 @@ export default function HistoryPage() {
                   )}
                   <Button
                     size="sm"
-                    variant="ghost"
+                    variant="danger"
                     onClick={() => handleDeleteSingle(item)}
                   >
                     Delete

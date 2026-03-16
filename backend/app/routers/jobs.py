@@ -456,13 +456,17 @@ async def release_job(
         })
 
     except Exception as e:
-        job.status = "failed"
-        job.error_message = str(e)
-        await db.commit()
-        await ws_manager.broadcast("jobs", {
-            "type": "job_updated",
-            "data": {"id": job.id, "status": "failed", "error": str(e)},
-        })
+        try:
+            await db.rollback()
+            job.status = "failed"
+            job.error_message = str(e)
+            await db.commit()
+            await ws_manager.broadcast("jobs", {
+                "type": "job_updated",
+                "data": {"id": job.id, "status": "failed", "error": str(e)},
+            })
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=str(e))
 
     return job
@@ -499,7 +503,7 @@ async def cancel_job(
                         detail={"title": job.title})
         await db.commit()
     except Exception:
-        pass
+        await db.rollback()
     return job
 
 
@@ -571,7 +575,7 @@ async def delete_job(
             "type": "job_deleted", "data": {"id": job_id_copy}
         })
     except Exception:
-        pass
+        await db.rollback()
 
 
 @router.post("/{job_id}/reprint", response_model=PrintJobResponse, status_code=201)

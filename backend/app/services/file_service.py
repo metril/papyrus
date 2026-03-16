@@ -41,8 +41,10 @@ def validate_upload_size(size: int, max_upload_size_mb: int = 50) -> bool:
     return size <= max_bytes
 
 
-def cleanup_file(filepath: str) -> None:
+def cleanup_file(filepath: str | None) -> None:
     """Delete a file and its preview cache if they exist."""
+    if not filepath:
+        return
     try:
         if os.path.exists(filepath):
             os.unlink(filepath)
