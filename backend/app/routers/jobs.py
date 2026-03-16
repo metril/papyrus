@@ -50,9 +50,9 @@ async def upload_and_create_job(
             detail=f"Unsupported file type: {mime_type}. Accepted: PDF, images, office documents.",
         )
 
-    from app.routers.settings import get_setting
+    from app.routers.settings import get_setting, safe_int_setting
     _upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
-    _max_mb = int(await get_setting(db, "max_upload_size_mb") or 50)
+    _max_mb = safe_int_setting(await get_setting(db, "max_upload_size_mb"), 50)
     upload_path = get_upload_path(file.filename, upload_dir=_upload_dir)
     content = await file.read()
 

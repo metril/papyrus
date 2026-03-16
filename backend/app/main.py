@@ -142,15 +142,15 @@ async def _ensure_local_admin() -> None:
 async def _retention_loop() -> None:
     """Background task that runs retention cleanup once per hour."""
     from app.database import async_session
-    from app.routers.settings import get_setting
+    from app.routers.settings import get_setting, safe_int_setting
     from app.services.retention_service import run_retention
 
     while True:
         await asyncio.sleep(3600)  # every hour
         try:
             async with async_session() as db:
-                scan_days = int(await get_setting(db, "scan_retention_days") or 7)
-                print_days = int(await get_setting(db, "print_retention_days") or 30)
+                scan_days = safe_int_setting(await get_setting(db, "scan_retention_days"), 7)
+                print_days = safe_int_setting(await get_setting(db, "print_retention_days"), 30)
                 await run_retention(db, scan_days=scan_days, print_days=print_days)
         except Exception as exc:
             logger.warning("Retention cleanup failed: %s", exc)

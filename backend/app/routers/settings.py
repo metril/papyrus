@@ -126,6 +126,16 @@ async def get_setting(db: AsyncSession, key: str) -> str | None:
     return None
 
 
+def safe_int_setting(val: str | None, default: int) -> int:
+    """Safely convert a setting value to int, returning default on failure."""
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
+
 @router.get("")
 async def get_settings(
     db: AsyncSession = Depends(get_db),
@@ -182,12 +192,16 @@ async def update_settings(
                 else:
                     db.add(AppConfig(key=db_row_key, value=stored))
         else:
-            str_value = str(value).lower() if _type == bool else str(value)
-            existing = await db.get(AppConfig, key)
-            if existing:
-                existing.value = str_value
+            if value is None or value == "":
+                # Clear the setting — let it fall back to default
+                await db.execute(delete(AppConfig).where(AppConfig.key == key))
             else:
-                db.add(AppConfig(key=key, value=str_value))
+                str_value = str(value).lower() if _type == bool else str(value)
+                existing = await db.get(AppConfig, key)
+                if existing:
+                    existing.value = str_value
+                else:
+                    db.add(AppConfig(key=key, value=str_value))
 
     await db.commit()
 
@@ -197,5 +211,6 @@ async def update_settings(
         await log_event(db, "settings.update", "settings", detail={
             "keys": changed_keys,
         }, user_id=_user.id)
+        await db.commit()
 
     return {"ok": True}

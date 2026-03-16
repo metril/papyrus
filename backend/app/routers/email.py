@@ -132,8 +132,8 @@ async def receive_email(
     a shared secret token, not OIDC.
     """
     # Rate limit
-    from app.routers.settings import get_setting
-    rate_limit = int(await get_setting(db, "email_webhook_rate_limit") or 10)
+    from app.routers.settings import get_setting, safe_int_setting
+    rate_limit = safe_int_setting(await get_setting(db, "email_webhook_rate_limit"), 10)
     client_ip = request.client.host if request.client else "unknown"
     if not _check_rate_limit(client_ip, max_requests=rate_limit):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")

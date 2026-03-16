@@ -178,11 +178,11 @@ async def trigger_retention(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Manually trigger retention cleanup."""
-    from app.routers.settings import get_setting
+    from app.routers.settings import get_setting, safe_int_setting
     from app.services.retention_service import run_retention
 
-    scan_days = int(await get_setting(db, "scan_retention_days") or 7)
-    print_days = int(await get_setting(db, "print_retention_days") or 30)
+    scan_days = safe_int_setting(await get_setting(db, "scan_retention_days"), 7)
+    print_days = safe_int_setting(await get_setting(db, "print_retention_days"), 30)
 
     result = await run_retention(db, scan_days=scan_days, print_days=print_days)
     return result
