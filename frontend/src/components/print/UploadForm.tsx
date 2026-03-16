@@ -1,9 +1,25 @@
 import { useState, useCallback } from 'react';
-import { useDropzone } from 'react-dropzone';
+import { useDropzone, type FileRejection } from 'react-dropzone';
 import Button from '../common/Button';
 import Toggle from '../common/Toggle';
 import { uploadPrintJob } from '../../api/printer';
 import { useJobStore } from '../../store/jobStore';
+
+const ACCEPTED_TYPES = {
+  'application/pdf': ['.pdf'],
+  'image/jpeg': ['.jpg', '.jpeg'],
+  'image/png': ['.png'],
+  'image/tiff': ['.tiff', '.tif'],
+  'application/msword': ['.doc'],
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+  'application/vnd.oasis.opendocument.text': ['.odt'],
+  'application/vnd.ms-excel': ['.xls'],
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+  'application/vnd.oasis.opendocument.spreadsheet': ['.ods'],
+  'application/vnd.ms-powerpoint': ['.ppt'],
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+  'application/vnd.oasis.opendocument.presentation': ['.odp'],
+};
 
 export default function UploadForm() {
   const [files, setFiles] = useState<File[]>([]);
@@ -15,20 +31,26 @@ export default function UploadForm() {
   const fetchJobs = useJobStore((s) => s.fetchJobs);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
-    setFiles(acceptedFiles);
+    setFiles((prev) => {
+      const existing = new Set(prev.map((f) => f.name));
+      return [...prev, ...acceptedFiles.filter((f) => !existing.has(f.name))];
+    });
     setError(null);
   }, []);
 
+  const onDropRejected = useCallback((rejections: FileRejection[]) => {
+    const names = rejections.map((r) => r.file.name);
+    setError(`Unsupported file${names.length > 1 ? 's' : ''}: ${names.join(', ')}`);
+  }, []);
+
+  const removeFile = (name: string) => {
+    setFiles((prev) => prev.filter((f) => f.name !== name));
+  };
+
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: {
-      'application/pdf': ['.pdf'],
-      'image/*': ['.jpg', '.jpeg', '.png', '.tiff', '.tif'],
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
-      'application/vnd.oasis.opendocument.text': ['.odt'],
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
-    },
+    onDropRejected,
+    accept: ACCEPTED_TYPES,
     maxFiles: 10,
   });
 
@@ -64,10 +86,12 @@ export default function UploadForm() {
         ) : (
           <div>
             <p className="text-gray-600 dark:text-gray-400">Drag & drop files here, or click to browse</p>
-            <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">PDF, images, DOCX, ODT, XLSX, PPTX</p>
+            <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">PDF, images, DOC(X), ODT, XLS(X), ODS, PPT(X), ODP</p>
           </div>
         )}
       </div>
+
+      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       {files.length > 0 && (
         <div className="space-y-3">
@@ -76,8 +100,16 @@ export default function UploadForm() {
           </div>
           <ul className="text-sm space-y-1">
             {files.map((f) => (
-              <li key={f.name} className="text-gray-700 dark:text-gray-300">
-                {f.name} ({(f.size / 1024).toFixed(1)} KB)
+              <li key={f.name} className="flex items-center justify-between text-gray-700 dark:text-gray-300">
+                <span className="truncate">{f.name} ({(f.size / 1024).toFixed(1)} KB)</span>
+                <button
+                  type="button"
+                  onClick={() => removeFile(f.name)}
+                  className="ml-2 text-gray-400 hover:text-red-500 dark:hover:text-red-400 shrink-0"
+                  title="Remove file"
+                >
+                  &times;
+                </button>
               </li>
             ))}
           </ul>
@@ -110,8 +142,6 @@ export default function UploadForm() {
               <Toggle checked={duplex} onChange={setDuplex} label="Duplex" />
             </div>
           </div>
-
-          {error && <p className="text-sm text-red-600">{error}</p>}
 
           <Button onClick={handleUpload} disabled={uploading} className="w-full">
             {uploading ? 'Uploading...' : `Upload & Hold ${files.length} file${files.length > 1 ? 's' : ''}`}
