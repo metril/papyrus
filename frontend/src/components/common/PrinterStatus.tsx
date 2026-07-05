@@ -74,6 +74,22 @@ export default function PrinterStatus() {
     hasConnectedBefore.current = true;
   }, [connected, fetchStatus]);
 
+  // Safety net: if the WS never connects or exhausts its reconnect attempts,
+  // fall back to a slow 3-minute poll. It's a no-op while the socket is up
+  // (push covers those periods), so it only actually fetches when down.
+  // `connected` is read through a ref so the interval isn't reset (and its
+  // 3-minute phase restarted) on every connect/disconnect transition.
+  const connectedRef = useRef(connected);
+  useEffect(() => {
+    connectedRef.current = connected;
+  }, [connected]);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!connectedRef.current) fetchStatus();
+    }, 180000);
+    return () => clearInterval(interval);
+  }, [fetchStatus]);
+
   if (!status) return null;
 
   const stateColor = status.state === 3 ? 'text-green-600 dark:text-green-400'

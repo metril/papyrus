@@ -147,3 +147,71 @@ async def test_poll_skips_broadcast_when_no_physical_printers(monkeypatch, broad
     await main_module._poll_printer_statuses([])
 
     broadcast.assert_not_awaited()
+
+
+async def test_poll_survives_one_printer_erroring_and_still_broadcasts_others(
+    monkeypatch, broadcast
+):
+    """Printer A's status fetch raises RuntimeError (e.g. cups.Connection()
+    failing during a cupsd hiccup — not the IPPError CupsService maps to its
+    fallback); printer B returns a changed status. The error must be confined
+    to A: the cycle completes and B's change is still broadcast."""
+
+    class FakeCupsService:
+        def __init__(self, printer_name: str):
+            self.printer_name = printer_name
+
+        async def get_printer_status(self) -> dict:
+            if self.printer_name == "brotherA":
+                raise RuntimeError("cupsd connection refused")
+            return _status(4)
+
+    monkeypatch.setattr("app.services.cups_service.CupsService", FakeCupsService)
+
+    printers = [
+        SimpleNamespace(id=1, cups_name="brotherA"),
+        SimpleNamespace(id=2, cups_name="brotherB"),
+    ]
+    # Seed previous snapshots for both so B's state 4 registers as a change
+    # (and A's absence this cycle produces no broadcast of its own).
+    main_module._printer_status_previous.update({
+        "brotherA": {"id": 1, "cups_name": "brotherA", **_status(3)},
+        "brotherB": {"id": 2, "cups_name": "brotherB", **_status(3)},
+    })
+
+    await main_module._poll_printer_statuses(printers)
+
+    broadcast.assert_awaited_once_with(
+        "printers",
+        {"type": "printer_status", "data": {"id": 2, "cups_name": "brotherB", **_status(4)}},
+    )
+    # A is skipped for the cycle: no stale snapshot entry survives, so its
+    # recovery next cycle is detected as a change and broadcast.
+    assert "brotherA" not in main_module._printer_status_previous
+
+
+async def test_erroring_printer_recovery_is_broadcast(monkeypatch, broadcast):
+    """After a skipped (erroring) cycle, the printer's next successful status
+    fetch is treated as a change and broadcast, even if the status matches
+    what was last seen before the error."""
+    behavior = {"fail": False}
+
+    class FakeCupsService:
+        def __init__(self, printer_name: str):
+            self.printer_name = printer_name
+
+        async def get_printer_status(self) -> dict:
+            if behavior["fail"]:
+                raise RuntimeError("cupsd hiccup")
+            return _status(3)
+
+    monkeypatch.setattr("app.services.cups_service.CupsService", FakeCupsService)
+    printers = [SimpleNamespace(id=1, cups_name="brother1")]
+
+    await main_module._poll_printer_statuses(printers)  # ok -> broadcast (new)
+    behavior["fail"] = True
+    await main_module._poll_printer_statuses(printers)  # error -> skipped, no broadcast
+    behavior["fail"] = False
+    await main_module._poll_printer_statuses(printers)  # recovered -> broadcast
+
+    assert broadcast.await_count == 2

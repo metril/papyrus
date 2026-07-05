@@ -218,12 +218,23 @@ async def _poll_printer_statuses(printers: list) -> None:
     Takes an explicit ``printers`` list (objects with ``id``/``cups_name``)
     rather than querying the DB itself, so tests can exercise this with fake
     printer objects and a fake CupsService without a database.
+
+    A failure fetching one printer's status (anything beyond the IPPError
+    that CupsService already maps to its fallback shape — e.g. a RuntimeError
+    from ``cups.Connection()`` during a cupsd hiccup) must not abort the
+    cycle: the erroring printer is skipped this cycle (no snapshot entry, so
+    its recovery is detected as a change and broadcast once it responds
+    again) while the remaining printers are compared/broadcast normally.
     """
     from app.services.cups_service import CupsService
 
     current: dict[str, dict] = {}
     for p in printers:
-        status = await CupsService(printer_name=p.cups_name).get_printer_status()
+        try:
+            status = await CupsService(printer_name=p.cups_name).get_printer_status()
+        except Exception as exc:
+            logger.warning("Status poll failed for printer '%s': %s", p.cups_name, exc)
+            continue
         current[p.cups_name] = {"id": p.id, "cups_name": p.cups_name, **status}
 
     await _broadcast_changed_printer_statuses(current, _printer_status_previous)
