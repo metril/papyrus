@@ -65,6 +65,25 @@ async def get_audit_log(
 
 # --- Usage Stats ---
 
+PRINT_JOB_STATUSES = ["held", "completed", "failed", "cancelled", "printing"]
+SCAN_JOB_STATUSES = ["completed", "failed", "scanning"]
+
+
+def _zero_filled_status_counts(
+    rows: Any, statuses: list[str]
+) -> dict[str, int]:
+    """Map `(status, count)` GROUP BY rows onto a fixed set of statuses.
+
+    Statuses not present in `rows` are zero-filled; statuses in `rows` but not
+    in `statuses` are dropped — matching the legacy per-status COUNT queries,
+    which only ever asked about the fixed list below.
+    """
+    counts = dict.fromkeys(statuses, 0)
+    for status, count in rows:
+        if status in counts:
+            counts[status] = count
+    return counts
+
 
 @router.get("/stats")
 async def get_usage_stats(
@@ -72,16 +91,17 @@ async def get_usage_stats(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Get usage statistics for the dashboard."""
-    # Counts by status
-    print_counts = {}
-    for status in ["held", "completed", "failed", "cancelled", "printing"]:
-        q = select(func.count()).where(PrintJob.status == status)
-        print_counts[status] = (await db.execute(q)).scalar() or 0
+    # Counts by status — one GROUP BY query per table instead of one COUNT
+    # query per status.
+    print_status_rows = await db.execute(
+        select(PrintJob.status, func.count()).group_by(PrintJob.status)
+    )
+    print_counts = _zero_filled_status_counts(print_status_rows.all(), PRINT_JOB_STATUSES)
 
-    scan_counts = {}
-    for status in ["completed", "failed", "scanning"]:
-        q = select(func.count()).where(ScanJob.status == status)
-        scan_counts[status] = (await db.execute(q)).scalar() or 0
+    scan_status_rows = await db.execute(
+        select(ScanJob.status, func.count()).group_by(ScanJob.status)
+    )
+    scan_counts = _zero_filled_status_counts(scan_status_rows.all(), SCAN_JOB_STATUSES)
 
     # Daily counts for last 30 days
     cutoff = datetime.now(timezone.utc) - timedelta(days=30)
