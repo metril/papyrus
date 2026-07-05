@@ -261,7 +261,7 @@ async def get_default_scanner_device(db: AsyncSession) -> str:
     from app.models import Scanner  # avoid circular import at module level
     result = await db.execute(select(Scanner).where(Scanner.is_default == True))
     s = result.scalar_one_or_none()
-    return s.device if s else self._scanner_device
+    return s.device if s else scan_service._scanner_device
 
 
 async def get_default_scanner(db: AsyncSession):
@@ -326,7 +326,7 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
     config = scanner.post_scan_config
 
     # Use template naming if configured, otherwise fall back to default
-    template = config.get("filename_template") or self._filename_template
+    template = config.get("filename_template") or scan_service._filename_template
     filename = render_scan_filename(template, scan_job)
 
     # OCR — apply before other delivery actions so recipients get searchable PDF

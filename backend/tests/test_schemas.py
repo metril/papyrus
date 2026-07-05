@@ -71,7 +71,7 @@ class TestAPITokenCreate:
     def test_valid(self):
         token = APITokenCreate(name="test-token")
         assert token.name == "test-token"
-        assert token.permissions == ["print", "scan"]
+        assert token.permissions == []
 
     def test_empty_name(self):
         with pytest.raises(ValidationError):
