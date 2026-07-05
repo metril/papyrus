@@ -16,6 +16,10 @@ const OFFICE_MIMES = new Set([
 interface FilePreviewModalProps {
   url: string;
   previewUrl?: string;
+  /** Cheap cached thumbnail shown instantly for images while the full-res
+   * file (fetched via `url`) loads in the background. Optional — only scans
+   * currently have a thumbnail endpoint. */
+  thumbnailUrl?: string;
   filename: string;
   mimeType: string;
   onClose: () => void;
@@ -30,7 +34,7 @@ function Spinner() {
   );
 }
 
-export default function FilePreviewModal({ url, previewUrl, filename, mimeType, onClose }: FilePreviewModalProps) {
+export default function FilePreviewModal({ url, previewUrl, thumbnailUrl, filename, mimeType, onClose }: FilePreviewModalProps) {
   const isPdf = mimeType === 'application/pdf';
   const isImage = mimeType.startsWith('image/') && !mimeType.includes('tiff');
   const isOffice = OFFICE_MIMES.has(mimeType);
@@ -42,6 +46,7 @@ export default function FilePreviewModal({ url, previewUrl, filename, mimeType, 
   const [fetchState, setFetchState] = useState<'loading' | 'ready' | 'error'>(needsIframe ? 'loading' : 'ready');
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
+  const [fullImageLoaded, setFullImageLoaded] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
 
   // Performs the actual fetch; does not itself reset fetchState/errorMsg so
@@ -137,7 +142,24 @@ export default function FilePreviewModal({ url, previewUrl, filename, mimeType, 
             </div>
           )}
           {isImage && (
-            <img src={viewUrl} alt={filename} className="max-w-full max-h-full object-contain" />
+            <div className="relative max-w-full max-h-full">
+              {thumbnailUrl && !fullImageLoaded && (
+                <img
+                  src={thumbnailUrl}
+                  alt=""
+                  aria-hidden="true"
+                  className="max-w-full max-h-full object-contain blur-sm"
+                />
+              )}
+              <img
+                src={viewUrl}
+                alt={filename}
+                onLoad={() => setFullImageLoaded(true)}
+                className={`max-w-full max-h-full object-contain ${
+                  thumbnailUrl && !fullImageLoaded ? 'absolute inset-0 opacity-0' : ''
+                }`}
+              />
+            </div>
           )}
           {!canPreview && (
             <div className="text-center">

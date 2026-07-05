@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useScanStore } from '../../store/scanStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
-import { getScanDownloadUrl } from '../../api/scanner';
+import { getScanDownloadUrl, getScanThumbnailUrl } from '../../api/scanner';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
 import Toggle from '../common/Toggle';
@@ -22,6 +22,26 @@ function formatSize(bytes: number | null): string {
 function scanMimeType(scan: ScanJob): string {
   if (scan.format === 'pdf') return 'application/pdf';
   return `image/${scan.format}`;
+}
+
+function ScanThumbnail({ scanId }: { scanId: string }) {
+  const [failed, setFailed] = useState(false);
+
+  if (failed) {
+    return (
+      <div className="w-12 h-12 rounded border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 mr-3 shrink-0" />
+    );
+  }
+
+  return (
+    <img
+      src={getScanThumbnailUrl(scanId)}
+      alt=""
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className="w-12 h-12 object-cover rounded border border-gray-200 dark:border-gray-700 mr-3 shrink-0 bg-gray-100 dark:bg-gray-800"
+    />
+  );
 }
 
 export default function ScanList() {
@@ -194,6 +214,8 @@ export default function ScanList() {
             />
           )}
 
+          {scan.status === 'completed' && <ScanThumbnail scanId={scan.scan_id} />}
+
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <button
@@ -296,6 +318,7 @@ export default function ScanList() {
     {previewScan && (
       <FilePreviewModal
         url={getScanDownloadUrl(previewScan.scan_id)}
+        thumbnailUrl={getScanThumbnailUrl(previewScan.scan_id)}
         filename={`scan_${previewScan.scan_id}.${previewScan.format}`}
         mimeType={scanMimeType(previewScan)}
         onClose={() => setPreviewScan(null)}

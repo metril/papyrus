@@ -39,6 +39,10 @@ export function getScanDownloadUrl(scanId: string): string {
   return `/api/scanner/scans/${scanId}/download`;
 }
 
+export function getScanThumbnailUrl(scanId: string): string {
+  return `/api/scanner/scans/${scanId}/thumbnail`;
+}
+
 export function getJobDownloadUrl(jobId: number): string {
   return `/api/jobs/${jobId}/download`;
 }
