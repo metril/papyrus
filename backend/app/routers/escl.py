@@ -7,6 +7,7 @@ the scanner via Apple AirScan, Mopria, and Windows WSD-eSCL.
 import asyncio
 import logging
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from xml.etree.ElementTree import Element, SubElement, tostring
@@ -41,6 +42,32 @@ def _find_local(root, local_name):
 
 # In-memory scan job store (eSCL jobs are transient)
 _scan_jobs: dict[str, dict] = {}
+
+# Jobs are evicted only once they've been in a terminal state (Completed or
+# Canceled) for longer than this, never based on total job age — a job stuck
+# in Pending/Processing (e.g. a very slow scan, or a client that never came
+# back) must never be evicted out from under itself.
+_JOB_TTL_SECONDS = 3600.0  # 1 hour
+_TERMINAL_STATES = frozenset({"Completed", "Canceled"})
+
+
+def _purge_stale_jobs() -> None:
+    """Evict terminal-state jobs whose ``terminal_at`` stamp is older than
+    ``_JOB_TTL_SECONDS``. Called opportunistically on every access/mutation of
+    ``_scan_jobs`` so the dict can't grow unboundedly when an eSCL client
+    fetches a completed job's document but never issues the final
+    ``DELETE /ScanJobs/{id}`` (or never comes back at all after a failure).
+    """
+    now = time.monotonic()
+    stale_ids = [
+        job_id
+        for job_id, job in _scan_jobs.items()
+        if job["state"] in _TERMINAL_STATES
+        and job.get("terminal_at") is not None
+        and now - job["terminal_at"] > _JOB_TTL_SECONDS
+    ]
+    for job_id in stale_ids:
+        _scan_jobs.pop(job_id, None)
 
 # eSCL color mode mapping to scanimage modes
 ESCL_COLOR_MAP = {
@@ -169,6 +196,8 @@ async def scanner_status(db: AsyncSession = Depends(get_db)):
     SubElement(root, "pwg:Version").text = "2.6"
     SubElement(root, "pwg:State").text = state
 
+    _purge_stale_jobs()
+
     # Report active jobs so clients can track state transitions
     active_jobs = {jid: j for jid, j in _scan_jobs.items() if j["state"] != "Canceled"}
     if active_jobs:
@@ -185,6 +214,7 @@ async def scanner_status(db: AsyncSession = Depends(get_db)):
 
 async def _run_scan(job_id: str) -> None:
     """Background task: execute scan, persist to DB, and update job state."""
+    _purge_stale_jobs()
     job = _scan_jobs.get(job_id)
     if job is None:
         return
@@ -293,6 +323,7 @@ async def _run_scan(job_id: str) -> None:
 
         job["filepath"] = filepath
         job["state"] = "Completed"
+        job["terminal_at"] = time.monotonic()
 
     except Exception as e:
         _log.error("eSCL scan %s failed: %s", job_id, e, exc_info=True)
@@ -308,6 +339,7 @@ async def _run_scan(job_id: str) -> None:
                 pass
         job["state"] = "Canceled"
         job["error"] = str(e)
+        job["terminal_at"] = time.monotonic()
 
 
 @router.post("/ScanJobs")
@@ -371,6 +403,8 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass  # Use defaults if XML parsing fails
 
+    _purge_stale_jobs()
+
     job_id = str(uuid.uuid4())
     _scan_jobs[job_id] = {
         "state": "Pending",
@@ -382,6 +416,7 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
         "filepath": None,
         "served": False,
         "error": None,
+        "terminal_at": None,
     }
 
     # Start scan immediately in background — clients poll ScannerStatus for Completed
@@ -396,6 +431,7 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
 @router.get("/ScanJobs/{job_id}/NextDocument")
 async def get_next_document(job_id: str):
     """Return the scanned document once the background scan has completed."""
+    _purge_stale_jobs()
     job = _scan_jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
@@ -418,6 +454,7 @@ async def get_next_document(job_id: str):
 @router.delete("/ScanJobs/{job_id}")
 async def cancel_scan_job(job_id: str):
     """Cancel a scan job and clean up."""
+    _purge_stale_jobs()
     job = _scan_jobs.pop(job_id, None)
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
