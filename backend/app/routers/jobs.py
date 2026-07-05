@@ -541,15 +541,27 @@ async def bulk_delete_jobs(
     result = await db.execute(select(PrintJob).where(PrintJob.id.in_(body.ids)))
     jobs = result.scalars().all()
 
+    # Batch-load all referenced printers and resolve the default printer name
+    # once, instead of a `db.get(Printer, ...)` + default-printer query per job.
+    printer_ids = {job.printer_id for job in jobs if job.printer_id}
+    printers_by_id: dict[int, Printer] = {}
+    if printer_ids:
+        printers_result = await db.execute(select(Printer).where(Printer.id.in_(printer_ids)))
+        printers_by_id = {p.id: p for p in printers_result.scalars().all()}
+
+    default_printer_name = None
+    if any(job.cups_job_id and job.status in ("held", "printing") for job in jobs):
+        default_printer_name = await get_default_printer_name(db)
+
     deleted = 0
     for job in jobs:
         if job.cups_job_id and job.status in ("held", "printing"):
             try:
-                printer = await db.get(Printer, job.printer_id) if job.printer_id else None
+                printer = printers_by_id.get(job.printer_id) if job.printer_id else None
                 queue = (
                     f"{printer.cups_name}_release"
                     if printer and not printer.is_network_queue
-                    else await get_default_printer_name(db)
+                    else default_printer_name
                 )
                 await CupsService(printer_name=queue).cancel_job(job.cups_job_id)
             except Exception:
