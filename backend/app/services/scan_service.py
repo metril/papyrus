@@ -53,6 +53,41 @@ class ScanService:
             "sources": ["Flatbed", "ADF"],
         }
 
+    # ------------------------------------------------------------------
+    # Synchronous bodies (run inside a worker thread).
+    # ------------------------------------------------------------------
+
+    def _convert_scan_sync(
+        self, tiff_file: str, out_file: str, fmt: str, resolution: int
+    ) -> None:
+        """Convert a scanned TIFF to the requested output format using Pillow.
+
+        (Pillow handles JPEG-in-TIFF from airscan; img2pdf rejects lossy TIFF).
+        CPU-bound decode/encode — run via ``asyncio.to_thread`` so it doesn't
+        block the event loop while the caller still holds the scan lock.
+        """
+        from PIL import Image
+
+        with Image.open(tiff_file) as img:
+            if fmt == "jpeg":
+                # img.copy() forces full pixel decode so Pillow re-encodes
+                # the JPEG from scratch — without it, Pillow may copy the raw
+                # JPEG bytes from a JPEG-in-TIFF without setting DPI metadata.
+                img = img.convert("RGB") if img.mode not in ("RGB", "L") else img.copy()
+                img.save(out_file, format="JPEG", dpi=(resolution, resolution), quality=95)
+            elif fmt == "png":
+                if img.mode not in ("RGB", "L", "RGBA"):
+                    img = img.convert("RGB")
+                img.save(out_file, format="PNG", dpi=(resolution, resolution))
+            else:  # pdf
+                if img.mode not in ("RGB", "L", "RGBA"):
+                    img = img.convert("RGB")
+                img.save(out_file, format="PDF", resolution=resolution)
+
+    # ------------------------------------------------------------------
+    # Async public API.
+    # ------------------------------------------------------------------
+
     async def scan(
         self,
         resolution: int = 300,
@@ -152,24 +187,11 @@ class ScanService:
             # Convert TIFF to the requested format using Pillow
             # (Pillow handles JPEG-in-TIFF from airscan; img2pdf rejects lossy TIFF)
             if fmt in ("pdf", "png", "jpeg"):
-                from PIL import Image
                 ext = {"jpeg": "jpg"}.get(fmt, fmt)  # jpeg→jpg, pdf→pdf, png→png
                 out_file = os.path.join(self._scan_dir, f"{scan_id}.{ext}")
-                with Image.open(tiff_file) as img:
-                    if fmt == "jpeg":
-                        # img.copy() forces full pixel decode so Pillow re-encodes
-                        # the JPEG from scratch — without it, Pillow may copy the raw
-                        # JPEG bytes from a JPEG-in-TIFF without setting DPI metadata.
-                        img = img.convert("RGB") if img.mode not in ("RGB", "L") else img.copy()
-                        img.save(out_file, format="JPEG", dpi=(resolution, resolution), quality=95)
-                    elif fmt == "png":
-                        if img.mode not in ("RGB", "L", "RGBA"):
-                            img = img.convert("RGB")
-                        img.save(out_file, format="PNG", dpi=(resolution, resolution))
-                    else:  # pdf
-                        if img.mode not in ("RGB", "L", "RGBA"):
-                            img = img.convert("RGB")
-                        img.save(out_file, format="PDF", resolution=resolution)
+                await asyncio.to_thread(
+                    self._convert_scan_sync, tiff_file, out_file, fmt, resolution
+                )
                 os.unlink(tiff_file)
                 return scan_id, out_file
             else:
@@ -358,7 +380,7 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
     if config.get("folder"):
         try:
             dest = os.path.join(config["folder"], filename)
-            shutil.copy2(scan_job.filepath, dest)
+            await asyncio.to_thread(shutil.copy2, scan_job.filepath, dest)
         except Exception:
             pass
 

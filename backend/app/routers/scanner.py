@@ -1,3 +1,4 @@
+import asyncio
 import os
 from datetime import datetime, timezone
 
@@ -546,6 +547,38 @@ async def bulk_delete_scans(
     return BulkDeleteResponse(deleted=deleted)
 
 
+def _collate_pdfs_sync(page_specs: list[tuple[str, int]], out_path: str) -> None:
+    """Merge scan files (PDFs or images) into a single PDF at ``out_path``.
+
+    ``page_specs`` is a list of (filepath, resolution) tuples in output order.
+    CPU-bound PIL image->PDF conversion + PdfWriter merge — run via
+    ``asyncio.to_thread`` so it doesn't block the event loop.
+    """
+    from PIL import Image
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+
+    for filepath, resolution in page_specs:
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext == ".pdf":
+            writer.append(filepath)
+        else:
+            # Convert image to single-page PDF in memory
+            img = Image.open(filepath)
+            if img.mode not in ("RGB", "L", "RGBA"):
+                img = img.convert("RGB")
+            tmp_pdf = filepath + ".tmp.pdf"
+            img.save(tmp_pdf, format="PDF", resolution=resolution)
+            img.close()
+            writer.append(tmp_pdf)
+            os.unlink(tmp_pdf)
+
+    with open(out_path, "wb") as f:
+        writer.write(f)
+    writer.close()
+
+
 @router.post("/collate", response_model=ScanResponse, status_code=201)
 async def collate_scans(
     body: CollateRequest,
@@ -554,9 +587,6 @@ async def collate_scans(
 ):
     """Convert or merge scans into a single PDF."""
     import uuid as _uuid
-
-    from PIL import Image
-    from pypdf import PdfWriter
 
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id.in_(body.scan_ids)))
     jobs_map = {j.scan_id: j for j in result.scalars().all()}
@@ -577,26 +607,9 @@ async def collate_scans(
     from app.routers.settings import get_setting
     _scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
     out_path = os.path.join(_scan_dir, f"{scan_id}.pdf")
-    writer = PdfWriter()
 
-    for job in ordered_jobs:
-        ext = os.path.splitext(job.filepath)[1].lower()
-        if ext == ".pdf":
-            writer.append(job.filepath)
-        else:
-            # Convert image to single-page PDF in memory
-            img = Image.open(job.filepath)
-            if img.mode not in ("RGB", "L", "RGBA"):
-                img = img.convert("RGB")
-            tmp_pdf = job.filepath + ".tmp.pdf"
-            img.save(tmp_pdf, format="PDF", resolution=job.resolution)
-            img.close()
-            writer.append(tmp_pdf)
-            os.unlink(tmp_pdf)
-
-    with open(out_path, "wb") as f:
-        writer.write(f)
-    writer.close()
+    page_specs = [(job.filepath, job.resolution) for job in ordered_jobs]
+    await asyncio.to_thread(_collate_pdfs_sync, page_specs, out_path)
 
     merged_job = ScanJob(
         user_id=user.id,
