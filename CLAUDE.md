@@ -26,7 +26,7 @@ Papyrus is a web-based print and scan server for network-connected Brother DCP-L
   - `config.py` — Infrastructure-only Pydantic Settings (`PAPYRUS_` env prefix); UI-managed settings are in AppConfig DB
   - `auth/` — OIDC + API token auth
   - `routers/` — API route handlers
-  - `services/` — Business logic (CUPS, scanning, SMB, email, cloud, Paperless-ngx, OCR, audit, WebDAV, FTP, image enhancement, webhooks, retention)
+  - `services/` — Business logic (CUPS, scanning, SMB, email, cloud, Paperless-ngx, OCR, audit, WebDAV, FTP, image enhancement, webhooks, retention, `thumbnail_service.py` for cached scan previews, `settings_cache.py` for a 30s in-process TTL cache in front of `get_setting`, `http_client.py` for a shared pooled `httpx.AsyncClient`)
   - `models.py` — SQLAlchemy ORM models
   - `schemas.py` — Pydantic request/response models
   - `database.py` — Async engine (asyncpg)
@@ -63,6 +63,8 @@ cd backend && pytest
 cd frontend && npm test
 ```
 
+The local backend venv doesn't have pycups (host lacks CUPS headers); `pip install -e ".[dev]"` still works and `backend/tests/conftest.py` stubs `sys.modules["cups"]` so tests import cleanly without it. Docker/CI images have real pycups. CI (`.github/workflows/ci.yml`) runs backend ruff+pytest and frontend eslint+build on every push/PR.
+
 ## Environment Variables
 Only infrastructure settings use env vars (`PAPYRUS_` prefix). All other settings are managed via the Settings UI and stored in the AppConfig database table.
 
@@ -88,3 +90,5 @@ SMTP, cloud OAuth, scanner/printer config, OCR, FTP/SFTP, Paperless-ngx, retenti
 - **Subprocess scanning**: Use `scanimage` with explicit argument lists, never string interpolation.
 - **Database**: Use async SQLAlchemy with asyncpg. All migrations via Alembic.
 - **Frontend**: TypeScript strict mode. Tailwind for styling. Zustand for state.
+- **Uploads**: Stream to disk (`save_upload_streaming`) rather than buffering whole files in memory; enforce `max_upload_size_mb` with an early 413 while streaming.
+- **WebSocket events**: The `jobs`/`scans`/`printers` channels (`/ws/jobs`, `/ws/scans`, `/ws/printers`) always broadcast the full serialized object (`job_created`/`job_updated`/`job_deleted`, `scan_completed`/`scan_deleted`, `printer_status`), never a partial payload — the frontend applies events incrementally instead of refetching. If a row is gone by the time a background task finishes, skip the broadcast rather than send a partial object.

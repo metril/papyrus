@@ -4,7 +4,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 
 ## Features
 
-- **Print Management**: Upload documents, hold-release print queue, rich history with preview/selection/bulk delete
+- **Print Management**: Upload documents (streamed to disk with early size-limit rejection), hold-release print queue, rich history with preview/selection/bulk delete
 - **Document Conversion**: Automatically converts DOCX, ODT, XLSX, PPTX to PDF for printing (via LibreOffice)
 - **Scanning**: Initiate scans from the web UI with configurable resolution, color mode, and format
 - **Multi-page ADF Scanning**: Batch scan from the automatic document feeder into a single PDF
@@ -18,14 +18,15 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Scan Profiles**: Save and load scan presets (resolution, color, format, source, OCR, post-actions) per user
 - **PDF Collation**: Merge multiple scans into a single PDF document
 - **Image Enhancement**: Adjust brightness, contrast, rotation, auto-crop, and auto-deskew on scanned images
+- **Scan Previews**: Cached thumbnail images for fast-loading scan list/grid previews
 - **Template Naming**: Configurable filename templates for delivered scans using variables ({date}, {time}, {id}, etc.)
 - **Network Printer**: Appears as an AirPrint/IPP printer on the LAN; network print jobs enter the hold-release queue
 - **Network Scanner**: Appears as an eSCL/AirScan scanner on the LAN; devices can scan directly via the eSCL protocol
 - **Webhooks**: Outgoing HTTP notifications with HMAC-SHA256 signing for print/scan events
-- **Printer Status**: Live toner/ink levels and state display from CUPS marker attributes
+- **Printer Status**: Live toner/ink levels and state display from CUPS marker attributes, pushed to clients over WebSocket as changes are detected (no polling)
 - **Audit Log**: Tracks print releases, scan completions, deletions, and settings changes (admin view)
 - **Usage Dashboard**: Print/scan counts by status, daily activity charts (admin view)
-- **Real-time Updates**: WebSocket-based live job status, scan progress, and eSCL scan toast notifications
+- **Real-time Updates**: WebSocket-based live updates — job/scan events push the full object so the UI applies them incrementally, plus scan progress and eSCL scan toast notifications
 - **Release PIN**: Optional PIN-protected print release for secure shared environments
 - **Reprint**: Re-submit completed, failed, or cancelled print jobs from history
 - **Retention Policies**: Automatic cleanup of old scans and print jobs with configurable retention periods
@@ -85,6 +86,10 @@ cd frontend
 npm install
 npm run dev
 ```
+
+### Continuous Integration
+
+`.github/workflows/ci.yml` runs on every push/PR: backend (`ruff check` + `pytest`) and frontend (`eslint` + `npm run build`).
 
 ## Configuration
 
