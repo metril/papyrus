@@ -1,5 +1,6 @@
 import asyncio
 import re
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -11,6 +12,8 @@ from app.database import get_db
 from app.models import Printer, User
 from app.services import cups_admin
 from app.services.cups_service import CupsService
+from app.services.discovery_service import discover_printers
+from app.services.ipp_client import probe_ipp
 
 router = APIRouter()
 
@@ -60,6 +63,49 @@ async def _printer_response(p: Printer) -> dict:
     }
 
 
+async def _tcp_port_open(ip: str, port: int, timeout: float = 3.0) -> bool:
+    """True if a TCP connection to ``ip:port`` succeeds within ``timeout``."""
+    try:
+        _reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(ip, port), timeout=timeout
+        )
+    except (OSError, asyncio.TimeoutError):
+        return False
+    writer.close()
+    return True
+
+
+async def _check_reachable(ip: str) -> bool:
+    """Try the CUPS/IPP port first, then plain HTTP."""
+    for port in (631, 80):
+        if await _tcp_port_open(ip, port):
+            return True
+    return False
+
+
+async def _enrich_printer_info(printer: Printer, uri: str) -> bool:
+    """Probe the host behind an ``ipp``/``ipps`` URI and populate
+    ``printer.make_and_model``/``printer.location`` from the result.
+
+    Never raises: a non-IPP URI, an unresolvable host, an unreachable
+    device, or a failed probe all just leave the printer untouched and
+    return ``False``. Shared by both the add-printer flow and the
+    refresh-info endpoint so enrichment behaves identically in both places.
+    """
+    try:
+        parsed = urlparse(uri)
+        if parsed.scheme not in ("ipp", "ipps") or not parsed.hostname:
+            return False
+        result = await probe_ipp(parsed.hostname)
+    except Exception:
+        return False
+    if result is None:
+        return False
+    printer.make_and_model = result.get("make_and_model")
+    printer.location = result.get("location")
+    return True
+
+
 @router.get("")
 async def list_printers(
     db: AsyncSession = Depends(get_db),
@@ -70,48 +116,57 @@ async def list_printers(
     return list(await asyncio.gather(*(_printer_response(p) for p in result.scalars())))
 
 
+@router.get("/discover")
+async def discover_network_printers(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_admin),
+) -> dict:
+    """Browse the LAN via mDNS and flag devices already configured."""
+    devices = await discover_printers()
+    result = await db.execute(select(Printer))
+    configured_uris = [p.uri for p in result.scalars() if p.uri]
+
+    for device in devices:
+        ip = device.get("ip") or ""
+        uri = device.get("uri") or ""
+        device["already_configured"] = any(
+            (ip and ip in configured_uri) or configured_uri == uri
+            for configured_uri in configured_uris
+        )
+
+    return {"printers": devices}
+
+
 @router.get("/probe")
 async def probe_printer_ip(
     ip: str,
     _user: User = Depends(require_admin),
 ) -> dict:
-    """Probe a printer at the given IP address and return connection info."""
-    from urllib.request import urlopen
+    """Probe a printer at the given IP address for reachability and IPP details."""
+    fallback_uri = f"ipp://{ip}/ipp"
+    empty_fields = {
+        "make_model": None,
+        "location": None,
+        "state": None,
+        "suggested_display_name": None,
+    }
 
-    uri = f"ipp://{ip}/ipp"
+    if not await _check_reachable(ip):
+        return {"reachable": False, "uri": fallback_uri, **empty_fields}
 
-    async def _try(url: str) -> bool:
-        loop = asyncio.get_event_loop()
-        def _fetch():
-            try:
-                with urlopen(url, timeout=3):
-                    pass
-                return True
-            except Exception:
-                return True  # Any response (even error) means host is reachable
-        try:
-            await loop.run_in_executor(None, _fetch)
-            return True
-        except Exception:
-            return False
+    enrich = await probe_ipp(ip)
+    if enrich is None:
+        return {"reachable": True, "uri": fallback_uri, **empty_fields}
 
-    # Try CUPS/IPP port 631 first, then port 80
-    reachable = False
-    for port in (631, 80):
-        loop = asyncio.get_event_loop()
-        def _check(p=port):
-            import socket
-            try:
-                s = socket.create_connection((ip, p), timeout=3)
-                s.close()
-                return True
-            except OSError:
-                return False
-        if await loop.run_in_executor(None, _check):
-            reachable = True
-            break
-
-    return {"reachable": reachable, "uri": uri}
+    make_model = enrich.get("make_and_model")
+    return {
+        "reachable": True,
+        "uri": f"ipp://{ip}:631{enrich['resource']}",
+        "make_model": make_model,
+        "location": enrich.get("location"),
+        "state": enrich.get("state"),
+        "suggested_display_name": make_model,
+    }
 
 
 @router.post("", status_code=201)
@@ -146,6 +201,8 @@ async def add_printer(
         await cups_admin.add_network_queue(cups_name, body.display_name)
     else:
         await cups_admin.add_physical_printer(cups_name, body.display_name, body.uri)
+        if await _enrich_printer_info(printer, body.uri):
+            await db.commit()
 
     return await _printer_response(printer)
 
@@ -240,4 +297,19 @@ async def resume_printer(
         await cups_admin.enable_queue(printer.cups_name)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+    return await _printer_response(printer)
+
+
+@router.post("/{printer_id}/refresh-info")
+async def refresh_printer_info(
+    printer_id: int,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(require_admin),
+) -> dict:
+    """Re-probe a configured printer's IPP endpoint and refresh its device info."""
+    printer = await db.get(Printer, printer_id)
+    if not printer:
+        raise HTTPException(status_code=404, detail="Printer not found")
+    if await _enrich_printer_info(printer, printer.uri):
+        await db.commit()
     return await _printer_response(printer)
