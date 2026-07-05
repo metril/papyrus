@@ -44,14 +44,16 @@ export default function FilePreviewModal({ url, previewUrl, filename, mimeType, 
   const [errorMsg, setErrorMsg] = useState('');
   const controllerRef = useRef<AbortController | null>(null);
 
-  const fetchPreview = useCallback(() => {
+  // Performs the actual fetch; does not itself reset fetchState/errorMsg so
+  // it can be called directly from the effect below (the reset already
+  // happened via this component's initial state, or via retry() for the
+  // user-initiated case).
+  const performFetch = useCallback(() => {
     if (!needsIframe || !canPreview) return;
 
     controllerRef.current?.abort();
     const controller = new AbortController();
     controllerRef.current = controller;
-    setFetchState('loading');
-    setErrorMsg('');
 
     fetch(viewUrl, { signal: controller.signal, credentials: 'include' })
       .then((res) => {
@@ -70,12 +72,18 @@ export default function FilePreviewModal({ url, previewUrl, filename, mimeType, 
       });
   }, [viewUrl, needsIframe, canPreview]);
 
+  const retry = useCallback(() => {
+    setFetchState('loading');
+    setErrorMsg('');
+    performFetch();
+  }, [performFetch]);
+
   useEffect(() => {
-    fetchPreview();
+    performFetch();
     return () => {
       controllerRef.current?.abort();
     };
-  }, [fetchPreview]);
+  }, [performFetch]);
 
   // Clean up blob URL on unmount
   useEffect(() => {
@@ -125,7 +133,7 @@ export default function FilePreviewModal({ url, previewUrl, filename, mimeType, 
             <div className="text-center">
               <p className="text-red-600 dark:text-red-400 mb-1">Preview failed</p>
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-3">{errorMsg}</p>
-              <Button size="sm" onClick={fetchPreview}>Retry</Button>
+              <Button size="sm" onClick={retry}>Retry</Button>
             </div>
           )}
           {isImage && (

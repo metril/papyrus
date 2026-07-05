@@ -25,8 +25,6 @@ export default function AuditPage() {
   const pageSize = 50;
 
   useEffect(() => {
-    setLoading(true);
-    setError('');
     const params: Record<string, string | number> = { limit: pageSize, offset: page * pageSize };
     if (actionFilter) params.action = actionFilter;
 
@@ -59,7 +57,7 @@ export default function AuditPage() {
           <div className="flex items-center gap-3">
             <select
               value={actionFilter}
-              onChange={(e) => { setActionFilter(e.target.value); setPage(0); }}
+              onChange={(e) => { setActionFilter(e.target.value); setPage(0); setLoading(true); setError(''); }}
               className="rounded-lg border-gray-300 dark:border-gray-600 text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
             >
               <option value="">All actions</option>
@@ -120,13 +118,23 @@ export default function AuditPage() {
 
           {total > pageSize && (
             <div className="flex items-center gap-2 justify-center">
-              <Button size="sm" variant="ghost" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => { setPage((p) => Math.max(0, p - 1)); setLoading(true); setError(''); }}
+                disabled={page === 0}
+              >
                 Previous
               </Button>
               <span className="text-sm text-gray-500 dark:text-gray-400">
                 Page {page + 1} of {Math.ceil(total / pageSize)}
               </span>
-              <Button size="sm" variant="ghost" onClick={() => setPage((p) => p + 1)} disabled={(page + 1) * pageSize >= total}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => { setPage((p) => p + 1); setLoading(true); setError(''); }}
+                disabled={(page + 1) * pageSize >= total}
+              >
                 Next
               </Button>
             </div>
