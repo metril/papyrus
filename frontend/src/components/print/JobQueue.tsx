@@ -6,7 +6,7 @@ import { listPrinters, assignJobPrinter } from '../../api/printers';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
 import FilePreviewModal from '../common/FilePreviewModal';
-import { useToast } from '../common/Toast';
+import { useToast } from '../../hooks/useToast';
 import type { PrintJob, ManagedPrinter } from '../../types';
 
 function formatSize(bytes: number): string {

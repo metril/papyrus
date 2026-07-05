@@ -8,7 +8,7 @@ import Toggle from '../common/Toggle';
 import FilePreviewModal from '../common/FilePreviewModal';
 import EmailScanDialog from './EmailScanDialog';
 import CloudSaveDialog from './CloudSaveDialog';
-import { useToast } from '../common/Toast';
+import { useToast } from '../../hooks/useToast';
 import api from '../../api/client';
 import type { ScanJob } from '../../types';
 

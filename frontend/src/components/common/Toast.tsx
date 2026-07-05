@@ -1,18 +1,11 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-
-type ToastType = 'error' | 'success' | 'info';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ToastContext, type ToastType } from '../../hooks/useToast';
 
 interface ToastItem {
   id: number;
   message: string;
   type: ToastType;
 }
-
-interface ToastContextValue {
-  show: (message: string, type?: ToastType) => void;
-}
-
-const ToastContext = createContext<ToastContextValue | null>(null);
 
 let nextId = 0;
 
@@ -83,10 +76,4 @@ function ToastBanner({ toast, onDismiss }: { toast: ToastItem; onDismiss: (id: n
       </button>
     </div>
   );
-}
-
-export function useToast(): ToastContextValue {
-  const ctx = useContext(ToastContext);
-  if (!ctx) throw new Error('useToast must be used inside ToastProvider');
-  return ctx;
 }

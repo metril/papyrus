@@ -5,7 +5,7 @@ import FilePreviewModal from '../components/common/FilePreviewModal';
 import api from '../api/client';
 import { listProviders, listFiles, getDownloadUrl } from '../api/cloud';
 import type { SMBShare, SMBFileEntry, CloudProvider, CloudFileEntry } from '../types';
-import { useToast } from '../components/common/Toast';
+import { useToast } from '../hooks/useToast';
 
 type Tab = 'network' | 'cloud';
 

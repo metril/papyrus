@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import Toggle from '../components/common/Toggle';
-import { useToast } from '../components/common/Toast';
+import { useToast } from '../hooks/useToast';
 import api from '../api/client';
 import { listProviders, disconnectProvider, getAuthorizeUrl } from '../api/cloud';
 import {
