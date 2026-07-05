@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import cast, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Webhook
@@ -40,12 +41,18 @@ async def dispatch_webhook(
 
     This is fire-and-forget — failures are logged but never raised.
     """
+    # `Webhook.events` is a real JSON array (not a CSV/string column), so
+    # membership can be pushed into SQL rather than filtered in Python. The
+    # column is declared as plain `postgresql.JSON`, whose comparator has no
+    # `.contains()` (that's JSONB-only); casting to JSONB at query time gets
+    # the correct `@>` containment check without needing a schema migration.
     result = await db.execute(
-        select(Webhook).where(Webhook.enabled.is_(True))
+        select(Webhook).where(
+            Webhook.enabled.is_(True),
+            cast(Webhook.events, JSONB).contains([event]),
+        )
     )
-    webhooks = result.scalars().all()
-
-    matching = [w for w in webhooks if event in (w.events or [])]
+    matching = result.scalars().all()
     if not matching:
         return
 
