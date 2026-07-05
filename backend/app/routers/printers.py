@@ -10,10 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user, require_admin
 from app.database import get_db
 from app.models import Printer, User
+from app.schemas import serialize_print_job
 from app.services import cups_admin
 from app.services.cups_service import CupsService
 from app.services.discovery_service import discover_printers
 from app.services.ipp_client import probe_ipp
+from app.services.test_page_service import TestPageError, print_test_page
 
 router = APIRouter()
 
@@ -312,6 +314,31 @@ async def resume_printer(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
     return await _printer_response(printer)
+
+
+@router.post("/{printer_id}/test-page")
+async def send_test_page(
+    printer_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+) -> dict:
+    """Print an identify sheet so an admin can physically confirm which
+    device this printer maps to."""
+    printer = await db.get(Printer, printer_id)
+    if not printer:
+        raise HTTPException(status_code=404, detail="Printer not found")
+    if printer.is_network_queue:
+        raise HTTPException(
+            status_code=400,
+            detail="A network hold queue has no physical device to print a test page to",
+        )
+
+    try:
+        job = await print_test_page(db, printer, user)
+    except TestPageError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return serialize_print_job(job)
 
 
 @router.post("/{printer_id}/refresh-info")

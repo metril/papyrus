@@ -7,12 +7,13 @@ with fake AsyncSession stand-ins rather than spinning up a TestClient. No
 real network I/O happens: ``discover_printers``, ``probe_ipp``, and the
 router's own ``_check_reachable`` TCP check are all monkeypatched.
 """
+import uuid
 from datetime import datetime, timezone
 
 import pytest
 from fastapi import HTTPException
 
-from app.models import Printer
+from app.models import Printer, PrintJob, User
 from app.routers import printers as printers_router
 
 
@@ -492,6 +493,104 @@ async def test_add_printer_with_malformed_uri_still_succeeds(monkeypatch):
 
     assert result["make_and_model"] is None
     assert result["location"] is None
+
+
+# --------------------------------------------------------------------------- #
+# POST /printers/{id}/test-page
+# --------------------------------------------------------------------------- #
+def _admin_user() -> User:
+    return User(id=uuid.uuid4(), email="admin@example.com", display_name="Admin", role="admin")
+
+
+async def test_test_page_404_when_printer_missing():
+    db = _FakeDB(get_return=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await printers_router.send_test_page(printer_id=999, db=db, user=_admin_user())
+
+    assert exc_info.value.status_code == 404
+
+
+async def test_test_page_400_for_network_queue():
+    printer = Printer(
+        id=3,
+        display_name="Hold Queue",
+        cups_name="hold",
+        uri="",
+        is_network_queue=True,
+        created_at=datetime(2026, 7, 5, tzinfo=timezone.utc),
+    )
+    db = _FakeDB(get_return=printer)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await printers_router.send_test_page(printer_id=3, db=db, user=_admin_user())
+
+    assert exc_info.value.status_code == 400
+
+
+async def test_test_page_success_returns_serialized_job(monkeypatch):
+    printer = Printer(
+        id=4,
+        display_name="Brother",
+        cups_name="brother",
+        uri="ipp://192.168.1.50/ipp/print",
+        is_network_queue=False,
+        created_at=datetime(2026, 7, 5, tzinfo=timezone.utc),
+    )
+    db = _FakeDB(get_return=printer)
+
+    job = PrintJob(
+        id=42,
+        title="Test page — Brother",
+        filename="test-page.pdf",
+        filepath="/app/data/uploads/abc_test-page.pdf",
+        file_size=1234,
+        mime_type="application/pdf",
+        status="printing",
+        copies=1,
+        duplex=False,
+        media="A4",
+        source_type="test_page",
+        printer_id=4,
+        cups_job_id=555,
+        created_at=datetime(2026, 7, 5, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 7, 5, tzinfo=timezone.utc),
+    )
+
+    async def fake_print_test_page(_db, _printer, _user):
+        return job
+
+    monkeypatch.setattr(printers_router, "print_test_page", fake_print_test_page)
+
+    result = await printers_router.send_test_page(printer_id=4, db=db, user=_admin_user())
+
+    assert result["id"] == 42
+    assert result["status"] == "printing"
+    assert result["cups_job_id"] == 555
+    assert result["source_type"] == "test_page"
+
+
+async def test_test_page_cups_failure_returns_502(monkeypatch):
+    printer = Printer(
+        id=5,
+        display_name="Brother",
+        cups_name="brother",
+        uri="ipp://192.168.1.50/ipp/print",
+        is_network_queue=False,
+        created_at=datetime(2026, 7, 5, tzinfo=timezone.utc),
+    )
+    db = _FakeDB(get_return=printer)
+
+    async def fake_print_test_page(_db, _printer, _user):
+        raise printers_router.TestPageError("printer offline")
+
+    monkeypatch.setattr(printers_router, "print_test_page", fake_print_test_page)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await printers_router.send_test_page(printer_id=5, db=db, user=_admin_user())
+
+    assert exc_info.value.status_code == 502
+    assert "printer offline" in exc_info.value.detail
 
 
 async def test_add_network_queue_printer_skips_enrichment(monkeypatch):

@@ -71,7 +71,7 @@ class PrintJob(Base):
     copies: Mapped[int] = mapped_column(Integer, default=1)
     duplex: Mapped[bool] = mapped_column(Boolean, default=False)
     media: Mapped[str] = mapped_column(String(50), default="A4")
-    # upload, smb, cloud, email, network
+    # upload, smb, cloud, email, network, test_page
     source_type: Mapped[str] = mapped_column(String(20), default="upload")
     printer_id: Mapped[int | None] = mapped_column(
         ForeignKey("printers.id", ondelete="SET NULL"), nullable=True
