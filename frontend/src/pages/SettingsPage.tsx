@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import Toggle from '../components/common/Toggle';
+import { SettingField, SaveButton } from '../components/settings/shared';
+import type { AppSettings, SaveControls } from '../components/settings/shared';
 import { useToast } from '../hooks/useToast';
 import api from '../api/client';
 import { listProviders, disconnectProvider, getAuthorizeUrl } from '../api/cloud';
@@ -34,44 +36,6 @@ const providerLabels: Record<string, string> = {
   onedrive: 'OneDrive',
   webdav: 'WebDAV / Nextcloud',
 };
-
-type AppSettings = Record<string, string | number | boolean>;
-
-function SettingField({
-  label,
-  value,
-  onChange,
-  type = 'text',
-  placeholder,
-}: {
-  label: string;
-  value: string | number | boolean;
-  onChange: (v: string) => void;
-  type?: string;
-  placeholder?: string;
-}) {
-  if (type === 'checkbox') {
-    return (
-      <Toggle
-        checked={Boolean(value)}
-        onChange={(v) => onChange(String(v))}
-        label={label}
-      />
-    );
-  }
-  return (
-    <div>
-      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{label}</label>
-      <input
-        type={type}
-        value={String(value)}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
-      />
-    </div>
-  );
-}
 
 const printerStateLabels: Record<number, string> = { 3: 'Idle', 4: 'Printing', 5: 'Stopped' };
 
@@ -824,8 +788,6 @@ export default function SettingsPage() {
   const [settingsError, setSettingsError] = useState<string | null>(null);
 
   useEffect(() => {
-    setSettingsLoading(true);
-    setSettingsError(null);
     api.get('/settings')
       .then(({ data }) => {
         setAppSettings(data);
@@ -863,18 +825,7 @@ export default function SettingsPage() {
     }
   };
 
-  const SaveButton = ({ section, keys }: { section: string; keys: string[] }) => {
-    const status = saveStatus[section];
-    return (
-      <Button
-        onClick={() => saveSection(section, keys)}
-        disabled={status === 'saving' || !!settingsError}
-        variant={status === 'error' ? 'danger' : 'primary'}
-      >
-        {status === 'saving' ? 'Saving…' : status === 'saved' ? 'Saved ✓' : status === 'error' ? 'Error' : 'Save'}
-      </Button>
-    );
-  };
+  const save: SaveControls = { status: saveStatus, onSave: saveSection, disabled: !!settingsError };
 
   const toast = useToast();
 
@@ -988,7 +939,7 @@ export default function SettingsPage() {
           <p className="text-sm text-gray-600 dark:text-gray-400">eSCL (AirScan) enables network scanner discovery by macOS and iOS.</p>
           <SettingField label="Enable eSCL Scanner (AirScan)" value={appSettings['escl_enabled'] ?? true} onChange={set('escl_enabled')} type="checkbox" />
           <div className="flex justify-end">
-            <SaveButton section="network" keys={['escl_enabled']} />
+            <SaveButton section="network" keys={['escl_enabled']} save={save} />
           </div>
         </div>
       </Card>
@@ -1004,7 +955,7 @@ export default function SettingsPage() {
             <SettingField label="Print Retention (days)" value={appSettings['print_retention_days'] ?? 30} onChange={set('print_retention_days')} type="number" />
           </div>
           <div className="flex justify-end">
-            <SaveButton section="storage" keys={['scan_dir', 'upload_dir', 'max_upload_size_mb', 'scan_retention_days', 'print_retention_days']} />
+            <SaveButton section="storage" keys={['scan_dir', 'upload_dir', 'max_upload_size_mb', 'scan_retention_days', 'print_retention_days']} save={save} />
           </div>
         </div>
       </Card>
@@ -1017,7 +968,7 @@ export default function SettingsPage() {
           <SettingField label="Require Release PIN" value={appSettings['require_release_pin'] ?? false} onChange={set('require_release_pin')} type="checkbox" />
           <p className="text-xs text-gray-500 dark:text-gray-400">When enabled, uploaded jobs get a randomly generated PIN required at release time.</p>
           <div className="flex justify-end">
-            <SaveButton section="application" keys={['base_url', 'dev_mode', 'require_release_pin']} />
+            <SaveButton section="application" keys={['base_url', 'dev_mode', 'require_release_pin']} save={save} />
           </div>
         </div>
       </Card>
@@ -1051,7 +1002,7 @@ export default function SettingsPage() {
             </div>
           )}
           <div className="flex justify-end">
-            <SaveButton section="auth" keys={['local_auth_enabled', 'oidc_enabled', 'oidc_issuer', 'oidc_client_id', 'oidc_client_secret', 'oidc_scopes', 'oidc_admin_group', 'oidc_groups_claim']} />
+            <SaveButton section="auth" keys={['local_auth_enabled', 'oidc_enabled', 'oidc_issuer', 'oidc_client_id', 'oidc_client_secret', 'oidc_scopes', 'oidc_admin_group', 'oidc_groups_claim']} save={save} />
           </div>
         </div>
       </Card>
@@ -1068,7 +1019,7 @@ export default function SettingsPage() {
           <SettingField label="From Address" value={appSettings['smtp_from'] ?? ''} onChange={set('smtp_from')} placeholder="papyrus@example.com" />
           <div className="flex gap-2 justify-end">
             <Button variant="secondary" onClick={testSmtp}>Test Connection</Button>
-            <SaveButton section="smtp" keys={['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_from']} />
+            <SaveButton section="smtp" keys={['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_from']} save={save} />
           </div>
         </div>
       </Card>
@@ -1081,7 +1032,7 @@ export default function SettingsPage() {
           </p>
           <SettingField label="Rate Limit (requests/min/IP)" value={appSettings['email_webhook_rate_limit'] ?? 10} onChange={set('email_webhook_rate_limit')} type="number" />
           <div className="flex justify-end">
-            <SaveButton section="webhook-rate" keys={['email_webhook_rate_limit']} />
+            <SaveButton section="webhook-rate" keys={['email_webhook_rate_limit']} save={save} />
           </div>
           {webhookInfo && (
             <div className="space-y-2 pt-2 border-t border-gray-100 dark:border-gray-800">
@@ -1147,7 +1098,7 @@ export default function SettingsPage() {
             </div>
           </div>
           <div className="flex justify-end">
-            <SaveButton section="cloud-creds" keys={['gdrive_client_id', 'gdrive_client_secret', 'dropbox_app_key', 'dropbox_app_secret', 'onedrive_client_id', 'onedrive_client_secret']} />
+            <SaveButton section="cloud-creds" keys={['gdrive_client_id', 'gdrive_client_secret', 'dropbox_app_key', 'dropbox_app_secret', 'onedrive_client_id', 'onedrive_client_secret']} save={save} />
           </div>
         </div>
       </Card>
@@ -1226,7 +1177,7 @@ export default function SettingsPage() {
             placeholder="eng"
           />
           <div className="flex justify-end">
-            <SaveButton section="ocr" keys={['ocr_enabled', 'ocr_language']} />
+            <SaveButton section="ocr" keys={['ocr_enabled', 'ocr_language']} save={save} />
           </div>
         </div>
       </Card>
@@ -1244,7 +1195,7 @@ export default function SettingsPage() {
             placeholder="scan_{date}_{time}_{id}"
           />
           <div className="flex justify-end">
-            <SaveButton section="scan_template" keys={['scan_filename_template']} />
+            <SaveButton section="scan_template" keys={['scan_filename_template']} save={save} />
           </div>
         </div>
       </Card>
@@ -1269,7 +1220,7 @@ export default function SettingsPage() {
             placeholder="Token from Paperless admin"
           />
           <div className="flex justify-end">
-            <SaveButton section="paperless" keys={['paperless_url', 'paperless_api_token']} />
+            <SaveButton section="paperless" keys={['paperless_url', 'paperless_api_token']} save={save} />
           </div>
         </div>
       </Card>
@@ -1302,7 +1253,7 @@ export default function SettingsPage() {
             </select>
           </div>
           <div className="flex justify-end">
-            <SaveButton section="ftp" keys={['ftp_host', 'ftp_port', 'ftp_username', 'ftp_password', 'ftp_remote_dir', 'ftp_protocol']} />
+            <SaveButton section="ftp" keys={['ftp_host', 'ftp_port', 'ftp_username', 'ftp_password', 'ftp_remote_dir', 'ftp_protocol']} save={save} />
           </div>
         </div>
       </Card>
