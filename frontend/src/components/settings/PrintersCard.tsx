@@ -128,8 +128,22 @@ export default function PrintersCard() {
     setEditForm({ display_name: p.display_name, uri: p.uri, description: p.description || '', auto_release: p.auto_release });
   };
 
+  // Each tab pre-fills the shared form differently (Discover writes the device
+  // URI, IP writes the probe URI, Manual is hand-typed), so nothing may leak
+  // across a tab switch — reset everything except the mode itself.
+  const switchAddMode = (m: 'discover' | 'ip' | 'manual') => {
+    if (m === addMode) return;
+    setAddMode(m);
+    setSelectedDevice(null);
+    setIpAddress('');
+    setProbeStatus('idle');
+    setProbeResult(null);
+    setForm({ display_name: '', uri: '', description: '', is_network_queue: false, auto_release: false });
+  };
+
   const resetAdd = () => {
     setShowAdd(false);
+    setAddMode('discover');
     setIpAddress('');
     setProbeStatus('idle');
     setProbeResult(null);
@@ -216,7 +230,7 @@ export default function PrintersCard() {
               {(['discover', 'ip', 'manual'] as const).map((m) => (
                 <button
                   key={m}
-                  onClick={() => setAddMode(m)}
+                  onClick={() => switchAddMode(m)}
                   className={`px-3 py-1 rounded-full font-medium ${addMode === m ? 'bg-blue-600 text-white' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
                 >
                   {m === 'discover' ? 'Discover' : m === 'ip' ? 'IP Address' : 'Manual'}
