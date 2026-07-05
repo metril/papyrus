@@ -15,9 +15,10 @@ class UploadTooLargeError(Exception):
 async def save_upload_streaming(upload_file: UploadFile, dest_path: str, max_bytes: int) -> int:
     """Stream an upload to `dest_path` in 1 MiB chunks without buffering it in RAM.
 
-    Raises UploadTooLargeError the moment the running total exceeds `max_bytes`,
-    removing the partially-written file before re-raising. Returns the total
-    number of bytes written on success.
+    Raises UploadTooLargeError the moment the running total exceeds `max_bytes`.
+    On ANY failure (size cap, disk error, client disconnect/cancellation, ...)
+    the partial file is removed before the exception propagates. Returns the
+    total number of bytes written on success.
     """
     total = 0
     try:
@@ -32,9 +33,12 @@ async def save_upload_streaming(upload_file: UploadFile, dest_path: str, max_byt
                         f"Upload exceeds maximum allowed size of {max_bytes} bytes"
                     )
                 f.write(chunk)
-    except UploadTooLargeError:
-        if os.path.exists(dest_path):
+    except BaseException:
+        # BaseException so asyncio.CancelledError (client disconnect) is included.
+        try:
             os.unlink(dest_path)
+        except FileNotFoundError:
+            pass
         raise
     return total
 

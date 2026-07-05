@@ -90,3 +90,26 @@ async def test_save_upload_streaming_empty_file(tmp_path):
 
     assert written == 0
     assert dest.read_bytes() == b""
+
+
+class _FailingUpload:
+    """Fake UploadFile whose read() succeeds once, then raises mid-stream."""
+
+    def __init__(self, first_chunk: bytes):
+        self._first_chunk = first_chunk
+        self._reads = 0
+
+    async def read(self, size: int) -> bytes:
+        self._reads += 1
+        if self._reads == 1:
+            return self._first_chunk
+        raise OSError("connection lost mid-stream")
+
+
+async def test_save_upload_streaming_read_error_propagates_and_removes_partial(tmp_path):
+    dest = tmp_path / "failed.bin"
+
+    with pytest.raises(OSError, match="connection lost mid-stream"):
+        await save_upload_streaming(_FailingUpload(b"x" * 100), str(dest), max_bytes=1000)
+
+    assert not os.path.exists(dest)
