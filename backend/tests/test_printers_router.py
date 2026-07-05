@@ -123,28 +123,25 @@ async def test_printer_response_device_info_defaults_to_none(monkeypatch):
 # --------------------------------------------------------------------------- #
 # GET /printers/discover
 # --------------------------------------------------------------------------- #
-async def test_discover_marks_already_configured_by_ip_in_uri(monkeypatch):
+def _device(name: str, ip: str, uri: str) -> dict:
+    return {
+        "name": name,
+        "ip": ip,
+        "port": 631,
+        "make_model": None,
+        "location": None,
+        "uri": uri,
+        "uuid": None,
+        "protocols": ["ipp"],
+    }
+
+
+async def test_discover_marks_already_configured_by_exact_host_match(monkeypatch):
     devices = [
-        {
-            "name": "Office Brother",
-            "ip": "192.168.1.50",
-            "port": 631,
-            "make_model": "Brother DCP-L2540DW",
-            "location": None,
-            "uri": "ipp://192.168.1.50:631/ipp/print",
-            "uuid": "abc-123",
-            "protocols": ["ipp"],
-        },
-        {
-            "name": "New Printer",
-            "ip": "192.168.1.99",
-            "port": 631,
-            "make_model": None,
-            "location": None,
-            "uri": "ipp://192.168.1.99:631/ipp/print",
-            "uuid": None,
-            "protocols": ["ipp"],
-        },
+        # Device ip equals the configured uri's host exactly -> flagged.
+        _device("Office Brother", "192.168.1.50", "ipp://192.168.1.50:631/ipp/print"),
+        # Unrelated device -> not flagged.
+        _device("New Printer", "192.168.1.99", "ipp://192.168.1.99:631/ipp/print"),
     ]
 
     async def fake_discover(timeout: float = 4.0):
@@ -160,6 +157,72 @@ async def test_discover_marks_already_configured_by_ip_in_uri(monkeypatch):
         created_at=datetime(2026, 7, 5, tzinfo=timezone.utc),
     )
     db = _FakeDB(printers=[configured])
+
+    result = await printers_router.discover_network_printers(db=db, _user=None)
+
+    printers = result["printers"]
+    assert printers[0]["already_configured"] is True
+    assert printers[1]["already_configured"] is False
+
+
+async def test_discover_ip_prefix_of_configured_host_is_not_configured(monkeypatch):
+    # Adversarial case for substring matching: "10.0.0.1" is a literal
+    # substring of the configured uri "ipp://10.0.0.11/ipp", but it is a
+    # *different* device and must not be hidden as "Already added".
+    devices = [
+        _device("Prefix Device", "10.0.0.1", "ipp://10.0.0.1:631/ipp/print"),
+        _device("Configured Device", "10.0.0.11", "ipp://10.0.0.11:631/ipp/print"),
+    ]
+
+    async def fake_discover(timeout: float = 4.0):
+        return devices
+
+    monkeypatch.setattr(printers_router, "discover_printers", fake_discover)
+
+    configured = Printer(
+        id=1,
+        display_name="Eleven",
+        cups_name="eleven",
+        uri="ipp://10.0.0.11/ipp",
+        created_at=datetime(2026, 7, 5, tzinfo=timezone.utc),
+    )
+    db = _FakeDB(printers=[configured])
+
+    result = await printers_router.discover_network_printers(db=db, _user=None)
+
+    printers = result["printers"]
+    assert printers[0]["already_configured"] is False
+    assert printers[1]["already_configured"] is True
+
+
+async def test_discover_skips_malformed_configured_uris(monkeypatch):
+    # A malformed stored uri (urlparse raises ValueError on it) must not
+    # break discover or affect matching of other configured printers.
+    devices = [
+        _device("Known", "192.168.1.50", "ipp://192.168.1.50:631/ipp/print"),
+        _device("Unknown", "192.168.1.99", "ipp://192.168.1.99:631/ipp/print"),
+    ]
+
+    async def fake_discover(timeout: float = 4.0):
+        return devices
+
+    monkeypatch.setattr(printers_router, "discover_printers", fake_discover)
+
+    malformed = Printer(
+        id=1,
+        display_name="Broken",
+        cups_name="broken",
+        uri="ipp://[invalid/ipp",
+        created_at=datetime(2026, 7, 5, tzinfo=timezone.utc),
+    )
+    configured = Printer(
+        id=2,
+        display_name="Brother",
+        cups_name="brother",
+        uri="ipp://192.168.1.50/ipp",
+        created_at=datetime(2026, 7, 5, tzinfo=timezone.utc),
+    )
+    db = _FakeDB(printers=[malformed, configured])
 
     result = await printers_router.discover_network_printers(db=db, _user=None)
 

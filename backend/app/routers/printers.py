@@ -72,6 +72,10 @@ async def _tcp_port_open(ip: str, port: int, timeout: float = 3.0) -> bool:
     except (OSError, asyncio.TimeoutError):
         return False
     writer.close()
+    try:
+        await writer.wait_closed()
+    except OSError:
+        pass  # connect already succeeded; a reset during close is still "reachable"
     return True
 
 
@@ -126,12 +130,22 @@ async def discover_network_printers(
     result = await db.execute(select(Printer))
     configured_uris = [p.uri for p in result.scalars() if p.uri]
 
+    # Exact-host matching, not substring: "10.0.0.1" must not match a printer
+    # configured at "10.0.0.11". Malformed stored URIs are skipped, not fatal.
+    configured_hosts = set()
+    for configured_uri in configured_uris:
+        try:
+            host = urlparse(configured_uri).hostname
+        except ValueError:
+            continue
+        if host:
+            configured_hosts.add(host)
+
     for device in devices:
         ip = device.get("ip") or ""
         uri = device.get("uri") or ""
-        device["already_configured"] = any(
-            (ip and ip in configured_uri) or configured_uri == uri
-            for configured_uri in configured_uris
+        device["already_configured"] = (ip != "" and ip in configured_hosts) or (
+            uri != "" and uri in configured_uris
         )
 
     return {"printers": devices}
