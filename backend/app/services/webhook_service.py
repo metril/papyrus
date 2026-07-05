@@ -7,12 +7,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
-import httpx
 from sqlalchemy import cast, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Webhook
+from app.services.http_client import get_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -62,28 +62,29 @@ async def dispatch_webhook(
         "data": data,
     }).encode()
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        for webhook in matching:
-            headers: dict[str, str] = {
-                "Content-Type": "application/json",
-                "X-Papyrus-Event": event,
-            }
-            if webhook.secret:
-                headers["X-Papyrus-Signature"] = _sign_payload(payload, webhook.secret)
+    client = get_http_client()
+    for webhook in matching:
+        headers: dict[str, str] = {
+            "Content-Type": "application/json",
+            "X-Papyrus-Event": event,
+        }
+        if webhook.secret:
+            headers["X-Papyrus-Signature"] = _sign_payload(payload, webhook.secret)
 
-            try:
-                resp = await client.post(
-                    webhook.url,
-                    content=payload,
-                    headers=headers,
-                )
-                if resp.status_code >= 400:
-                    logger.warning(
-                        "Webhook %s (%s) returned %d for event %s",
-                        webhook.name, webhook.url, resp.status_code, event,
-                    )
-            except Exception as exc:
+        try:
+            resp = await client.post(
+                webhook.url,
+                content=payload,
+                headers=headers,
+                timeout=10.0,
+            )
+            if resp.status_code >= 400:
                 logger.warning(
-                    "Webhook %s (%s) failed for event %s: %s",
-                    webhook.name, webhook.url, event, exc,
+                    "Webhook %s (%s) returned %d for event %s",
+                    webhook.name, webhook.url, resp.status_code, event,
                 )
+        except Exception as exc:
+            logger.warning(
+                "Webhook %s (%s) failed for event %s: %s",
+                webhook.name, webhook.url, event, exc,
+            )

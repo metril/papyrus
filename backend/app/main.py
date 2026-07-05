@@ -294,6 +294,9 @@ async def lifespan(app: FastAPI):
     # Shutdown
     retention_task.cancel()
     printer_status_task.cancel()
+    from app.services.http_client import close_http_client
+
+    await close_http_client()
 
 
 app = FastAPI(

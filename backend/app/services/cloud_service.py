@@ -1,9 +1,8 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-import httpx
-
 from app.services.crypto import decrypt_value
+from app.services.http_client import get_http_client
 
 
 class CloudError(Exception):
@@ -28,26 +27,26 @@ class CloudService:
 
         refresh_token = decrypt_value(refresh_token_encrypted)
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://oauth2.googleapis.com/token",
-                data={
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "refresh_token": refresh_token,
-                    "grant_type": "refresh_token",
-                },
-            )
-            if resp.status_code != 200:
-                raise CloudError(f"Failed to refresh Google token: {resp.text}")
+        client = get_http_client()
+        resp = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+        )
+        if resp.status_code != 200:
+            raise CloudError(f"Failed to refresh Google token: {resp.text}")
 
-            data = resp.json()
-            new_access_token = data["access_token"]
-            expires_in = data.get("expires_in", 3600)
-            expiry = datetime.now(timezone.utc).replace(
-                microsecond=0
-            ) + timedelta(seconds=expires_in)
-            return new_access_token, expiry
+        data = resp.json()
+        new_access_token = data["access_token"]
+        expires_in = data.get("expires_in", 3600)
+        expiry = datetime.now(timezone.utc).replace(
+            microsecond=0
+        ) + timedelta(seconds=expires_in)
+        return new_access_token, expiry
 
     async def list_gdrive_files(
         self,
@@ -192,26 +191,26 @@ class CloudService:
 
         refresh_token = decrypt_value(refresh_token_encrypted)
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://api.dropboxapi.com/oauth2/token",
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": refresh_token,
-                    "client_id": app_key,
-                    "client_secret": app_secret,
-                },
-            )
-            if resp.status_code != 200:
-                raise CloudError(f"Failed to refresh Dropbox token: {resp.text}")
+        client = get_http_client()
+        resp = await client.post(
+            "https://api.dropboxapi.com/oauth2/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": app_key,
+                "client_secret": app_secret,
+            },
+        )
+        if resp.status_code != 200:
+            raise CloudError(f"Failed to refresh Dropbox token: {resp.text}")
 
-            data = resp.json()
-            new_access_token = data["access_token"]
-            expires_in = data.get("expires_in", 14400)
-            expiry = datetime.now(timezone.utc).replace(
-                microsecond=0
-            ) + timedelta(seconds=expires_in)
-            return new_access_token, expiry
+        data = resp.json()
+        new_access_token = data["access_token"]
+        expires_in = data.get("expires_in", 14400)
+        expiry = datetime.now(timezone.utc).replace(
+            microsecond=0
+        ) + timedelta(seconds=expires_in)
+        return new_access_token, expiry
 
     async def list_dropbox_files(
         self,
@@ -308,27 +307,27 @@ class CloudService:
 
         refresh_token = decrypt_value(refresh_token_encrypted)
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": refresh_token,
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                    "scope": "Files.ReadWrite.All offline_access",
-                },
-            )
-            if resp.status_code != 200:
-                raise CloudError(f"Failed to refresh OneDrive token: {resp.text}")
+        client = get_http_client()
+        resp = await client.post(
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "scope": "Files.ReadWrite.All offline_access",
+            },
+        )
+        if resp.status_code != 200:
+            raise CloudError(f"Failed to refresh OneDrive token: {resp.text}")
 
-            data = resp.json()
-            new_access_token = data["access_token"]
-            expires_in = data.get("expires_in", 3600)
-            expiry = datetime.now(timezone.utc).replace(
-                microsecond=0
-            ) + timedelta(seconds=expires_in)
-            return new_access_token, expiry
+        data = resp.json()
+        new_access_token = data["access_token"]
+        expires_in = data.get("expires_in", 3600)
+        expiry = datetime.now(timezone.utc).replace(
+            microsecond=0
+        ) + timedelta(seconds=expires_in)
+        return new_access_token, expiry
 
     async def list_onedrive_files(
         self,
@@ -341,16 +340,16 @@ class CloudService:
         else:
             url = f"{self.GRAPH_BASE}/me/drive/root/children"
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.get(
-                url,
-                headers={"Authorization": f"Bearer {access_token}"},
-                params={"$top": "100", "$orderby": "name"},
-            )
-            if resp.status_code != 200:
-                raise CloudError(f"OneDrive API error: {resp.text}")
+        client = get_http_client()
+        resp = await client.get(
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"$top": "100", "$orderby": "name"},
+        )
+        if resp.status_code != 200:
+            raise CloudError(f"OneDrive API error: {resp.text}")
 
-            data = resp.json()
+        data = resp.json()
 
         files = []
         for item in data.get("value", []):
@@ -374,16 +373,17 @@ class CloudService:
         """Download a file from OneDrive."""
         url = f"{self.GRAPH_BASE}/me/drive/items/{file_id}/content"
 
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            resp = await client.get(
-                url,
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
-            if resp.status_code != 200:
-                raise CloudError(f"OneDrive download error: {resp.status_code}")
+        client = get_http_client()
+        resp = await client.get(
+            url,
+            headers={"Authorization": f"Bearer {access_token}"},
+            follow_redirects=True,
+        )
+        if resp.status_code != 200:
+            raise CloudError(f"OneDrive download error: {resp.status_code}")
 
-            with open(local_path, "wb") as f:
-                f.write(resp.content)
+        with open(local_path, "wb") as f:
+            f.write(resp.content)
 
         return local_path
 
@@ -404,19 +404,19 @@ class CloudService:
         with open(filepath, "rb") as f:
             content = f.read()
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.put(
-                url,
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/octet-stream",
-                },
-                content=content,
-            )
-            if resp.status_code not in (200, 201):
-                raise CloudError(f"OneDrive upload error: {resp.text}")
+        client = get_http_client()
+        resp = await client.put(
+            url,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/octet-stream",
+            },
+            content=content,
+        )
+        if resp.status_code not in (200, 201):
+            raise CloudError(f"OneDrive upload error: {resp.text}")
 
-            return resp.json()["id"]
+        return resp.json()["id"]
 
 
 cloud_service = CloudService()

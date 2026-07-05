@@ -2,9 +2,8 @@
 
 import xml.etree.ElementTree as ET
 
-import httpx
-
 from app.services.crypto import decrypt_value
+from app.services.http_client import get_http_client
 
 
 class WebDAVError(Exception):
@@ -17,17 +16,18 @@ class WebDAVService:
     async def test_connection(self, base_url: str, username: str, password_encrypted: str) -> bool:
         """Test WebDAV connectivity with a PROPFIND on the root."""
         password = decrypt_value(password_encrypted)
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            try:
-                resp = await client.request(
-                    "PROPFIND",
-                    f"{base_url.rstrip('/')}/",
-                    auth=(username, password),
-                    headers={"Depth": "0"},
-                )
-                return resp.status_code in (207, 200)
-            except Exception:
-                return False
+        client = get_http_client()
+        try:
+            resp = await client.request(
+                "PROPFIND",
+                f"{base_url.rstrip('/')}/",
+                auth=(username, password),
+                headers={"Depth": "0"},
+                timeout=10.0,
+            )
+            return resp.status_code in (207, 200)
+        except Exception:
+            return False
 
     async def list_files(
         self,
@@ -51,16 +51,17 @@ class WebDAVService:
   </d:prop>
 </d:propfind>"""
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.request(
-                "PROPFIND",
-                url,
-                auth=(username, password),
-                headers={"Depth": "1", "Content-Type": "application/xml"},
-                content=propfind_body.encode(),
-            )
-            if resp.status_code != 207:
-                raise WebDAVError(f"PROPFIND failed ({resp.status_code}): {resp.text[:200]}")
+        client = get_http_client()
+        resp = await client.request(
+            "PROPFIND",
+            url,
+            auth=(username, password),
+            headers={"Depth": "1", "Content-Type": "application/xml"},
+            content=propfind_body.encode(),
+            timeout=30.0,
+        )
+        if resp.status_code != 207:
+            raise WebDAVError(f"PROPFIND failed ({resp.status_code}): {resp.text[:200]}")
 
         entries = []
         root = ET.fromstring(resp.text)
@@ -132,13 +133,13 @@ class WebDAVService:
         password = decrypt_value(password_encrypted)
         url = f"{base_url.rstrip('/')}{remote_path}"
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.get(url, auth=(username, password))
-            if resp.status_code != 200:
-                raise WebDAVError(f"Download failed ({resp.status_code})")
+        client = get_http_client()
+        resp = await client.get(url, auth=(username, password), timeout=120.0)
+        if resp.status_code != 200:
+            raise WebDAVError(f"Download failed ({resp.status_code})")
 
-            with open(local_path, "wb") as f:
-                f.write(resp.content)
+        with open(local_path, "wb") as f:
+            f.write(resp.content)
 
         return local_path
 
@@ -158,14 +159,15 @@ class WebDAVService:
         with open(filepath, "rb") as f:
             content = f.read()
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.put(
-                dest,
-                auth=(username, password),
-                content=content,
-            )
-            if resp.status_code not in (200, 201, 204):
-                raise WebDAVError(f"Upload failed ({resp.status_code}): {resp.text[:200]}")
+        client = get_http_client()
+        resp = await client.put(
+            dest,
+            auth=(username, password),
+            content=content,
+            timeout=120.0,
+        )
+        if resp.status_code not in (200, 201, 204):
+            raise WebDAVError(f"Upload failed ({resp.status_code}): {resp.text[:200]}")
 
     async def mkdir(
         self,
@@ -178,10 +180,10 @@ class WebDAVService:
         password = decrypt_value(password_encrypted)
         url = f"{base_url.rstrip('/')}{path}"
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.request("MKCOL", url, auth=(username, password))
-            if resp.status_code not in (201, 405):  # 405 = already exists
-                raise WebDAVError(f"MKCOL failed ({resp.status_code})")
+        client = get_http_client()
+        resp = await client.request("MKCOL", url, auth=(username, password), timeout=10.0)
+        if resp.status_code not in (201, 405):  # 405 = already exists
+            raise WebDAVError(f"MKCOL failed ({resp.status_code})")
 
 
 webdav_service = WebDAVService()

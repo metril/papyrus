@@ -1,8 +1,7 @@
 """Paperless-ngx integration service."""
 
-import httpx
-
 from app.services.crypto import decrypt_value
+from app.services.http_client import get_http_client
 
 
 class PaperlessError(Exception):
@@ -38,13 +37,14 @@ class PaperlessService:
                 for tag in tags:
                     data["tags"] = tag  # Paperless accepts multiple tags fields
 
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    url,
-                    headers={"Authorization": f"Token {api_token}"},
-                    files=files,
-                    data=data,
-                )
+            client = get_http_client()
+            resp = await client.post(
+                url,
+                headers={"Authorization": f"Token {api_token}"},
+                files=files,
+                data=data,
+                timeout=60,
+            )
 
         if resp.status_code not in (200, 202):
             raise PaperlessError(f"Paperless upload failed ({resp.status_code}): {resp.text}")
@@ -63,11 +63,12 @@ class PaperlessService:
         url = f"{paperless_url.rstrip('/')}/api/documents/?page_size=1"
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(
-                    url,
-                    headers={"Authorization": f"Token {api_token}"},
-                )
+            client = get_http_client()
+            resp = await client.get(
+                url,
+                headers={"Authorization": f"Token {api_token}"},
+                timeout=10,
+            )
             return resp.status_code == 200
         except Exception:
             return False
