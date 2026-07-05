@@ -1,5 +1,5 @@
 import api from './client';
-import type { ManagedPrinter, ManagedPrinterCreate, ManagedPrinterUpdate } from '../types';
+import type { DiscoveredPrinter, ManagedPrinter, ManagedPrinterCreate, ManagedPrinterUpdate } from '../types';
 
 export async function listPrinters(): Promise<ManagedPrinter[]> {
   const { data } = await api.get('/printers');
@@ -32,6 +32,10 @@ export async function assignJobPrinter(jobId: number, printerId: number): Promis
 export interface PrinterProbeResult {
   reachable: boolean;
   uri: string;
+  make_model: string | null;
+  location: string | null;
+  state: number | null;
+  suggested_display_name: string | null;
 }
 
 export async function probePrinter(ip: string): Promise<PrinterProbeResult> {
@@ -41,5 +45,19 @@ export async function probePrinter(ip: string): Promise<PrinterProbeResult> {
 
 export async function resumePrinter(id: number): Promise<ManagedPrinter> {
   const { data } = await api.post(`/printers/${id}/resume`);
+  return data;
+}
+
+export async function discoverPrinters(): Promise<DiscoveredPrinter[]> {
+  const { data } = await api.get('/printers/discover');
+  return data.printers;
+}
+
+export async function printTestPage(id: number): Promise<void> {
+  await api.post(`/printers/${id}/test-page`);
+}
+
+export async function refreshPrinterInfo(id: number): Promise<ManagedPrinter> {
+  const { data } = await api.post(`/printers/${id}/refresh-info`);
   return data;
 }

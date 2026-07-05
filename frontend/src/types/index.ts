@@ -33,7 +33,7 @@ export interface PrintJob {
   copies: number;
   duplex: boolean;
   media: string;
-  source_type: 'upload' | 'smb' | 'cloud' | 'email' | 'network';
+  source_type: 'upload' | 'smb' | 'cloud' | 'email' | 'network' | 'test_page';
   printer_id: number | null;
   has_pin: boolean;
   release_pin?: string;
@@ -135,6 +135,8 @@ export interface ManagedPrinter {
   cups_name: string;
   uri: string;
   description: string | null;
+  make_and_model: string | null;
+  location: string | null;
   is_default: boolean;
   is_network_queue: boolean;
   auto_release: boolean;
@@ -155,6 +157,18 @@ export interface ManagedPrinterUpdate {
   uri?: string;
   description?: string;
   auto_release?: boolean;
+}
+
+export interface DiscoveredPrinter {
+  name: string;
+  ip: string;
+  port: number;
+  make_model: string | null;
+  location: string | null;
+  uri: string;
+  uuid: string | null;
+  protocols: string[];
+  already_configured: boolean;
 }
 
 // --- Scanner Management ---
