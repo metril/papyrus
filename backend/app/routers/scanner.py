@@ -35,6 +35,11 @@ from app.services.scan_service import (
     scan_service,
 )
 from app.services.smb_service import SMBError, smb_service
+from app.services.thumbnail_service import (
+    ThumbnailError,
+    get_or_create_thumbnail,
+    invalidate_thumbnail,
+)
 from app.services.webhook_service import dispatch_webhook
 from app.services.ws_manager import ws_manager
 
@@ -276,6 +281,40 @@ async def download_scan(
     )
 
 
+@router.get("/scans/{scan_id}/thumbnail")
+async def get_scan_thumbnail(
+    scan_id: str,
+    user: User = Depends(require_permission("scan")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return a small cached preview (~320px) of a completed scan.
+
+    Generated on first request and reused after; much cheaper to load in
+    list/grid views than the full scan file.
+    """
+    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if job.status != "completed" or not job.filepath:
+        raise HTTPException(status_code=404, detail="Scan is not available")
+    if not os.path.exists(job.filepath):
+        raise HTTPException(status_code=404, detail="Scan file not found on disk")
+
+    try:
+        thumb_path = await get_or_create_thumbnail(job.filepath)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Scan file not found on disk")
+    except ThumbnailError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return FileResponse(
+        thumb_path,
+        media_type="image/jpeg",
+        content_disposition_type="inline",
+    )
+
+
 @router.post("/scans/{scan_id}/email")
 async def email_scan(
     scan_id: str,
@@ -430,6 +469,9 @@ async def apply_ocr_to_scan(
         # Update file size after OCR
         job.file_size = os.path.getsize(job.filepath)
         await db.commit()
+        # The file was rewritten in place; drop any cached thumbnail so the
+        # next request regenerates it instead of serving a stale preview.
+        invalidate_thumbnail(job.filepath)
         return {"message": "OCR applied successfully"}
     except OCRError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -475,6 +517,9 @@ async def enhance_scan(
         )
         job.file_size = os.path.getsize(job.filepath)
         await db.commit()
+        # The file was rewritten in place; drop any cached thumbnail so the
+        # next request regenerates it instead of serving a stale preview.
+        invalidate_thumbnail(job.filepath)
         return {"message": "Enhancement applied"}
     except ImageError as e:
         raise HTTPException(status_code=500, detail=str(e))

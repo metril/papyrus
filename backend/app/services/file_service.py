@@ -75,7 +75,7 @@ def detect_mime_type(filename: str) -> str:
 
 
 def cleanup_file(filepath: str | None) -> None:
-    """Delete a file and its preview cache if they exist."""
+    """Delete a file and its preview/thumbnail caches if they exist."""
     if not filepath:
         return
     try:
@@ -84,5 +84,8 @@ def cleanup_file(filepath: str | None) -> None:
         preview = filepath + ".preview.pdf"
         if os.path.exists(preview):
             os.unlink(preview)
+        thumbnail = filepath + ".thumb.jpg"
+        if os.path.exists(thumbnail):
+            os.unlink(thumbnail)
     except OSError:
         pass
