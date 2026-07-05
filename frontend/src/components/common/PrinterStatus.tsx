@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../../api/client';
+import { useWebSocket } from '../../hooks/useWebSocket';
+import type { WSMessage } from '../../types';
 
 interface Marker {
   name: string;
@@ -37,14 +39,40 @@ function markerColor(color: string): string {
 export default function PrinterStatus() {
   const [status, setStatus] = useState<PrinterStatusData | null>(null);
 
-  useEffect(() => {
-    const fetch = () => {
-      api.get('/printer/status').then(({ data }) => setStatus(data)).catch(() => {});
-    };
-    fetch();
-    const interval = setInterval(fetch, 30000);
-    return () => clearInterval(interval);
+  const fetchStatus = useCallback(() => {
+    api.get('/printer/status').then(({ data }) => setStatus(data)).catch(() => {});
   }, []);
+
+  // Initial fetch on mount. After this, updates are push-driven: the backend
+  // broadcasts a `printer_status` WS event only when a printer's status
+  // actually changes, so we refetch (not apply the payload directly) to
+  // stay correct regardless of which printer changed — the refetch hits the
+  // 12s CupsService cache the watcher just populated, so it's effectively free.
+  useEffect(() => {
+    fetchStatus();
+  }, [fetchStatus]);
+
+  const handleMessage = useCallback((msg: WSMessage) => {
+    if (msg.type === 'printer_status') fetchStatus();
+  }, [fetchStatus]);
+
+  const { connected } = useWebSocket({
+    url: '/api/system/ws/printers',
+    onMessage: handleMessage,
+  });
+
+  // Reconnect detection: the hook exposes `connected` but not a distinct
+  // "reconnected" signal, so we derive one — refetch on every connected
+  // transition after the first (i.e. a drop-then-reconnect), to catch any
+  // status change that was missed while disconnected.
+  const hasConnectedBefore = useRef(false);
+  useEffect(() => {
+    if (!connected) return;
+    if (hasConnectedBefore.current) {
+      fetchStatus();
+    }
+    hasConnectedBefore.current = true;
+  }, [connected, fetchStatus]);
 
   if (!status) return null;
 
