@@ -1,5 +1,16 @@
 """Tests for file service utilities."""
-from app.services.file_service import detect_mime_type, sanitize_filename
+import io
+import os
+
+import pytest
+from starlette.datastructures import UploadFile
+
+from app.services.file_service import (
+    UploadTooLargeError,
+    detect_mime_type,
+    sanitize_filename,
+    save_upload_streaming,
+)
 
 
 def test_sanitize_filename_basic():
@@ -38,3 +49,44 @@ def test_detect_mime_type_docx():
 
 def test_detect_mime_type_unknown():
     assert detect_mime_type("file.xyz123") == "application/octet-stream"
+
+
+def _upload_file(data: bytes, filename: str = "test.pdf") -> UploadFile:
+    """Build a real starlette UploadFile wrapping in-memory bytes (no temp file)."""
+    return UploadFile(io.BytesIO(data), filename=filename)
+
+
+async def test_save_upload_streaming_under_limit_writes_fully(tmp_path):
+    data = b"a" * 1000
+    dest = tmp_path / "under.bin"
+    written = await save_upload_streaming(_upload_file(data), str(dest), max_bytes=2000)
+
+    assert written == len(data)
+    assert dest.read_bytes() == data
+
+
+async def test_save_upload_streaming_over_limit_raises_and_removes_partial(tmp_path):
+    data = b"b" * 2000
+    dest = tmp_path / "over.bin"
+
+    with pytest.raises(UploadTooLargeError):
+        await save_upload_streaming(_upload_file(data), str(dest), max_bytes=1000)
+
+    assert not os.path.exists(dest)
+
+
+async def test_save_upload_streaming_exact_limit_succeeds(tmp_path):
+    data = b"c" * 1500
+    dest = tmp_path / "exact.bin"
+    written = await save_upload_streaming(_upload_file(data), str(dest), max_bytes=1500)
+
+    assert written == 1500
+    assert dest.read_bytes() == data
+
+
+async def test_save_upload_streaming_empty_file(tmp_path):
+    dest = tmp_path / "empty.bin"
+    written = await save_upload_streaming(_upload_file(b""), str(dest), max_bytes=1000)
+
+    assert written == 0
+    assert dest.read_bytes() == b""

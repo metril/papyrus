@@ -3,6 +3,41 @@ import os
 import re
 import uuid
 
+from starlette.datastructures import UploadFile
+
+_STREAM_CHUNK_BYTES = 1024 * 1024  # 1 MiB
+
+
+class UploadTooLargeError(Exception):
+    """Raised by save_upload_streaming when an upload exceeds its size cap."""
+
+
+async def save_upload_streaming(upload_file: UploadFile, dest_path: str, max_bytes: int) -> int:
+    """Stream an upload to `dest_path` in 1 MiB chunks without buffering it in RAM.
+
+    Raises UploadTooLargeError the moment the running total exceeds `max_bytes`,
+    removing the partially-written file before re-raising. Returns the total
+    number of bytes written on success.
+    """
+    total = 0
+    try:
+        with open(dest_path, "wb") as f:
+            while True:
+                chunk = await upload_file.read(_STREAM_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise UploadTooLargeError(
+                        f"Upload exceeds maximum allowed size of {max_bytes} bytes"
+                    )
+                f.write(chunk)
+    except UploadTooLargeError:
+        if os.path.exists(dest_path):
+            os.unlink(dest_path)
+        raise
+    return total
+
 
 def sanitize_filename(filename: str) -> str:
     """Sanitize a filename to prevent path traversal and other issues."""
@@ -33,12 +68,6 @@ def detect_mime_type(filename: str) -> str:
     """Detect MIME type from filename."""
     mime_type, _ = mimetypes.guess_type(filename)
     return mime_type or "application/octet-stream"
-
-
-def validate_upload_size(size: int, max_upload_size_mb: int = 50) -> bool:
-    """Check if file size is within limits."""
-    max_bytes = max_upload_size_mb * 1024 * 1024
-    return size <= max_bytes
 
 
 def cleanup_file(filepath: str | None) -> None:

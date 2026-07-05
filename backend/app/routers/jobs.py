@@ -1,4 +1,5 @@
 import os
+import sys
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -21,11 +22,12 @@ from app.services.convert_service import (
 )
 from app.services.cups_service import CupsService, get_default_printer_name
 from app.services.file_service import (
+    UploadTooLargeError,
     cleanup_file,
     detect_mime_type,
     get_upload_path,
     sanitize_filename,
-    validate_upload_size,
+    save_upload_streaming,
 )
 from app.services.webhook_service import dispatch_webhook
 from app.services.ws_manager import ws_manager
@@ -59,15 +61,13 @@ async def upload_and_create_job(
     _upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
     _max_mb = safe_int_setting(await get_setting(db, "max_upload_size_mb"), 50)
     upload_path = get_upload_path(file.filename, upload_dir=_upload_dir)
-    content = await file.read()
-
-    if not validate_upload_size(len(content), max_upload_size_mb=_max_mb):
-        raise HTTPException(status_code=413, detail="File too large")
+    max_bytes = _max_mb * 1024 * 1024
 
     os.makedirs(os.path.dirname(upload_path), exist_ok=True)
     try:
-        with open(upload_path, "wb") as f:
-            f.write(content)
+        file_size = await save_upload_streaming(file, upload_path, max_bytes)
+    except UploadTooLargeError:
+        raise HTTPException(status_code=413, detail="File too large")
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
 
@@ -89,7 +89,7 @@ async def upload_and_create_job(
         title=sanitize_filename(file.filename),
         filename=sanitize_filename(file.filename),
         filepath=upload_path,
-        file_size=len(content),
+        file_size=file_size,
         mime_type=mime_type,
         status="held" if hold else "converting" if needs_conversion(mime_type) else "printing",
         copies=copies,
@@ -208,15 +208,15 @@ async def ingest_network_job(
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
 
-    content = await file.read()
-    if not content:
-        raise HTTPException(status_code=400, detail="Empty file")
-
     from app.routers.settings import get_setting
     _upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
     upload_path = get_upload_path(file.filename, upload_dir=_upload_dir)
-    with open(upload_path, "wb") as f:
-        f.write(content)
+    # No configured size cap for network jobs (internal, localhost-only endpoint);
+    # stream unbounded to preserve prior behavior while avoiding full in-RAM buffering.
+    file_size = await save_upload_streaming(file, upload_path, max_bytes=sys.maxsize)
+    if not file_size:
+        cleanup_file(upload_path)
+        raise HTTPException(status_code=400, detail="Empty file")
 
     # Resolve printer from queue_name
     printer = None
@@ -232,7 +232,7 @@ async def ingest_network_job(
         title=sanitize_filename(title),
         filename=sanitize_filename(file.filename),
         filepath=upload_path,
-        file_size=len(content),
+        file_size=file_size,
         mime_type=detect_mime_type(file.filename),
         status="held",
         copies=copies,
