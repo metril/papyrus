@@ -10,7 +10,7 @@ import EmailScanDialog from './EmailScanDialog';
 import CloudSaveDialog from './CloudSaveDialog';
 import { useToast } from '../../hooks/useToast';
 import api from '../../api/client';
-import type { ScanJob } from '../../types';
+import type { ScanJob, WSMessage } from '../../types';
 
 function formatSize(bytes: number | null): string {
   if (!bytes) return '';
@@ -45,7 +45,7 @@ function ScanThumbnail({ scanId }: { scanId: string }) {
 }
 
 export default function ScanList() {
-  const { scans, loading, fetchScans, deleteScan } = useScanStore();
+  const { scans, loading, fetchScans, upsertScan, removeScan, deleteScan } = useScanStore();
   const toast = useToast();
   const [emailScanId, setEmailScanId] = useState<string | null>(null);
   const [cloudScanId, setCloudScanId] = useState<string | null>(null);
@@ -148,20 +148,26 @@ export default function ScanList() {
     }
   };
 
-  const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const debouncedFetch = useCallback((_msg: unknown) => {
-    clearTimeout(fetchTimeoutRef.current);
-    fetchTimeoutRef.current = setTimeout(() => fetchScans(), 300);
-  }, [fetchScans]);
+  // Apply scan WS events incrementally instead of refetching the whole list.
+  // ScanList renders every scan in the store (status is only used to derive the
+  // merge toolbar), so any scan_completed payload applies directly.
+  const handleScanEvent = useCallback((msg: WSMessage) => {
+    if (msg.type === 'scan_completed') {
+      upsertScan(msg.data as unknown as ScanJob);
+    } else if (msg.type === 'scan_deleted') {
+      const scanId = (msg.data as { scan_id?: string }).scan_id;
+      if (scanId) removeScan(scanId);
+    }
+    // scan_progress arrives on the per-scan channel, not here; ignore anything else.
+  }, [upsertScan, removeScan]);
 
   useWebSocket({
     url: '/api/system/ws/scans',
-    onMessage: debouncedFetch,
+    onMessage: handleScanEvent,
   });
 
   useEffect(() => {
     fetchScans();
-    return () => clearTimeout(fetchTimeoutRef.current);
   }, [fetchScans]);
 
   if (loading && scans.length === 0) {

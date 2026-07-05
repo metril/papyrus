@@ -7,7 +7,7 @@ import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
 import FilePreviewModal from '../common/FilePreviewModal';
 import { useToast } from '../../hooks/useToast';
-import type { PrintJob, ManagedPrinter } from '../../types';
+import type { PrintJob, ManagedPrinter, WSMessage } from '../../types';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -79,7 +79,7 @@ function PrinterSelector({ job, printers, onAssigned }: { job: PrintJob; printer
 }
 
 export default function JobQueue() {
-  const { jobs, loading, fetchJobs, releaseJob, cancelJob, deleteJob, reprintJob } = useJobStore();
+  const { jobs, loading, fetchJobs, upsertJob, removeJob, releaseJob, cancelJob, deleteJob, reprintJob } = useJobStore();
   const toast = useToast();
   const [previewJob, setPreviewJob] = useState<PrintJob | null>(null);
   const [printers, setPrinters] = useState<ManagedPrinter[]>([]);
@@ -90,21 +90,27 @@ export default function JobQueue() {
   const [busyJobId, setBusyJobId] = useState<number | null>(null);
   const pinInputRef = useRef<HTMLInputElement>(null);
 
-  const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const debouncedFetch = useCallback((_msg: unknown) => {
-    clearTimeout(fetchTimeoutRef.current);
-    fetchTimeoutRef.current = setTimeout(() => fetchJobs(), 300);
-  }, [fetchJobs]);
+  // Apply job WS events incrementally instead of refetching the whole list.
+  // JobQueue renders every job in the store (no per-status filter), so any
+  // job_created/job_updated payload applies directly.
+  const handleJobEvent = useCallback((msg: WSMessage) => {
+    if (msg.type === 'job_created' || msg.type === 'job_updated') {
+      upsertJob(msg.data as unknown as PrintJob);
+    } else if (msg.type === 'job_deleted') {
+      const id = (msg.data as { id?: number }).id;
+      if (typeof id === 'number') removeJob(id);
+    }
+    // Other event types (e.g. copy_progress) don't change the job list — ignore.
+  }, [upsertJob, removeJob]);
 
   useWebSocket({
     url: '/api/system/ws/jobs',
-    onMessage: debouncedFetch,
+    onMessage: handleJobEvent,
   });
 
   useEffect(() => {
     fetchJobs();
     listPrinters().then(setPrinters).catch(() => {});
-    return () => clearTimeout(fetchTimeoutRef.current);
   }, [fetchJobs]);
 
   const handleRelease = async (job: PrintJob) => {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useJobStore } from '../store/jobStore';
 import { useScanStore } from '../store/scanStore';
 import { useWebSocket } from '../hooks/useWebSocket';
@@ -8,7 +8,7 @@ import StatusBadge from '../components/common/StatusBadge';
 import Button from '../components/common/Button';
 import FilePreviewModal from '../components/common/FilePreviewModal';
 import api from '../api/client';
-import type { PrintJob, ScanJob } from '../types';
+import type { PrintJob, ScanJob, WSMessage } from '../types';
 
 type Tab = 'all' | 'print' | 'scan';
 type StatusFilter = 'all' | 'completed' | 'failed' | 'held' | 'scanning';
@@ -61,8 +61,8 @@ function isWithinDate(timeStr: string, filter: DateFilter): boolean {
 }
 
 export default function HistoryPage() {
-  const { jobs, fetchJobs, deleteJob } = useJobStore();
-  const { scans, fetchScans, deleteScan } = useScanStore();
+  const { jobs, fetchJobs, upsertJob, removeJob, deleteJob } = useJobStore();
+  const { scans, fetchScans, upsertScan, removeScan, deleteScan } = useScanStore();
 
   const [tab, setTab] = useState<Tab>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -73,22 +73,33 @@ export default function HistoryPage() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Debounced WS refetch
-  const fetchTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const debouncedFetch = useCallback(() => {
-    clearTimeout(fetchTimeoutRef.current);
-    fetchTimeoutRef.current = setTimeout(() => {
-      fetchJobs();
-      fetchScans();
-    }, 300);
-  }, [fetchJobs, fetchScans]);
+  // Apply WS events incrementally to the shared stores. HistoryPage renders from
+  // the full jobs/scans lists and filters them at render time (tab/status/date/
+  // search in the useMemo below), so upserting into the store is always correct —
+  // the presentational filters hide any row that doesn't match the active view.
+  const handleJobEvent = useCallback((msg: WSMessage) => {
+    if (msg.type === 'job_created' || msg.type === 'job_updated') {
+      upsertJob(msg.data as unknown as PrintJob);
+    } else if (msg.type === 'job_deleted') {
+      const id = (msg.data as { id?: number }).id;
+      if (typeof id === 'number') removeJob(id);
+    }
+  }, [upsertJob, removeJob]);
 
-  useWebSocket({ url: '/api/system/ws/jobs', onMessage: debouncedFetch });
-  useWebSocket({ url: '/api/system/ws/scans', onMessage: debouncedFetch });
+  const handleScanEvent = useCallback((msg: WSMessage) => {
+    if (msg.type === 'scan_completed') {
+      upsertScan(msg.data as unknown as ScanJob);
+    } else if (msg.type === 'scan_deleted') {
+      const scanId = (msg.data as { scan_id?: string }).scan_id;
+      if (scanId) removeScan(scanId);
+    }
+  }, [upsertScan, removeScan]);
+
+  useWebSocket({ url: '/api/system/ws/jobs', onMessage: handleJobEvent });
+  useWebSocket({ url: '/api/system/ws/scans', onMessage: handleScanEvent });
 
   useEffect(() => {
     Promise.all([fetchJobs(), fetchScans()]).finally(() => setLoading(false));
-    return () => clearTimeout(fetchTimeoutRef.current);
   }, [fetchJobs, fetchScans]);
 
   // Build unified history items

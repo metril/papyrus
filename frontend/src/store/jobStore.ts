@@ -8,6 +8,8 @@ interface JobState {
   error: string | null;
   fetchJobs: () => Promise<void>;
   updateJob: (job: PrintJob) => void;
+  upsertJob: (job: PrintJob) => void;
+  removeJob: (id: number) => void;
   releaseJob: (id: number, pin?: string) => Promise<void>;
   cancelJob: (id: number) => Promise<void>;
   deleteJob: (id: number) => Promise<void>;
@@ -34,6 +36,22 @@ export const useJobStore = create<JobState>((set, get) => ({
     set({
       jobs: get().jobs.map((j) => (j.id === updatedJob.id ? updatedJob : j)),
     });
+  },
+
+  // Apply a full job object from a WS event: replace an existing row in place,
+  // or insert an unseen job at the top (list is ordered newest-first).
+  upsertJob: (incoming: PrintJob) => {
+    const jobs = get().jobs;
+    const exists = jobs.some((j) => j.id === incoming.id);
+    set({
+      jobs: exists
+        ? jobs.map((j) => (j.id === incoming.id ? incoming : j))
+        : [incoming, ...jobs],
+    });
+  },
+
+  removeJob: (id: number) => {
+    set({ jobs: get().jobs.filter((j) => j.id !== id) });
   },
 
   releaseJob: async (id: number, pin?: string) => {
