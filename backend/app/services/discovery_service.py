@@ -126,50 +126,66 @@ async def _resolve_one(zc, service_type: str, name: str) -> dict | None:
 def _merge(records: list) -> list[dict]:
     """Dedupe resolved records into one entry per physical device.
 
-    Dedupe key is the device's ``uuid`` when present, else its ``ip``.
+    Dedupe key is the device's ``uuid`` when present, else its ``ip`` — with
+    one refinement: a record *without* a UUID whose IP matches a record *with*
+    one is folded into that UUID's entry (printers commonly advertise a UUID
+    in their ``_ipp``/``_ipps`` TXT but not in the legacy ``_printer`` TXT,
+    and that must not split one device into two entries).
+
     ``protocols`` accumulates every protocol seen for that key (in discovery
-    order); the reported ``uri`` prefers ``ipp://`` over ``ipps://`` and only
-    falls back to ``lpd://`` when neither IPP variant was seen.
-    ``make_model``/``location`` take the first non-empty value seen for the
-    key.
+    order). The reported endpoint prefers ``ipp://`` over ``ipps://`` and only
+    falls back to ``lpd://`` when neither IPP variant was seen — and ``uri``,
+    ``ip``, and ``port`` are all taken from that same winning record, so the
+    merged entry never mixes one protocol's URI with another protocol's port.
+    ``make_model``/``location``/``uuid`` take the first non-empty value seen
+    for the key.
     """
+    resolved = [rec for rec in records if rec is not None]
+
+    # First pass: learn which IPs belong to a UUID-bearing record, so a
+    # UUID-less record for the same IP lands on the same dedupe key
+    # regardless of arrival order.
+    uuid_by_ip: dict = {}
+    for rec in resolved:
+        if rec["uuid"] and rec["ip"] not in uuid_by_ip:
+            uuid_by_ip[rec["ip"]] = rec["uuid"]
+
     devices: dict = {}
-    uris_by_key: dict = {}
+    endpoints_by_key: dict = {}  # key -> protocol -> (uri, ip, port)
     order: list = []
 
-    for rec in records:
-        if rec is None:
-            continue
-        key = rec["uuid"] or rec["ip"]
+    for rec in resolved:
+        key = rec["uuid"] or uuid_by_ip.get(rec["ip"]) or rec["ip"]
         if key not in devices:
             devices[key] = {
                 "name": rec["name"],
-                "ip": rec["ip"],
-                "port": rec["port"],
                 "make_model": rec["make_model"],
                 "location": rec["location"],
                 "uuid": rec["uuid"],
                 "protocols": [],
             }
-            uris_by_key[key] = {}
+            endpoints_by_key[key] = {}
             order.append(key)
 
         device = devices[key]
         if rec["protocol"] not in device["protocols"]:
             device["protocols"].append(rec["protocol"])
-        uris_by_key[key][rec["protocol"]] = rec["uri"]
+        endpoints_by_key[key].setdefault(rec["protocol"], (rec["uri"], rec["ip"], rec["port"]))
         if not device["make_model"] and rec["make_model"]:
             device["make_model"] = rec["make_model"]
         if not device["location"] and rec["location"]:
             device["location"] = rec["location"]
+        if not device["uuid"] and rec["uuid"]:
+            device["uuid"] = rec["uuid"]
 
     results = []
     for key in order:
         device = devices[key]
-        protocol_uris = uris_by_key[key]
-        device["uri"] = (
-            protocol_uris.get("ipp") or protocol_uris.get("ipps") or protocol_uris.get("lpd")
-        )
+        endpoints = endpoints_by_key[key]
+        for protocol in ("ipp", "ipps", "lpd"):
+            if protocol in endpoints:
+                device["uri"], device["ip"], device["port"] = endpoints[protocol]
+                break
         results.append(device)
 
     return sorted(results, key=lambda d: d["name"])

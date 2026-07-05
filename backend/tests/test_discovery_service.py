@@ -296,3 +296,178 @@ async def test_removed_state_change_is_ignored(monkeypatch):
     result = await discover_printers(timeout=0)
 
     assert result == []
+
+
+async def test_ipps_seen_first_still_reports_ipp_endpoint_consistently(monkeypatch):
+    # The ipps record (port 443) arrives BEFORE the ipp record (port 631).
+    # The merged entry must not mix protocols: uri, ip, and port must all come
+    # from the winning ipp record.
+    name_ipp = "Office Printer._ipp._tcp.local."
+    name_ipps = "Office Printer._ipps._tcp.local."
+    events = [
+        (_IPPS, name_ipps, ServiceStateChange.Added),
+        (_IPP, name_ipp, ServiceStateChange.Added),
+    ]
+    fixtures = {
+        (_IPPS, name_ipps): {
+            "resolved": True,
+            "addresses": ["192.0.2.9"],
+            "port": 443,
+            "properties": {b"rp": b"ipp/print", b"UUID": b"same-uuid-1234"},
+        },
+        (_IPP, name_ipp): {
+            "resolved": True,
+            "addresses": ["192.0.2.9"],
+            "port": 631,
+            "properties": {b"rp": b"ipp/print", b"UUID": b"same-uuid-1234"},
+        },
+    }
+    _patch(monkeypatch, events, fixtures)
+
+    result = await discover_printers(timeout=0)
+
+    assert len(result) == 1
+    device = result[0]
+    assert device["uri"] == "ipp://192.0.2.9:631/ipp/print"
+    assert device["port"] == 631
+    assert device["ip"] == "192.0.2.9"
+    assert set(device["protocols"]) == {"ipps", "ipp"}
+
+
+async def test_uuid_and_uuidless_records_same_ip_merge_into_one_entry(monkeypatch):
+    # Same physical device: _ipp TXT carries a UUID, legacy _printer TXT does
+    # not. Both resolve to the same IP -> ONE entry with both protocols and
+    # the uuid preserved.
+    name_ipp = "Brother MFC._ipp._tcp.local."
+    name_lpd = "Brother MFC._printer._tcp.local."
+    events = [
+        (_IPP, name_ipp, ServiceStateChange.Added),
+        (_PRINTER, name_lpd, ServiceStateChange.Added),
+    ]
+    fixtures = {
+        (_IPP, name_ipp): {
+            "resolved": True,
+            "addresses": ["192.0.2.60"],
+            "port": 631,
+            "properties": {b"rp": b"ipp/print", b"UUID": b"dev-uuid-60"},
+        },
+        (_PRINTER, name_lpd): {
+            "resolved": True,
+            "addresses": ["192.0.2.60"],
+            "port": 515,
+            "properties": {},  # no UUID in the LPD TXT
+        },
+    }
+    _patch(monkeypatch, events, fixtures)
+
+    result = await discover_printers(timeout=0)
+
+    assert len(result) == 1
+    device = result[0]
+    assert device["uuid"] == "dev-uuid-60"
+    assert set(device["protocols"]) == {"ipp", "lpd"}
+    assert device["uri"] == "ipp://192.0.2.60:631/ipp/print"
+    assert device["port"] == 631
+
+
+async def test_uuidless_record_seen_first_still_merges_with_uuid_record(monkeypatch):
+    # Same as above but the UUID-less _printer record arrives FIRST; the
+    # dedupe key must still unify both, and the uuid must be backfilled.
+    name_ipp = "Brother MFC._ipp._tcp.local."
+    name_lpd = "Brother MFC._printer._tcp.local."
+    events = [
+        (_PRINTER, name_lpd, ServiceStateChange.Added),
+        (_IPP, name_ipp, ServiceStateChange.Added),
+    ]
+    fixtures = {
+        (_PRINTER, name_lpd): {
+            "resolved": True,
+            "addresses": ["192.0.2.61"],
+            "port": 515,
+            "properties": {},
+        },
+        (_IPP, name_ipp): {
+            "resolved": True,
+            "addresses": ["192.0.2.61"],
+            "port": 631,
+            "properties": {b"rp": b"ipp/print", b"UUID": b"dev-uuid-61"},
+        },
+    }
+    _patch(monkeypatch, events, fixtures)
+
+    result = await discover_printers(timeout=0)
+
+    assert len(result) == 1
+    device = result[0]
+    assert device["uuid"] == "dev-uuid-61"
+    assert set(device["protocols"]) == {"lpd", "ipp"}
+    assert device["uri"] == "ipp://192.0.2.61:631/ipp/print"
+    assert device["port"] == 631
+    assert device["ip"] == "192.0.2.61"
+
+
+async def test_txt_value_none_yields_none_field(monkeypatch):
+    # zeroconf TXT values can be literally None (key present, no value).
+    name = "Half TXT Printer._ipp._tcp.local."
+    events = [(_IPP, name, ServiceStateChange.Added)]
+    fixtures = {
+        (_IPP, name): {
+            "resolved": True,
+            "addresses": ["192.0.2.70"],
+            "port": 631,
+            "properties": {
+                b"ty": b"Half TXT Model",
+                b"note": None,  # key present, value None
+                b"rp": None,
+            },
+        }
+    }
+    _patch(monkeypatch, events, fixtures)
+
+    result = await discover_printers(timeout=0)
+
+    assert len(result) == 1
+    device = result[0]
+    assert device["make_model"] == "Half TXT Model"
+    assert device["location"] is None
+    assert device["uri"] == "ipp://192.0.2.70:631/ipp/print"  # rp=None -> default path
+
+
+async def test_make_model_backfilled_from_later_record(monkeypatch):
+    # The first record for a device lacks make_model/location; a later record
+    # for the same device supplies them and must backfill the merged entry.
+    name_ipp = "Backfill Printer._ipp._tcp.local."
+    name_ipps = "Backfill Printer._ipps._tcp.local."
+    events = [
+        (_IPP, name_ipp, ServiceStateChange.Added),
+        (_IPPS, name_ipps, ServiceStateChange.Added),
+    ]
+    fixtures = {
+        (_IPP, name_ipp): {
+            "resolved": True,
+            "addresses": ["192.0.2.80"],
+            "port": 631,
+            "properties": {b"UUID": b"dev-uuid-80"},  # no ty / note
+        },
+        (_IPPS, name_ipps): {
+            "resolved": True,
+            "addresses": ["192.0.2.80"],
+            "port": 443,
+            "properties": {
+                b"UUID": b"dev-uuid-80",
+                b"ty": b"Backfill Model X",
+                b"note": b"Upstairs",
+            },
+        },
+    }
+    _patch(monkeypatch, events, fixtures)
+
+    result = await discover_printers(timeout=0)
+
+    assert len(result) == 1
+    device = result[0]
+    assert device["make_model"] == "Backfill Model X"
+    assert device["location"] == "Upstairs"
+    # ipp endpoint still wins even though the richer TXT came from ipps
+    assert device["uri"] == "ipp://192.0.2.80:631/ipp/print"
+    assert device["port"] == 631
