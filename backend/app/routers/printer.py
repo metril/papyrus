@@ -17,7 +17,7 @@ async def get_printer_status(
 ):
     """Get current printer status from CUPS."""
     name = await get_default_printer_name(db)
-    status = CupsService(printer_name=name).get_printer_status()
+    status = await CupsService(printer_name=name).get_printer_status()
     return PrinterStatus(**status)
 
 
@@ -28,4 +28,4 @@ async def get_printer_settings(
 ):
     """Get available printer options."""
     name = await get_default_printer_name(db)
-    return CupsService(printer_name=name).get_printer_options()
+    return await CupsService(printer_name=name).get_printer_options()

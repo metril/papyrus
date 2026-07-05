@@ -36,14 +36,14 @@ class PrinterUpdate(BaseModel):
     auto_release: bool | None = None
 
 
-def _cups_status(cups_name: str) -> dict:
+async def _cups_status(cups_name: str) -> dict:
     try:
-        return CupsService(printer_name=cups_name).get_printer_status()
+        return await CupsService(printer_name=cups_name).get_printer_status()
     except Exception:
         return {"state": 5, "state_message": "Unavailable", "accepting_jobs": False}
 
 
-def _printer_response(p: Printer) -> dict:
+async def _printer_response(p: Printer) -> dict:
     return {
         "id": p.id,
         "display_name": p.display_name,
@@ -54,7 +54,7 @@ def _printer_response(p: Printer) -> dict:
         "is_network_queue": p.is_network_queue,
         "auto_release": p.auto_release,
         "created_at": p.created_at,
-        "cups_status": _cups_status(p.cups_name),
+        "cups_status": await _cups_status(p.cups_name),
     }
 
 
@@ -64,7 +64,8 @@ async def list_printers(
     _user: User = Depends(get_current_user),
 ) -> list[dict]:
     result = await db.execute(select(Printer).order_by(Printer.id))
-    return [_printer_response(p) for p in result.scalars()]
+    # Fetch per-printer CUPS status concurrently.
+    return list(await asyncio.gather(*(_printer_response(p) for p in result.scalars())))
 
 
 @router.get("/probe")
@@ -144,7 +145,7 @@ async def add_printer(
     else:
         await cups_admin.add_physical_printer(cups_name, body.display_name, body.uri)
 
-    return _printer_response(printer)
+    return await _printer_response(printer)
 
 
 @router.patch("/{printer_id}")
@@ -182,7 +183,7 @@ async def update_printer(
         # Just update Avahi service name
         await cups_admin.update_physical_printer(old_cups_name, printer.display_name, "")
 
-    return _printer_response(printer)
+    return await _printer_response(printer)
 
 
 @router.delete("/{printer_id}", status_code=204)
@@ -220,7 +221,7 @@ async def set_default_printer(
     printer.is_default = True
     await db.commit()
     await db.refresh(printer)
-    return _printer_response(printer)
+    return await _printer_response(printer)
 
 
 @router.post("/{printer_id}/resume", status_code=200)
@@ -237,4 +238,4 @@ async def resume_printer(
         await cups_admin.enable_queue(printer.cups_name)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-    return _printer_response(printer)
+    return await _printer_response(printer)

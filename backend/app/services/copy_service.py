@@ -35,14 +35,14 @@ class CopyService:
 
         # Step 2: Print the scanned image
         try:
-            cups_job_id = cups_service.create_held_job(
+            cups_job_id = await cups_service.create_held_job(
                 filepath=filepath,
                 title=f"Copy_{scan_id}",
                 copies=copies,
                 duplex=duplex,
                 media=media,
             )
-            cups_service.release_job(cups_job_id)
+            await cups_service.release_job(cups_job_id)
         except Exception as e:
             raise CopyError(f"Print failed: {e}")
 

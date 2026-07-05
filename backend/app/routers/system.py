@@ -22,11 +22,14 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     db_ok = False
     disk_free_mb = 0
 
-    # Check CUPS
+    # Check CUPS (blocking pycups call -> worker thread)
     try:
         import cups
-        conn = cups.Connection()
-        conn.getPrinters()
+
+        def _probe_cups():
+            cups.Connection().getPrinters()
+
+        await asyncio.to_thread(_probe_cups)
         cups_ok = True
     except Exception:
         pass

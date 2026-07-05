@@ -158,7 +158,7 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
             "type": "job_updated", "data": {"id": job.id, "status": "printing"}
         })
 
-        cups_job_id = svc.create_held_job(
+        cups_job_id = await svc.create_held_job(
             filepath=print_path,
             title=job.title,
             copies=job.copies,
@@ -166,7 +166,7 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
             media=job.media,
         )
         job.cups_job_id = cups_job_id
-        svc.release_job(cups_job_id)
+        await svc.release_job(cups_job_id)
 
         job.status = "completed"
         job.completed_at = datetime.now(timezone.utc)
@@ -446,7 +446,7 @@ async def release_job(
             queue = await get_default_printer_name(db)
 
         svc = CupsService(printer_name=queue)
-        cups_job_id = svc.create_held_job(
+        cups_job_id = await svc.create_held_job(
             filepath=print_path,
             title=job_title,
             copies=job_copies,
@@ -454,7 +454,7 @@ async def release_job(
             media=job.media,
         )
         job.cups_job_id = cups_job_id
-        svc.release_job(cups_job_id)
+        await svc.release_job(cups_job_id)
 
         job.status = "printing"
         await db.commit()
@@ -507,7 +507,7 @@ async def cancel_job(
                 if printer and not printer.is_network_queue
                 else await get_default_printer_name(db)
             )
-            CupsService(printer_name=queue).cancel_job(job.cups_job_id)
+            await CupsService(printer_name=queue).cancel_job(job.cups_job_id)
         except Exception:
             pass
 
@@ -551,7 +551,7 @@ async def bulk_delete_jobs(
                     if printer and not printer.is_network_queue
                     else await get_default_printer_name(db)
                 )
-                CupsService(printer_name=queue).cancel_job(job.cups_job_id)
+                await CupsService(printer_name=queue).cancel_job(job.cups_job_id)
             except Exception:
                 pass
         cleanup_file(job.filepath)
@@ -588,7 +588,7 @@ async def delete_job(
                 if printer and not printer.is_network_queue
                 else await get_default_printer_name(db)
             )
-            CupsService(printer_name=queue).cancel_job(job.cups_job_id)
+            await CupsService(printer_name=queue).cancel_job(job.cups_job_id)
         except Exception:
             pass
 
