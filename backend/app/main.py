@@ -42,8 +42,11 @@ async def _reconcile_on_startup() -> None:
 
     async with async_session() as db:
         # --- CUPS printer queues ---
+        def _list_existing_cups() -> set[str]:
+            return set(cups.Connection().getPrinters().keys())
+
         try:
-            existing_cups = set(cups.Connection().getPrinters().keys())
+            existing_cups = await asyncio.to_thread(_list_existing_cups)
         except Exception:
             existing_cups = set()
 
@@ -179,6 +182,81 @@ async def _retention_loop() -> None:
             logger.warning("Retention cleanup failed: %s", exc)
 
 
+# In-memory snapshot of the last-broadcast status per CUPS queue name. Lives
+# at module scope (not inside the loop) so `_broadcast_changed_printer_statuses`
+# is unit-testable in isolation, and because a single-worker deployment makes
+# an in-process cache safe.
+_printer_status_previous: dict[str, dict] = {}
+
+
+async def _broadcast_changed_printer_statuses(
+    current: dict[str, dict], previous: dict[str, dict]
+) -> None:
+    """Compare each printer's current status snapshot to the previous one and
+    broadcast a ``printer_status`` WS event only for printers whose status
+    changed. Mutates ``previous`` in place with this cycle's snapshot.
+
+    Extracted from ``_poll_printer_statuses`` so the change-detection logic is
+    unit-testable without a DB session or a real CUPS connection.
+    """
+    from app.services.ws_manager import ws_manager
+
+    for cups_name, status in current.items():
+        if previous.get(cups_name) != status:
+            await ws_manager.broadcast("printers", {
+                "type": "printer_status",
+                "data": status,
+            })
+    previous.clear()
+    previous.update(current)
+
+
+async def _poll_printer_statuses(printers: list) -> None:
+    """Fetch current CUPS status for each given physical printer and
+    broadcast any changes since the last poll.
+
+    Takes an explicit ``printers`` list (objects with ``id``/``cups_name``)
+    rather than querying the DB itself, so tests can exercise this with fake
+    printer objects and a fake CupsService without a database.
+    """
+    from app.services.cups_service import CupsService
+
+    current: dict[str, dict] = {}
+    for p in printers:
+        status = await CupsService(printer_name=p.cups_name).get_printer_status()
+        current[p.cups_name] = {"id": p.id, "cups_name": p.cups_name, **status}
+
+    await _broadcast_changed_printer_statuses(current, _printer_status_previous)
+
+
+async def _printer_status_loop() -> None:
+    """Background task that pushes printer status changes over WS every 15s.
+
+    Only physical printers are polled (network queues aren't real devices
+    with toner/state to report). ``get_printer_status`` is served from
+    CupsService's 12s cache, but since 15s > 12s the cache has always expired
+    by the next poll, so each cycle performs exactly one real CUPS round-trip
+    per printer — the cache instead absorbs concurrent GET /printer/status
+    requests from clients between polls.
+    """
+    from sqlalchemy import select
+
+    from app.database import async_session
+    from app.models import Printer
+
+    while True:
+        await asyncio.sleep(15)
+        try:
+            async with async_session() as db:
+                result = await db.execute(
+                    select(Printer).where(Printer.is_network_queue.is_(False))
+                )
+                printers = list(result.scalars())
+            await _poll_printer_statuses(printers)
+        except Exception as exc:
+            logger.warning("Printer status poll failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: seed defaults, create dirs, reconcile hardware
@@ -200,9 +278,11 @@ async def lifespan(app: FastAPI):
     await _ensure_local_admin()
     await _reconcile_on_startup()
     retention_task = asyncio.create_task(_retention_loop())
+    printer_status_task = asyncio.create_task(_printer_status_loop())
     yield
     # Shutdown
     retention_task.cancel()
+    printer_status_task.cancel()
 
 
 app = FastAPI(

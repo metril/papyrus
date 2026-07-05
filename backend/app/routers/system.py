@@ -99,3 +99,14 @@ async def scans_ws(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         ws_manager.disconnect("scans", websocket)
+
+
+@router.websocket("/ws/printers")
+async def printers_ws(websocket: WebSocket):
+    """WebSocket for real-time printer status updates."""
+    await ws_manager.connect("printers", websocket)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect("printers", websocket)
