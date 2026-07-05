@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import require_admin
 from app.database import get_db
 from app.models import AppConfig, AuditEntry, PrintJob, ScanJob, User
+from app.services import settings_cache
 
 router = APIRouter()
 
@@ -166,6 +167,10 @@ async def restore_settings(
         restored += 1
 
     await db.commit()
+    # Restore can touch an arbitrary/unknown set of keys (any AppConfig row from the
+    # backup, including encrypted ones) — invalidate everything rather than try to
+    # map row keys back to logical setting names.
+    settings_cache.invalidate_all()
     return {"restored": restored}
 
 

@@ -9,6 +9,7 @@ from app.auth.dependencies import require_admin
 from app.config import settings
 from app.database import get_db
 from app.models import AppConfig, User
+from app.services import settings_cache
 from app.services.audit_service import log_event
 from app.services.crypto import decrypt_value, encrypt_value
 
@@ -109,21 +110,38 @@ async def _load_db_values(db: AsyncSession) -> dict[str, str]:
 
 
 async def get_setting(db: AsyncSession, key: str) -> str | None:
-    """Read a setting from the AppConfig database table (DB is single source of truth)."""
+    """Read a setting from the AppConfig database table (DB is single source of truth).
+
+    Cached in-process for ``settings_cache.TTL_SECONDS`` (the post-decryption value,
+    for encrypted settings) — see `app.services.settings_cache` docstring. Every
+    AppConfig writer must invalidate the affected key(s) after commit, or callers may
+    observe a stale value for up to the TTL. Cache is per-process; valid only for the
+    current single-worker uvicorn deployment.
+    """
+    hit, cached_value = settings_cache.get(key)
+    if hit:
+        return cached_value
+
     _type, encrypted = CONFIGURABLE.get(key, (str, False))
     db_key = _db_key(key, encrypted)
     row = await db.get(AppConfig, db_key)
+    value: str | None
     if row:
         if encrypted:
             try:
-                return decrypt_value(row.value)
+                value = decrypt_value(row.value)
             except Exception:
                 logger.warning(
                     "Failed to decrypt setting '%s' — encryption key may have changed", key
                 )
-                return None
-        return row.value
-    return None
+                value = None
+        else:
+            value = row.value
+    else:
+        value = None
+
+    settings_cache.put(key, value)
+    return value
 
 
 def safe_int_setting(val: str | None, default: int) -> int:
@@ -204,6 +222,8 @@ async def update_settings(
                     db.add(AppConfig(key=key, value=str_value))
 
     await db.commit()
+    for key in updates:
+        settings_cache.invalidate(key)
 
     # Audit log — record which keys were changed (redact encrypted values)
     changed_keys = [k for k in updates if not (CONFIGURABLE[k][1] and updates[k] == _PLACEHOLDER)]

@@ -11,6 +11,7 @@ from app.auth.dependencies import get_current_user, require_admin
 from app.database import get_db
 from app.models import AppConfig, PrintJob, User
 from app.schemas import EmailConfig, EmailConfigStatus
+from app.services import settings_cache
 from app.services.convert_service import is_printable
 from app.services.crypto import decrypt_value, encrypt_value
 from app.services.email_service import email_service
@@ -69,6 +70,8 @@ async def update_email_config(
             db.add(AppConfig(key=key, value=value))
 
     await db.commit()
+    for key in ("smtp_host", "smtp_port", "smtp_user", "smtp_password", "smtp_from"):
+        settings_cache.invalidate(key)
     return {"message": "SMTP configuration updated"}
 
 
@@ -228,6 +231,7 @@ async def generate_webhook_secret(
         db.add(AppConfig(key="email_webhook_secret", value=encrypted))
 
     await db.commit()
+    settings_cache.invalidate("email_webhook_secret")
 
     from app.config import settings
     return {

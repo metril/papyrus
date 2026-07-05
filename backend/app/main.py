@@ -110,6 +110,9 @@ async def _seed_defaults() -> None:
 
         if added:
             await db.commit()
+            from app.services import settings_cache
+
+            settings_cache.invalidate_all()
             logger.info("Seeded %d missing default settings", added)
         else:
             logger.info("AppConfig has all %d defaults — nothing to seed", len(DEFAULTS))
