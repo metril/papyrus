@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 
 from smb.smb_structs import OperationFailure
@@ -11,6 +12,13 @@ class SMBError(Exception):
 
 
 class SMBService:
+    """Async wrapper around pysmb.
+
+    Every pysmb call is blocking network I/O, so the public methods dispatch
+    the synchronous work to a worker thread via ``asyncio.to_thread`` to avoid
+    stalling the event loop.
+    """
+
     def _connect(
         self, server: str, share_name: str, username: str | None,
         password_encrypted: str | None, domain: str,
@@ -31,7 +39,11 @@ class SMBService:
 
         return conn, share_name
 
-    def browse(
+    # ------------------------------------------------------------------
+    # Synchronous bodies (run inside a worker thread).
+    # ------------------------------------------------------------------
+
+    def _browse_sync(
         self, server: str, share_name: str, path: str,
         username: str | None, password_encrypted: str | None, domain: str,
     ) -> list[dict]:
@@ -61,7 +73,7 @@ class SMBService:
         finally:
             conn.close()
 
-    def download(
+    def _download_sync(
         self, server: str, share_name: str, remote_path: str,
         local_path: str, username: str | None,
         password_encrypted: str | None, domain: str,
@@ -80,7 +92,7 @@ class SMBService:
         finally:
             conn.close()
 
-    def upload(
+    def _upload_sync(
         self, server: str, share_name: str, remote_path: str,
         local_path: str, username: str | None,
         password_encrypted: str | None, domain: str,
@@ -94,6 +106,47 @@ class SMBService:
             raise SMBError(f"Failed to upload to {remote_path}: {e}")
         finally:
             conn.close()
+
+    # ------------------------------------------------------------------
+    # Async public API.
+    # ------------------------------------------------------------------
+
+    async def browse(
+        self, server: str, share_name: str, path: str,
+        username: str | None, password_encrypted: str | None, domain: str,
+    ) -> list[dict]:
+        """Browse files on an SMB share.
+
+        Returns list of file entries with name, is_directory, size, modified_at.
+        """
+        return await asyncio.to_thread(
+            self._browse_sync, server, share_name, path, username, password_encrypted, domain
+        )
+
+    async def download(
+        self, server: str, share_name: str, remote_path: str,
+        local_path: str, username: str | None,
+        password_encrypted: str | None, domain: str,
+    ) -> str:
+        """Download a file from an SMB share to a local path.
+
+        Returns the local file path.
+        """
+        return await asyncio.to_thread(
+            self._download_sync, server, share_name, remote_path, local_path,
+            username, password_encrypted, domain,
+        )
+
+    async def upload(
+        self, server: str, share_name: str, remote_path: str,
+        local_path: str, username: str | None,
+        password_encrypted: str | None, domain: str,
+    ) -> None:
+        """Upload a local file to an SMB share."""
+        await asyncio.to_thread(
+            self._upload_sync, server, share_name, remote_path, local_path,
+            username, password_encrypted, domain,
+        )
 
 
 smb_service = SMBService()

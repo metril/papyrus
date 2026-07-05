@@ -81,7 +81,7 @@ async def browse_share(
         raise HTTPException(status_code=404, detail="Share not found")
 
     try:
-        entries = smb_service.browse(
+        entries = await smb_service.browse(
             server=share.server,
             share_name=share.share_name,
             path=path,
@@ -112,7 +112,7 @@ async def download_from_share(
     temp_path = os.path.join(tempfile.gettempdir(), f"papyrus_smb_{filename}")
 
     try:
-        smb_service.download(
+        await smb_service.download(
             server=share.server,
             share_name=share.share_name,
             remote_path=path,

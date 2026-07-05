@@ -504,7 +504,7 @@ async def save_scan_to_smb(
     dest_path = f"{remote_path.rstrip('/')}/{filename}"
 
     try:
-        smb_service.upload(
+        await smb_service.upload(
             server=share.server,
             share_name=share.share_name,
             remote_path=dest_path,
