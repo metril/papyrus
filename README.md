@@ -21,6 +21,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Scan Previews**: Cached thumbnail images for fast-loading scan list/grid previews
 - **Template Naming**: Configurable filename templates for delivered scans using variables ({date}, {time}, {id}, etc.)
 - **Network Printer**: Appears as an AirPrint/IPP printer on the LAN; network print jobs enter the hold-release queue
+- **Printer Discovery**: mDNS scan pick-list to add printers, IP probe with IPP auto-enrichment (model/location), and a one-page test print to confirm which physical device a configured printer maps to
 - **Network Scanner**: Appears as an eSCL/AirScan scanner on the LAN; devices can scan directly via the eSCL protocol
 - **Webhooks**: Outgoing HTTP notifications with HMAC-SHA256 signing for print/scan events
 - **Printer Status**: Live toner/ink levels and state display from CUPS marker attributes, pushed to clients over WebSocket as changes are detected (no polling)
@@ -47,7 +48,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 
 - **Backend**: Python 3.12, FastAPI, SQLAlchemy (async), PostgreSQL
 - **Frontend**: React 18, TypeScript, Vite, Tailwind CSS
-- **Printing**: CUPS (driverless/IPP Everywhere), AirPrint via Avahi mDNS
+- **Printing**: CUPS (driverless/IPP Everywhere), AirPrint via Avahi mDNS, printer discovery via python-zeroconf
 - **Scanning**: SANE via scanimage (sane-airscan for WSD), eSCL server for network scanning
 - **Deployment**: Docker with multi-stage build (`network_mode: host` for mDNS), behind Traefik
 
@@ -112,7 +113,7 @@ See [.env.example](.env.example) for the full list.
 ### Settings UI
 
 After first login, configure everything else via **Settings**:
-- **Printers**: Add/manage CUPS printers
+- **Printers**: Add/manage CUPS printers — discover via mDNS pick-list (`GET /api/printers/discover`), probe an IP with IPP enrichment (`GET /api/printers/probe`), refresh a configured printer's device info (`POST /api/printers/{id}/refresh-info`), or print a test page (`POST /api/printers/{id}/test-page`)
 - **Scanners**: Register Brother scanners (brscan4), probe by IP, or discover via mDNS
 - **OIDC**: Admin group mapping, groups claim name, scopes
 - **Email**: SMTP, webhook secret

@@ -9,7 +9,7 @@ Papyrus is a web-based print and scan server for network-connected Brother DCP-L
 - **Database**: PostgreSQL 16
 - **Printing**: CUPS (driverless/IPP Everywhere), AirPrint via Avahi mDNS, pycups
 - **Scanning**: `scanimage` subprocess (SANE/sane-airscan), eSCL server for network scanning
-- **Network Discovery**: Avahi mDNS (AirPrint `_ipp._tcp`, eSCL `_uscan._tcp`)
+- **Network Discovery**: Avahi mDNS (AirPrint `_ipp._tcp`, eSCL `_uscan._tcp`); python-zeroconf for admin-triggered printer discovery scans (`_ipp`/`_ipps`/`_printer._tcp`) since avahi-browse/CUPS dnssd need D-Bus, unavailable in-container
 - **Doc Conversion**: LibreOffice headless (DOCX/ODT/XLSX/PPTX → PDF)
 - **OCR**: Tesseract + ocrmypdf for searchable PDFs
 - **Auth**: OIDC (Authentik/Keycloak) via authlib + admin-generated API tokens + group-based role mapping
@@ -26,8 +26,8 @@ Papyrus is a web-based print and scan server for network-connected Brother DCP-L
   - `config.py` — Infrastructure-only Pydantic Settings (`PAPYRUS_` env prefix); UI-managed settings are in AppConfig DB
   - `auth/` — OIDC + API token auth
   - `routers/` — API route handlers
-  - `services/` — Business logic (CUPS, scanning, SMB, email, cloud, Paperless-ngx, OCR, audit, WebDAV, FTP, image enhancement, webhooks, retention, `thumbnail_service.py` for cached scan previews, `settings_cache.py` for a 30s in-process TTL cache in front of `get_setting`, `http_client.py` for a shared pooled `httpx.AsyncClient`)
-  - `models.py` — SQLAlchemy ORM models
+  - `services/` — Business logic (CUPS, scanning, SMB, email, cloud, Paperless-ngx, OCR, audit, WebDAV, FTP, image enhancement, webhooks, retention, `thumbnail_service.py` for cached scan previews, `settings_cache.py` for a 30s in-process TTL cache in front of `get_setting`, `http_client.py` for a shared pooled `httpx.AsyncClient`, `discovery_service.py` for zeroconf mDNS printer discovery, `ipp_client.py` for a minimal hand-rolled IPP Get-Printer-Attributes client (probe/discover enrichment, reusable for future supply alerts), `test_page_service.py` for printer identify-sheet test pages)
+  - `models.py` — SQLAlchemy ORM models (`Printer.make_and_model`/`Printer.location`, nullable, populated via IPP probing — migration 013)
   - `schemas.py` — Pydantic request/response models
   - `database.py` — Async engine (asyncpg)
 - `frontend/src/` — React application
