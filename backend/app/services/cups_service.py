@@ -2,6 +2,7 @@ import cups
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+
 class CupsService:
     def __init__(self, printer_name: str | None = None):
         self.printer_name = printer_name or ""
@@ -125,7 +126,7 @@ async def get_default_printer(db: AsyncSession):
     """Return the default physical Printer DB object, or None."""
     from app.models import Printer  # avoid circular import at module level
     result = await db.execute(
-        select(Printer).where(Printer.is_default == True, Printer.is_network_queue == False)
+        select(Printer).where(Printer.is_default.is_(True), Printer.is_network_queue.is_(False))
     )
     return result.scalar_one_or_none()
 

@@ -1,8 +1,6 @@
 """WebDAV/Nextcloud client service."""
 
-import os
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
 
 import httpx
 
@@ -90,7 +88,9 @@ class WebDAVService:
             name = name_el.text if name_el is not None and name_el.text else href.split("/")[-1]
 
             resource_type = prop.find("d:resourcetype", ns)
-            is_dir = resource_type is not None and resource_type.find("d:collection", ns) is not None
+            is_dir = (
+                resource_type is not None and resource_type.find("d:collection", ns) is not None
+            )
 
             size_el = prop.find("d:getcontentlength", ns)
             size = int(size_el.text) if size_el is not None and size_el.text else None

@@ -1,13 +1,12 @@
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.tokens import validate_token
 from app.database import get_db
 from app.models import User
-from app.auth.tokens import validate_token
 
 ALL_PERMISSIONS = ["print", "scan", "files", "admin", "email"]
 

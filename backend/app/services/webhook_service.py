@@ -41,7 +41,7 @@ async def dispatch_webhook(
     This is fire-and-forget — failures are logged but never raised.
     """
     result = await db.execute(
-        select(Webhook).where(Webhook.enabled == True)
+        select(Webhook).where(Webhook.enabled.is_(True))
     )
     webhooks = result.scalars().all()
 

@@ -63,7 +63,9 @@ async def cleanup_old_print_jobs(db: AsyncSession, retention_days: int) -> int:
 
     if deleted:
         await db.commit()
-        logger.info("Retention: deleted %d old print jobs (cutoff: %s)", deleted, cutoff.isoformat())
+        logger.info(
+            "Retention: deleted %d old print jobs (cutoff: %s)", deleted, cutoff.isoformat()
+        )
 
     return deleted
 

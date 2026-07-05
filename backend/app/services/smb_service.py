@@ -1,9 +1,7 @@
-import os
-import tempfile
 from datetime import datetime, timezone
 
-from smb.SMBConnection import SMBConnection
 from smb.smb_structs import OperationFailure
+from smb.SMBConnection import SMBConnection
 
 from app.services.crypto import decrypt_value
 

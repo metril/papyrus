@@ -16,9 +16,9 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session, get_db
-from app.routers.settings import get_setting
 from app.models import ScanJob
-from app.services.scan_service import ScanError, get_default_scanner_device, scan_service
+from app.routers.settings import get_setting
+from app.services.scan_service import get_default_scanner_device, scan_service
 from app.services.ws_manager import ws_manager
 
 _log = logging.getLogger(__name__)
@@ -52,7 +52,9 @@ SCANIMAGE_COLOR_MAP = {v: k for k, v in ESCL_COLOR_MAP.items()}
 
 
 def _xml_response(root: Element) -> Response:
-    xml_bytes = b'<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(root, encoding="unicode").encode()
+    xml_bytes = (
+        b'<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(root, encoding="unicode").encode()
+    )
     return Response(content=xml_bytes, media_type="text/xml; charset=utf-8")
 
 
@@ -210,18 +212,18 @@ async def _run_scan(job_id: str) -> None:
         # eSCL ScanRegion coordinates are in the scanner's capability coordinate
         # system (our MaxWidth/MaxHeight are defined at 300dpi), NOT at the
         # actual scan resolution. Convert to mm using the caps DPI base.
-        CAPS_DPI = 300  # must match MaxWidth/MaxHeight in ScannerCapabilities
+        caps_dpi = 300  # must match MaxWidth/MaxHeight in ScannerCapabilities
         left_mm = top_mm = width_mm = height_mm = None
         region = job.get("scan_region") or {}
         res = job["resolution"]
         if region.get("width"):
-            width_mm  = region["width"]    / CAPS_DPI * 25.4
-            height_mm = region["height"]   / CAPS_DPI * 25.4
-            left_mm   = region["x_offset"] / CAPS_DPI * 25.4
-            top_mm    = region["y_offset"] / CAPS_DPI * 25.4
+            width_mm  = region["width"]    / caps_dpi * 25.4
+            height_mm = region["height"]   / caps_dpi * 25.4
+            left_mm   = region["x_offset"] / caps_dpi * 25.4
+            top_mm    = region["y_offset"] / caps_dpi * 25.4
 
-        req_w = round(region["width"]  * res / CAPS_DPI) if region.get("width")  else None
-        req_h = round(region["height"] * res / CAPS_DPI) if region.get("height") else None
+        req_w = round(region["width"]  * res / caps_dpi) if region.get("width")  else None
+        req_h = round(region["height"] * res / caps_dpi) if region.get("height") else None
 
         _log.info(
             "eSCL job %s: res=%s fmt=%s src=%s region_px=%sx%s mm=%.1fx%.1f",
@@ -347,7 +349,7 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
             text = elem.text.lower()
             source = "ADF" if ("adf" in text or "feeder" in text) else "Flatbed"
 
-        # ScanRegion coords are in caps coordinate system (CAPS_DPI=300 in _run_scan)
+        # ScanRegion coords are in caps coordinate system (caps_dpi=300 in _run_scan)
         elem = _find_local(root, "Width")
         if elem is not None and elem.text:
             scan_region["width"] = int(elem.text)

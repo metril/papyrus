@@ -140,8 +140,8 @@ async def probe_scanner_ip(
     Falls back to manual eSCL port probing if airscan-discover doesn't find the device.
     """
     import xml.etree.ElementTree as ET
-    from urllib.request import urlopen
     from urllib.error import URLError
+    from urllib.request import urlopen
 
     # --- 1. Try airscan-discover (finds both WSD and eSCL devices) ---
     try:
@@ -252,7 +252,14 @@ async def probe_scanner_ip(
     except Exception as exc:
         last_error = f"WSD fallback: {exc}"
 
-    return {"reachable": False, "device": f"airscan:e:Scanner_{ip.replace('.', '_')}:http://{ip}/eSCL", "make_model": None, "protocol": None, "airscan_url": None, "error": last_error}
+    return {
+        "reachable": False,
+        "device": f"airscan:e:Scanner_{ip.replace('.', '_')}:http://{ip}/eSCL",
+        "make_model": None,
+        "protocol": None,
+        "airscan_url": None,
+        "error": last_error,
+    }
 
 
 @router.get("/diagnostics")
@@ -556,7 +563,7 @@ async def set_default_scanner(
     if not scanner:
         raise HTTPException(status_code=404, detail="Scanner not found")
 
-    await db.execute(update(Scanner).where(Scanner.is_default == True).values(is_default=False))
+    await db.execute(update(Scanner).where(Scanner.is_default.is_(True)).values(is_default=False))
     scanner.is_default = True
     await db.commit()
     await db.refresh(scanner)

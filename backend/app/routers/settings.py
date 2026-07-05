@@ -6,9 +6,9 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_admin
+from app.config import settings
 from app.database import get_db
 from app.models import AppConfig, User
-from app.config import settings
 from app.services.audit_service import log_event
 from app.services.crypto import decrypt_value, encrypt_value
 
@@ -98,7 +98,7 @@ def _db_key(key: str, encrypted: bool) -> str:
 
 
 def _coerce(value: str, type_: type) -> Any:
-    if type_ == bool:
+    if type_ is bool:
         return value.lower() in ("true", "1", "yes")
     return type_(value)
 
@@ -196,7 +196,7 @@ async def update_settings(
                 # Clear the setting — let it fall back to default
                 await db.execute(delete(AppConfig).where(AppConfig.key == key))
             else:
-                str_value = str(value).lower() if _type == bool else str(value)
+                str_value = str(value).lower() if _type is bool else str(value)
                 existing = await db.get(AppConfig, key)
                 if existing:
                     existing.value = str_value

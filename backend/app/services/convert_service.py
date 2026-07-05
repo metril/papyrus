@@ -1,7 +1,5 @@
 import asyncio
 import os
-import tempfile
-
 
 CONVERTIBLE_MIMES = {
     "application/msword",

@@ -1,20 +1,24 @@
 import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from starlette.responses import FileResponse
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.responses import FileResponse
 
 from app.auth.dependencies import get_current_user, require_permission
 from app.database import get_db
-from app.services.audit_service import log_event
-from app.services.webhook_service import dispatch_webhook
 from app.models import Printer, PrintJob, User
 from app.schemas import BulkDeleteJobsRequest, BulkDeleteResponse, PrintJobList, PrintJobResponse
-from app.services.convert_service import CONVERTIBLE_MIMES, convert_to_pdf, is_printable, needs_conversion
+from app.services.audit_service import log_event
+from app.services.convert_service import (
+    CONVERTIBLE_MIMES,
+    convert_to_pdf,
+    is_printable,
+    needs_conversion,
+)
 from app.services.cups_service import CupsService, get_default_printer_name
 from app.services.file_service import (
     cleanup_file,
@@ -23,6 +27,7 @@ from app.services.file_service import (
     sanitize_filename,
     validate_upload_size,
 )
+from app.services.webhook_service import dispatch_webhook
 from app.services.ws_manager import ws_manager
 
 router = APIRouter()
@@ -117,7 +122,7 @@ async def upload_and_create_job(
 
 async def get_default_printer(db: AsyncSession):
     result = await db.execute(
-        select(Printer).where(Printer.is_default == True, Printer.is_network_queue == False)
+        select(Printer).where(Printer.is_default.is_(True), Printer.is_network_queue.is_(False))
     )
     return result.scalar_one_or_none()
 
@@ -457,7 +462,9 @@ async def release_job(
         await log_event(db, "print.release", "print_job", str(job_id),
                         user_id=user_id, detail={"title": job_title, "copies": job_copies})
         await db.commit()
-        await dispatch_webhook(db, "print.release", {"id": job_id, "title": job_title, "copies": job_copies})
+        await dispatch_webhook(
+            db, "print.release", {"id": job_id, "title": job_title, "copies": job_copies}
+        )
         await ws_manager.broadcast("jobs", {
             "type": "job_updated", "data": {"id": job_id, "status": "printing"}
         })
@@ -495,7 +502,11 @@ async def cancel_job(
         # Try to cancel via CUPS — use the job's printer or default
         try:
             printer = await db.get(Printer, job.printer_id) if job.printer_id else None
-            queue = f"{printer.cups_name}_release" if printer and not printer.is_network_queue else await get_default_printer_name(db)
+            queue = (
+                f"{printer.cups_name}_release"
+                if printer and not printer.is_network_queue
+                else await get_default_printer_name(db)
+            )
             CupsService(printer_name=queue).cancel_job(job.cups_job_id)
         except Exception:
             pass
@@ -535,7 +546,11 @@ async def bulk_delete_jobs(
         if job.cups_job_id and job.status in ("held", "printing"):
             try:
                 printer = await db.get(Printer, job.printer_id) if job.printer_id else None
-                queue = f"{printer.cups_name}_release" if printer and not printer.is_network_queue else await get_default_printer_name(db)
+                queue = (
+                    f"{printer.cups_name}_release"
+                    if printer and not printer.is_network_queue
+                    else await get_default_printer_name(db)
+                )
                 CupsService(printer_name=queue).cancel_job(job.cups_job_id)
             except Exception:
                 pass
@@ -568,7 +583,11 @@ async def delete_job(
     if job.cups_job_id and job.status in ("held", "printing"):
         try:
             printer = await db.get(Printer, job.printer_id) if job.printer_id else None
-            queue = f"{printer.cups_name}_release" if printer and not printer.is_network_queue else await get_default_printer_name(db)
+            queue = (
+                f"{printer.cups_name}_release"
+                if printer and not printer.is_network_queue
+                else await get_default_printer_name(db)
+            )
             CupsService(printer_name=queue).cancel_job(job.cups_job_id)
         except Exception:
             pass
@@ -637,7 +656,9 @@ async def reprint_job(
 
     await ws_manager.broadcast("jobs", {
         "type": "job_created",
-        "data": {"id": new_job.id, "title": new_job.title, "status": "held", "source_type": "upload"},
+        "data": {
+            "id": new_job.id, "title": new_job.title, "status": "held", "source_type": "upload",
+        },
     })
 
     return new_job

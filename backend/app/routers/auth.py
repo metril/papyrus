@@ -29,8 +29,12 @@ router = APIRouter()
 @router.get("/providers")
 async def get_providers(db: AsyncSession = Depends(get_db)) -> dict:
     """Return available auth methods (public, no auth required)."""
-    local_enabled = (await get_setting(db, "local_auth_enabled") or "true").lower() in ("true", "1", "yes")
-    oidc_enabled = (await get_setting(db, "oidc_enabled") or "false").lower() in ("true", "1", "yes")
+    local_enabled = (await get_setting(db, "local_auth_enabled") or "true").lower() in (
+        "true", "1", "yes",
+    )
+    oidc_enabled = (await get_setting(db, "oidc_enabled") or "false").lower() in (
+        "true", "1", "yes",
+    )
     oidc_issuer = await get_setting(db, "oidc_issuer") or ""
     # Env var admin can always log in, even if local auth is disabled
     admin_override = bool(settings.admin_username)
@@ -62,12 +66,14 @@ async def local_login(
         and body.username == settings.admin_username
     )
     if not is_env_admin:
-        local_enabled = (await get_setting(db, "local_auth_enabled") or "true").lower() in ("true", "1", "yes")
+        local_enabled = (await get_setting(db, "local_auth_enabled") or "true").lower() in (
+            "true", "1", "yes",
+        )
         if not local_enabled:
             raise HTTPException(status_code=403, detail="Local login is disabled")
 
     result = await db.execute(
-        select(User).where(User.username == body.username, User.is_local == True)
+        select(User).where(User.username == body.username, User.is_local.is_(True))
     )
     user = result.scalar_one_or_none()
     if not user or not user.password_hash:
@@ -117,7 +123,9 @@ async def oidc_login(request: Request, db: AsyncSession = Depends(get_db)):
         return RedirectResponse(url="/", status_code=302)
 
     # Check OIDC config from DB
-    oidc_enabled = (await get_setting(db, "oidc_enabled") or "false").lower() in ("true", "1", "yes")
+    oidc_enabled = (await get_setting(db, "oidc_enabled") or "false").lower() in (
+        "true", "1", "yes",
+    )
     if not oidc_enabled:
         raise HTTPException(status_code=503, detail="OIDC not enabled")
 

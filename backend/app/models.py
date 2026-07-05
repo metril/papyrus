@@ -4,7 +4,6 @@ from datetime import datetime
 from sqlalchemy import (
     Boolean,
     DateTime,
-    Enum as SAEnum,
     ForeignKey,
     Integer,
     String,
@@ -21,7 +20,9 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    oidc_sub: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True, index=True)
+    oidc_sub: Mapped[str | None] = mapped_column(
+        String(255), unique=True, nullable=True, index=True
+    )
     email: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     role: Mapped[str] = mapped_column(String(20), nullable=False, default="user")
@@ -31,7 +32,9 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    api_tokens: Mapped[list["APIToken"]] = relationship(back_populates="user", cascade="all, delete")
+    api_tokens: Mapped[list["APIToken"]] = relationship(
+        back_populates="user", cascade="all, delete"
+    )
     print_jobs: Mapped[list["PrintJob"]] = relationship(back_populates="user")
     scan_jobs: Mapped[list["ScanJob"]] = relationship(back_populates="user")
 
@@ -68,8 +71,11 @@ class PrintJob(Base):
     copies: Mapped[int] = mapped_column(Integer, default=1)
     duplex: Mapped[bool] = mapped_column(Boolean, default=False)
     media: Mapped[str] = mapped_column(String(50), default="A4")
-    source_type: Mapped[str] = mapped_column(String(20), default="upload")  # upload, smb, cloud, email, network
-    printer_id: Mapped[int | None] = mapped_column(ForeignKey("printers.id", ondelete="SET NULL"), nullable=True)
+    # upload, smb, cloud, email, network
+    source_type: Mapped[str] = mapped_column(String(20), default="upload")
+    printer_id: Mapped[int | None] = mapped_column(
+        ForeignKey("printers.id", ondelete="SET NULL"), nullable=True
+    )
     options_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     release_pin: Mapped[str | None] = mapped_column(String(10), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -103,7 +109,9 @@ class ScanJob(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    scanner_id: Mapped[int | None] = mapped_column(ForeignKey("scanners.id", ondelete="SET NULL"), nullable=True)
+    scanner_id: Mapped[int | None] = mapped_column(
+        ForeignKey("scanners.id", ondelete="SET NULL"), nullable=True
+    )
 
     user: Mapped["User"] = relationship(back_populates="scan_jobs")
 
@@ -131,7 +139,9 @@ class CloudProvider(Base):
     access_token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     refresh_token_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     token_expiry: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    connected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class AppConfig(Base):
@@ -169,7 +179,9 @@ class ScanProfile(Base):
     source: Mapped[str] = mapped_column(String(20), default="Flatbed")
     ocr_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     post_actions: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -180,11 +192,15 @@ class AuditEntry(Base):
     action: Mapped[str] = mapped_column(String(50), nullable=False)
     entity_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
     entity_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     source: Mapped[str] = mapped_column(String(20), default="web")
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
 
 
 class Webhook(Base):
@@ -194,9 +210,12 @@ class Webhook(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     url: Mapped[str] = mapped_column(String(500), nullable=False)
     secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    events: Mapped[list] = mapped_column(JSON, nullable=False, default=list)  # e.g. ["print.release", "scan.complete"]
+    # e.g. ["print.release", "scan.complete"]
+    events: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

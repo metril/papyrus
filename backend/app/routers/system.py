@@ -1,5 +1,4 @@
 import asyncio
-import os
 import shutil
 import time
 
@@ -46,8 +45,9 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
     # Check database
     try:
-        from app.database import async_session
         from sqlalchemy import text
+
+        from app.database import async_session
         async with async_session() as db:
             await db.execute(text("SELECT 1"))
         db_ok = True

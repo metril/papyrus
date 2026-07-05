@@ -48,7 +48,12 @@ async def connect_webdav(
     await db.commit()
     await db.refresh(provider)
 
-    return {"id": provider.id, "provider": "webdav", "url": url, "connected_at": provider.connected_at.isoformat()}
+    return {
+        "id": provider.id,
+        "provider": "webdav",
+        "url": url,
+        "connected_at": provider.connected_at.isoformat(),
+    }
 
 
 def _parse_webdav_creds(provider: CloudProvider) -> tuple[str, str, str]:
@@ -131,7 +136,9 @@ async def upload_to_webdav(
     filename = f"scan_{scan.scan_id}.{scan.format}"
 
     try:
-        await webdav_service.upload_file(url, username, password_enc, scan.filepath, filename, destination)
+        await webdav_service.upload_file(
+            url, username, password_enc, scan.filepath, filename, destination
+        )
     except WebDAVError as e:
         raise HTTPException(status_code=502, detail=str(e))
 

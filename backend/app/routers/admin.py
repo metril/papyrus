@@ -6,12 +6,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select, cast, Date
+from sqlalchemy import Date, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_admin
 from app.database import get_db
-from app.models import AuditEntry, AppConfig, PrintJob, ScanJob, User
+from app.models import AppConfig, AuditEntry, PrintJob, ScanJob, User
 
 router = APIRouter()
 

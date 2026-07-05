@@ -10,12 +10,12 @@ from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user, require_permission
+from app.auth.dependencies import require_permission
 from app.config import settings
 from app.database import get_db
 from app.models import CloudProvider, User
 from app.routers.settings import get_setting
-from app.schemas import CloudFileEntry, CloudProviderResponse
+from app.schemas import CloudFileEntry
 from app.services.cloud_service import CloudError, cloud_service
 from app.services.crypto import decrypt_value, encrypt_value
 

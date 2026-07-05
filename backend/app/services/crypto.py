@@ -11,7 +11,8 @@ def _get_fernet() -> Fernet:
         if not settings.encryption_key:
             raise RuntimeError(
                 "PAPYRUS_ENCRYPTION_KEY is not set. "
-                "Generate one with: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
+                "Generate one with: python -c 'from cryptography.fernet import Fernet; "
+                "print(Fernet.generate_key().decode())'"
             )
         _fernet = Fernet(settings.encryption_key.encode())
     return _fernet

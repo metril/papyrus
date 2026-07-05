@@ -2,8 +2,8 @@
 
 import asyncio
 import ftplib
-import os
 import logging
+import os
 
 from app.services.crypto import decrypt_value
 

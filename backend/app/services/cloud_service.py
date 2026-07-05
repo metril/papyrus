@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from app.services.crypto import decrypt_value, encrypt_value
+from app.services.crypto import decrypt_value
 
 
 class CloudError(Exception):
@@ -56,10 +56,12 @@ class CloudService:
     ) -> list[dict]:
         """List files in a Google Drive folder."""
         try:
-            from googleapiclient.discovery import build
             from google.oauth2.credentials import Credentials
+            from googleapiclient.discovery import build
         except ImportError:
-            raise CloudError("Google Drive SDK not installed. Install with: pip install papyrus[cloud]")
+            raise CloudError(
+                "Google Drive SDK not installed. Install with: pip install papyrus[cloud]"
+            )
 
         credentials = Credentials(token=access_token)
         service = build("drive", "v3", credentials=credentials)
@@ -98,11 +100,13 @@ class CloudService:
     ) -> str:
         """Download a file from Google Drive. Exports Google Docs as PDF."""
         try:
+            from google.oauth2.credentials import Credentials
             from googleapiclient.discovery import build
             from googleapiclient.http import MediaIoBaseDownload
-            from google.oauth2.credentials import Credentials
         except ImportError:
-            raise CloudError("Google Drive SDK not installed. Install with: pip install papyrus[cloud]")
+            raise CloudError(
+                "Google Drive SDK not installed. Install with: pip install papyrus[cloud]"
+            )
 
         credentials = Credentials(token=access_token)
         service = build("drive", "v3", credentials=credentials)
@@ -121,7 +125,6 @@ class CloudService:
             "application/vnd.google-apps.presentation": "application/pdf",
         }
 
-        import io
 
         def _download():
             if mime in export_mimes:
@@ -149,11 +152,13 @@ class CloudService:
     ) -> str:
         """Upload a file to Google Drive. Returns the file ID."""
         try:
+            from google.oauth2.credentials import Credentials
             from googleapiclient.discovery import build
             from googleapiclient.http import MediaFileUpload
-            from google.oauth2.credentials import Credentials
         except ImportError:
-            raise CloudError("Google Drive SDK not installed. Install with: pip install papyrus[cloud]")
+            raise CloudError(
+                "Google Drive SDK not installed. Install with: pip install papyrus[cloud]"
+            )
 
         access_token = decrypt_value(access_token_encrypted)
         credentials = Credentials(token=access_token)

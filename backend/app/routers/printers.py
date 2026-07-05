@@ -74,7 +74,6 @@ async def probe_printer_ip(
 ) -> dict:
     """Probe a printer at the given IP address and return connection info."""
     from urllib.request import urlopen
-    from urllib.error import URLError
 
     uri = f"ipp://{ip}/ipp"
 
@@ -123,7 +122,9 @@ async def add_printer(
     # Ensure cups_name is unique
     existing = await db.execute(select(Printer).where(Printer.cups_name == cups_name))
     if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail=f"A printer with cups_name '{cups_name}' already exists")
+        raise HTTPException(
+            status_code=409, detail=f"A printer with cups_name '{cups_name}' already exists"
+        )
 
     printer = Printer(
         display_name=body.display_name,
@@ -214,7 +215,7 @@ async def set_default_printer(
 
     # Clear existing default
     await db.execute(
-        update(Printer).where(Printer.is_default == True).values(is_default=False)
+        update(Printer).where(Printer.is_default.is_(True)).values(is_default=False)
     )
     printer.is_default = True
     await db.commit()

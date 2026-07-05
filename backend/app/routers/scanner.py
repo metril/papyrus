@@ -4,18 +4,35 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_permission
 from app.database import get_db
 from app.models import CloudProvider, ScanJob, ScanProfile, SMBShare, User
-from app.schemas import BulkDeleteScansRequest, BulkDeleteResponse, CollateRequest, EmailSendRequest, ScanBatchRequest, ScanList, ScanProfileCreate, ScanProfileResponse, ScanRequest, ScanResponse
+from app.schemas import (
+    BulkDeleteResponse,
+    BulkDeleteScansRequest,
+    CollateRequest,
+    EmailSendRequest,
+    ScanBatchRequest,
+    ScanList,
+    ScanProfileCreate,
+    ScanProfileResponse,
+    ScanRequest,
+    ScanResponse,
+)
+from app.services.audit_service import log_event
 from app.services.cloud_service import CloudError, cloud_service
 from app.services.email_service import EmailError, email_service
 from app.services.file_service import cleanup_file
-from app.services.audit_service import log_event
-from app.services.scan_service import ScanError, scan_service, get_default_scanner, get_default_scanner_device, run_post_scan_actions
+from app.services.scan_service import (
+    ScanError,
+    get_default_scanner,
+    get_default_scanner_device,
+    run_post_scan_actions,
+    scan_service,
+)
 from app.services.smb_service import SMBError, smb_service
 from app.services.webhook_service import dispatch_webhook
 from app.services.ws_manager import ws_manager
@@ -50,7 +67,9 @@ async def initiate_scan(
     scan_service.configure(
         scan_dir=await get_setting(db, "scan_dir") or "/app/data/scans",
         scanner_device=device or "",
-        filename_template=await get_setting(db, "scan_filename_template") or "scan_{date}_{time}_{id}",
+        filename_template=(
+            await get_setting(db, "scan_filename_template") or "scan_{date}_{time}_{id}"
+        ),
     )
 
     # Create scan job record
@@ -102,7 +121,9 @@ async def initiate_scan(
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
                         detail={"format": request.format, "resolution": request.resolution})
-        await dispatch_webhook(db, "scan.complete", {"scan_id": job.scan_id, "format": request.format})
+        await dispatch_webhook(
+            db, "scan.complete", {"scan_id": job.scan_id, "format": request.format}
+        )
 
         if scanner and scanner.auto_deliver:
             await run_post_scan_actions(job, scanner, db)
@@ -184,7 +205,10 @@ async def initiate_batch_scan(
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
                         detail={"format": request.format, "pages": page_count})
-        await dispatch_webhook(db, "scan.complete", {"scan_id": job.scan_id, "format": request.format, "pages": page_count})
+        await dispatch_webhook(
+            db, "scan.complete",
+            {"scan_id": job.scan_id, "format": request.format, "pages": page_count},
+        )
 
         if scanner and scanner.auto_deliver:
             await run_post_scan_actions(job, scanner, db)
@@ -355,13 +379,9 @@ async def send_scan_to_paperless(
     if job.status != "completed" or not job.filepath:
         raise HTTPException(status_code=400, detail="Scan is not available")
 
-    from app.routers.settings import _load_db_values, _db_key
-    from app.services.paperless_service import PaperlessError, paperless_service
-    from app.services.crypto import encrypt_value
-
-    db_values = await _load_db_values(db)
-
     from app.routers.settings import get_setting
+    from app.services.crypto import encrypt_value
+    from app.services.paperless_service import PaperlessError, paperless_service
     paperless_url = await get_setting(db, "paperless_url") or ""
     api_token = await get_setting(db, "paperless_api_token") or ""
     api_token_encrypted = encrypt_value(api_token) if api_token else ""
@@ -400,11 +420,8 @@ async def apply_ocr_to_scan(
     if job.format != "pdf":
         raise HTTPException(status_code=400, detail="OCR is only supported for PDF scans")
 
-    from app.services.ocr_service import OCRError, ocr_service
-    from app.routers.settings import _load_db_values
-
-    db_values = await _load_db_values(db)
     from app.routers.settings import get_setting
+    from app.services.ocr_service import OCRError, ocr_service
     language = await get_setting(db, "ocr_language") or "eng"
 
     try:
@@ -440,7 +457,10 @@ async def enhance_scan(
     if job.status != "completed" or not job.filepath:
         raise HTTPException(status_code=400, detail="Scan is not available")
     if job.format == "pdf":
-        raise HTTPException(status_code=400, detail="Image enhancement is for image scans (png/jpeg/tiff), not PDFs")
+        raise HTTPException(
+            status_code=400,
+            detail="Image enhancement is for image scans (png/jpeg/tiff), not PDFs",
+        )
 
     from app.services.image_service import ImageError, image_service
     try:

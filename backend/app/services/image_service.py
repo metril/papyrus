@@ -35,7 +35,6 @@ class ImageService:
 
             # Binarize (Otsu-like threshold)
             threshold = arr.mean()
-            binary = (arr < threshold).astype(np.int32)
 
             # Try angles from -5 to +5 degrees in 0.1 increments
             best_angle = 0.0

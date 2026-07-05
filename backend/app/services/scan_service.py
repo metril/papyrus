@@ -2,7 +2,7 @@ import asyncio
 import os
 import re
 import uuid
-from typing import Callable, Awaitable
+from typing import Awaitable, Callable
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -93,7 +93,9 @@ class ScanService:
             # brscan4 uses different mode names than standard SANE
             _mode = mode
             if _device.startswith("brother4:"):
-                _mode = {"Color": "24bit Color", "Gray": "True Gray", "Lineart": "Black & White"}.get(mode, mode)
+                _mode = {
+                    "Color": "24bit Color", "Gray": "True Gray", "Lineart": "Black & White",
+                }.get(mode, mode)
 
             # Scan to TIFF as intermediate format, then convert to requested output
             tiff_file = os.path.join(self._scan_dir, f"{scan_id}.tiff")
@@ -138,7 +140,7 @@ class ScanService:
             await process.wait()
 
             if process.returncode != 0:
-                stderr_text = "; ".join(l for l in stderr_lines if l)
+                stderr_text = "; ".join(ln for ln in stderr_lines if ln)
                 raise ScanError(
                     f"scanimage exited with code {process.returncode}"
                     + (f": {stderr_text}" if stderr_text else "")
@@ -259,7 +261,7 @@ scan_service = ScanService()
 async def get_default_scanner_device(db: AsyncSession) -> str:
     """Return the SANE device string for the default scanner (DB overrides settings)."""
     from app.models import Scanner  # avoid circular import at module level
-    result = await db.execute(select(Scanner).where(Scanner.is_default == True))
+    result = await db.execute(select(Scanner).where(Scanner.is_default.is_(True)))
     s = result.scalar_one_or_none()
     return s.device if s else scan_service._scanner_device
 
@@ -267,7 +269,7 @@ async def get_default_scanner_device(db: AsyncSession) -> str:
 async def get_default_scanner(db: AsyncSession):
     """Return the default Scanner DB object, or None."""
     from app.models import Scanner
-    result = await db.execute(select(Scanner).where(Scanner.is_default == True))
+    result = await db.execute(select(Scanner).where(Scanner.is_default.is_(True)))
     return result.scalar_one_or_none()
 
 
@@ -316,9 +318,10 @@ def render_scan_filename(template: str, scan_job, fmt: str | None = None) -> str
 async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
     """Run configured auto-deliver actions after a scan completes."""
     import shutil
-    from app.services.email_service import email_service, EmailError
-    from app.services.cloud_service import cloud_service, CloudError
+
     from app.routers.email import _get_smtp_config
+    from app.services.cloud_service import CloudError, cloud_service
+    from app.services.email_service import EmailError, email_service
 
     if not scanner or not scanner.post_scan_config or not scan_job.filepath:
         return
@@ -332,7 +335,7 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
     # OCR — apply before other delivery actions so recipients get searchable PDF
     if config.get("ocr") and scan_job.format == "pdf" and scan_job.filepath:
         try:
-            from app.services.ocr_service import ocr_service, OCRError
+            from app.services.ocr_service import OCRError, ocr_service
             language = config.get("ocr_language", "eng")
             await ocr_service.apply_ocr(scan_job.filepath, language=language)
         except (OCRError, Exception):
@@ -361,8 +364,9 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
 
     if config.get("cloud_provider_id"):
         try:
-            from app.models import CloudProvider
             from sqlalchemy import select as sa_select
+
+            from app.models import CloudProvider
             result = await db.execute(
                 sa_select(CloudProvider).where(CloudProvider.id == config["cloud_provider_id"])
             )
@@ -381,8 +385,8 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
                         access_token_encrypted=provider.access_token_encrypted,
                     )
                 elif provider.provider == "webdav":
-                    from app.services.webdav_service import webdav_service
                     from app.services.crypto import decrypt_value
+                    from app.services.webdav_service import webdav_service
                     combined = decrypt_value(provider.access_token_encrypted)
                     parts = combined.split("||", 1)
                     if len(parts) == 2 and provider.refresh_token_encrypted:
@@ -397,8 +401,8 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
 
     if config.get("ftp_host"):
         try:
-            from app.services.ftp_service import ftp_service, FTPError
             from app.services.crypto import encrypt_value
+            from app.services.ftp_service import ftp_service
             host = config["ftp_host"]
             port = int(config.get("ftp_port", 21))
             user = config.get("ftp_username", "")
@@ -406,8 +410,13 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
             remote_dir = config.get("ftp_remote_dir", "/")
             protocol = config.get("ftp_protocol", "ftp")
             if protocol == "sftp":
-                await ftp_service.upload_sftp(host, port, user, pwd_enc, scan_job.filepath, filename, remote_dir)
+                await ftp_service.upload_sftp(
+                    host, port, user, pwd_enc, scan_job.filepath, filename, remote_dir
+                )
             else:
-                await ftp_service.upload_ftp(host, port, user, pwd_enc, scan_job.filepath, filename, remote_dir, use_tls=(protocol == "ftps"))
+                await ftp_service.upload_ftp(
+                    host, port, user, pwd_enc, scan_job.filepath, filename, remote_dir,
+                    use_tls=(protocol == "ftps"),
+                )
         except Exception:
             pass

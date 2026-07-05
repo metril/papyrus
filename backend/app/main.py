@@ -9,7 +9,24 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import FileResponse
 
 from app.config import settings
-from app.routers import admin, auth, cloud, copy, email, escl, jobs, printer, printers, scanner, scanners, settings as settings_router, smb, system, webdav, webhooks
+from app.routers import (
+    admin,
+    auth,
+    cloud,
+    copy,
+    email,
+    escl,
+    jobs,
+    printer,
+    printers,
+    scanner,
+    scanners,
+    smb,
+    system,
+    webdav,
+    webhooks,
+)
+from app.routers import settings as settings_router
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +35,7 @@ async def _reconcile_on_startup() -> None:
     """Restore CUPS queues and sane-airscan device configs from the DB on startup."""
     import cups
     from sqlalchemy import select
+
     from app.database import async_session
     from app.models import Printer, Scanner
     from app.services import cups_admin
@@ -75,6 +93,7 @@ async def _reconcile_on_startup() -> None:
 async def _seed_defaults() -> None:
     """Seed missing default settings into AppConfig (fills gaps, not all-or-nothing)."""
     from sqlalchemy import select
+
     from app.database import async_session
     from app.models import AppConfig
     from app.routers.settings import DEFAULTS
@@ -99,6 +118,7 @@ async def _seed_defaults() -> None:
 async def _ensure_local_admin() -> None:
     """Create local admin account if none exists and env vars are set."""
     from sqlalchemy import select
+
     from app.database import async_session
     from app.models import User
 
@@ -108,7 +128,7 @@ async def _ensure_local_admin() -> None:
 
         # Check if this local admin already exists
         result = await db.execute(
-            select(User).where(User.username == settings.admin_username, User.is_local == True)
+            select(User).where(User.username == settings.admin_username, User.is_local.is_(True))
         )
         existing = result.scalar_one_or_none()
         if existing:
