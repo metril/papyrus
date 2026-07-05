@@ -79,7 +79,9 @@ class PrintJob(Base):
     options_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     release_pin: Mapped[str | None] = mapped_column(String(10), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -107,7 +109,9 @@ class ScanJob(Base):
     filepath: Mapped[str | None] = mapped_column(String(512), nullable=True)
     file_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     scanner_id: Mapped[int | None] = mapped_column(
         ForeignKey("scanners.id", ondelete="SET NULL"), nullable=True
