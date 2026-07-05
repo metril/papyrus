@@ -301,7 +301,7 @@ async def _run_scan(job_id: str) -> None:
         file_size = os.path.getsize(filepath)
 
         # Update DB record with completed scan details
-        scan_payload: dict = {"scan_id": scan_id}
+        scan_payload: dict | None = None
         async with async_session() as db:
             result = await db.get(ScanJob, db_job_id)
             if result:
@@ -316,10 +316,14 @@ async def _run_scan(job_id: str) -> None:
 
         # Notify web UI via WebSocket with the full scan object (matches the
         # scan list endpoint shape) so clients can apply it incrementally.
-        await ws_manager.broadcast("scans", {
-            "type": "scan_completed",
-            "data": scan_payload,
-        })
+        # If the row was deleted concurrently, there's no full object to send —
+        # skip the broadcast entirely rather than violate the full-object
+        # invariant the "scans" channel relies on.
+        if scan_payload is not None:
+            await ws_manager.broadcast("scans", {
+                "type": "scan_completed",
+                "data": scan_payload,
+            })
 
         job["filepath"] = filepath
         job["state"] = "Completed"
