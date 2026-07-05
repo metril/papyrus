@@ -25,6 +25,7 @@ const sourceLabels: Record<string, string> = {
   cloud: 'Cloud',
   email: 'Email',
   network: 'Network',
+  test_page: 'Test Page',
 };
 
 const sourceColors: Record<string, string> = {
@@ -32,6 +33,7 @@ const sourceColors: Record<string, string> = {
   email: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400',
   cloud: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-400',
   smb: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400',
+  test_page: 'bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-400',
 };
 
 function PrinterSelector({ job, printers, onAssigned }: { job: PrintJob; printers: ManagedPrinter[]; onAssigned: () => void }) {
