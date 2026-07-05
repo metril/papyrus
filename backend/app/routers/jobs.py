@@ -12,7 +12,13 @@ from starlette.responses import FileResponse
 from app.auth.dependencies import get_current_user, require_permission
 from app.database import get_db
 from app.models import Printer, PrintJob, User
-from app.schemas import BulkDeleteJobsRequest, BulkDeleteResponse, PrintJobList, PrintJobResponse
+from app.schemas import (
+    BulkDeleteJobsRequest,
+    BulkDeleteResponse,
+    PrintJobList,
+    PrintJobResponse,
+    serialize_print_job,
+)
 from app.services.audit_service import log_event
 from app.services.convert_service import (
     CONVERTIBLE_MIMES,
@@ -105,7 +111,7 @@ async def upload_and_create_job(
 
     await ws_manager.broadcast("jobs", {
         "type": "job_created",
-        "data": {"id": job.id, "title": job.title, "status": job.status, "source_type": "upload"},
+        "data": serialize_print_job(job),
     })
 
     if not hold:
@@ -147,7 +153,7 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
             job.status = "converting"
             await db.commit()
             await ws_manager.broadcast("jobs", {
-                "type": "job_updated", "data": {"id": job.id, "status": "converting"}
+                "type": "job_updated", "data": serialize_print_job(job)
             })
             output_dir = os.path.dirname(job.filepath)
             print_path = await convert_to_pdf(job.filepath, output_dir)
@@ -155,7 +161,7 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
         job.status = "printing"
         await db.commit()
         await ws_manager.broadcast("jobs", {
-            "type": "job_updated", "data": {"id": job.id, "status": "printing"}
+            "type": "job_updated", "data": serialize_print_job(job)
         })
 
         cups_job_id = await svc.create_held_job(
@@ -172,7 +178,7 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
         job.completed_at = datetime.now(timezone.utc)
         await db.commit()
         await ws_manager.broadcast("jobs", {
-            "type": "job_updated", "data": {"id": job.id, "status": "completed"}
+            "type": "job_updated", "data": serialize_print_job(job)
         })
 
     except Exception as e:
@@ -180,8 +186,7 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
         job.error_message = str(e)
         await db.commit()
         await ws_manager.broadcast("jobs", {
-            "type": "job_updated",
-            "data": {"id": job.id, "status": "failed", "error": str(e)},
+            "type": "job_updated", "data": serialize_print_job(job)
         })
 
 
@@ -247,7 +252,7 @@ async def ingest_network_job(
 
     await ws_manager.broadcast("jobs", {
         "type": "job_created",
-        "data": {"id": job.id, "title": job.title, "status": "held", "source_type": "network"},
+        "data": serialize_print_job(job),
     })
 
     if auto_release:
@@ -388,7 +393,7 @@ async def assign_printer(
     await db.refresh(job)
     await ws_manager.broadcast("jobs", {
         "type": "job_updated",
-        "data": {"id": job.id, "status": job.status, "printer_id": job.printer_id},
+        "data": serialize_print_job(job),
     })
     return job
 
@@ -434,7 +439,7 @@ async def release_job(
             job.status = "converting"
             await db.commit()
             await ws_manager.broadcast("jobs", {
-                "type": "job_updated", "data": {"id": job_id, "status": "converting"}
+                "type": "job_updated", "data": serialize_print_job(job)
             })
             output_dir = os.path.dirname(job.filepath)
             print_path = await convert_to_pdf(job.filepath, output_dir)
@@ -466,7 +471,7 @@ async def release_job(
             db, "print.release", {"id": job_id, "title": job_title, "copies": job_copies}
         )
         await ws_manager.broadcast("jobs", {
-            "type": "job_updated", "data": {"id": job_id, "status": "printing"}
+            "type": "job_updated", "data": serialize_print_job(job)
         })
 
     except Exception as e:
@@ -475,9 +480,11 @@ async def release_job(
             job.status = "failed"
             job.error_message = str(e)
             await db.commit()
+            # rollback expired the ORM object; reload before serializing so the
+            # broadcast carries a fully-populated job.
+            await db.refresh(job)
             await ws_manager.broadcast("jobs", {
-                "type": "job_updated",
-                "data": {"id": job_id, "status": "failed", "error": str(e)},
+                "type": "job_updated", "data": serialize_print_job(job)
             })
         except Exception:
             pass
@@ -521,7 +528,7 @@ async def cancel_job(
 
     try:
         await ws_manager.broadcast("jobs", {
-            "type": "job_updated", "data": {"id": job_id, "status": "cancelled"}
+            "type": "job_updated", "data": serialize_print_job(job)
         })
         await log_event(db, "print.cancel", "print_job", str(job_id),
                         user_id=user_id, detail={"title": job_title})
@@ -668,9 +675,7 @@ async def reprint_job(
 
     await ws_manager.broadcast("jobs", {
         "type": "job_created",
-        "data": {
-            "id": new_job.id, "title": new_job.title, "status": "held", "source_type": "upload",
-        },
+        "data": serialize_print_job(new_job),
     })
 
     return new_job

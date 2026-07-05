@@ -1,6 +1,10 @@
+import asyncio
+import logging
 from collections import defaultdict
 
 from fastapi import WebSocket
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectionManager:
@@ -18,14 +22,22 @@ class ConnectionManager:
             del self.active_connections[channel]
 
     async def broadcast(self, channel: str, message: dict):
-        dead = []
-        for ws in self.active_connections[channel]:
-            try:
-                await ws.send_json(message)
-            except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect(channel, ws)
+        # Snapshot the connection list so concurrent disconnects during the
+        # gather don't mutate what we're iterating.
+        conns = list(self.active_connections.get(channel, []))
+        if not conns:
+            return
+
+        results = await asyncio.gather(
+            *(ws.send_json(message) for ws in conns),
+            return_exceptions=True,
+        )
+        for ws, result in zip(conns, results):
+            if isinstance(result, Exception):
+                logger.debug(
+                    "Dropping dead WebSocket on channel %s: %r", channel, result
+                )
+                self.disconnect(channel, ws)
 
 
 ws_manager = ConnectionManager()

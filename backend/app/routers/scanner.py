@@ -22,6 +22,7 @@ from app.schemas import (
     ScanProfileResponse,
     ScanRequest,
     ScanResponse,
+    serialize_scan_job,
 )
 from app.services.audit_service import log_event
 from app.services.cloud_service import CloudError, cloud_service
@@ -122,7 +123,7 @@ async def initiate_scan(
         })
         await ws_manager.broadcast("scans", {
             "type": "scan_completed",
-            "data": {"scan_id": job.scan_id},
+            "data": serialize_scan_job(job),
         })
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
@@ -206,7 +207,7 @@ async def initiate_batch_scan(
         })
         await ws_manager.broadcast("scans", {
             "type": "scan_completed",
-            "data": {"scan_id": job.scan_id},
+            "data": serialize_scan_job(job),
         })
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
@@ -674,7 +675,7 @@ async def collate_scans(
     await db.refresh(merged_job)
 
     await ws_manager.broadcast("scans", {
-        "type": "scan_completed", "data": {"scan_id": scan_id}
+        "type": "scan_completed", "data": serialize_scan_job(merged_job)
     })
 
     return merged_job

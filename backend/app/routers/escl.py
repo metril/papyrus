@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session, get_db
 from app.models import ScanJob
 from app.routers.settings import get_setting
+from app.schemas import serialize_scan_job
 from app.services.scan_service import get_default_scanner_device, scan_service
 from app.services.ws_manager import ws_manager
 
@@ -270,6 +271,7 @@ async def _run_scan(job_id: str) -> None:
         file_size = os.path.getsize(filepath)
 
         # Update DB record with completed scan details
+        scan_payload: dict = {"scan_id": scan_id}
         async with async_session() as db:
             result = await db.get(ScanJob, db_job_id)
             if result:
@@ -279,11 +281,14 @@ async def _run_scan(job_id: str) -> None:
                 result.status = "completed"
                 result.completed_at = datetime.now(timezone.utc)
                 await db.commit()
+                await db.refresh(result)
+                scan_payload = serialize_scan_job(result)
 
-        # Notify web UI via WebSocket
+        # Notify web UI via WebSocket with the full scan object (matches the
+        # scan list endpoint shape) so clients can apply it incrementally.
         await ws_manager.broadcast("scans", {
             "type": "scan_completed",
-            "data": {"scan_id": scan_id},
+            "data": scan_payload,
         })
 
         job["filepath"] = filepath

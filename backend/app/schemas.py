@@ -96,6 +96,18 @@ class PrintJobList(BaseModel):
     total: int
 
 
+def serialize_print_job(job) -> dict:
+    """Serialize a PrintJob ORM object into the exact JSON shape returned by the
+    print-job list/detail endpoints (``PrintJobResponse``).
+
+    Reused for WebSocket broadcasts so realtime payloads match the REST shape
+    field-for-field. ``release_pin`` is deliberately never included — only the
+    computed ``has_pin`` bool is exposed — so broadcasting a full job to every
+    connected client can never leak a PIN.
+    """
+    return PrintJobResponse.model_validate(job, from_attributes=True).model_dump(mode="json")
+
+
 # --- Scanner ---
 
 
@@ -130,6 +142,16 @@ class ScanResponse(BaseModel):
 class ScanList(BaseModel):
     scans: list[ScanResponse]
     total: int
+
+
+def serialize_scan_job(scan) -> dict:
+    """Serialize a ScanJob ORM object into the exact JSON shape returned by the
+    scan list endpoint (``ScanResponse``).
+
+    Reused for WebSocket broadcasts so realtime payloads match the REST shape
+    field-for-field.
+    """
+    return ScanResponse.model_validate(scan, from_attributes=True).model_dump(mode="json")
 
 
 # --- Copy ---
