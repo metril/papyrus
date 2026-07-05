@@ -18,6 +18,7 @@ export function useWebSocket({
   const reconnectCount = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const onMessageRef = useRef(onMessage);
+  const connectRef = useRef<() => void>(() => {});
   const [connected, setConnected] = useState(false);
 
   // Keep callback ref current without triggering reconnects
@@ -52,7 +53,7 @@ export function useWebSocket({
       if (reconnectCount.current < maxReconnectAttempts) {
         const delay = reconnectInterval * Math.pow(2, reconnectCount.current);
         reconnectCount.current++;
-        reconnectTimer.current = setTimeout(connect, delay);
+        reconnectTimer.current = setTimeout(() => connectRef.current(), delay);
       }
     };
 
@@ -62,6 +63,12 @@ export function useWebSocket({
 
     wsRef.current = ws;
   }, [url, reconnectInterval, maxReconnectAttempts]);
+
+  // Keep the latest `connect` reachable from the reconnect timer without
+  // referencing `connect` before its declaration.
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   useEffect(() => {
     connect();
