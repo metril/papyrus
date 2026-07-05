@@ -166,6 +166,8 @@ class Printer(Base):
     cups_name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     uri: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     description: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    make_and_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    location: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     is_network_queue: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_release: Mapped[bool] = mapped_column(Boolean, default=False)

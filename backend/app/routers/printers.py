@@ -50,6 +50,8 @@ async def _printer_response(p: Printer) -> dict:
         "cups_name": p.cups_name,
         "uri": p.uri,
         "description": p.description,
+        "make_and_model": p.make_and_model,
+        "location": p.location,
         "is_default": p.is_default,
         "is_network_queue": p.is_network_queue,
         "auto_release": p.auto_release,
