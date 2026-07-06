@@ -4,6 +4,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { useWebSocket } from './useWebSocket';
 import { queryKeys } from '../api/queries';
 import { useConnectionStore } from '../store/connectionStore';
+import { showToast } from '../store/toastStore';
 import type { PrintJob, ScanJob, WSMessage } from '../types';
 
 /**
@@ -174,8 +175,15 @@ export function useRealtimeBridge(): void {
   const setScansConnected = useConnectionStore((s) => s.setScansConnected);
   const setPrintersConnected = useConnectionStore((s) => s.setPrintersConnected);
 
+  // Scans channel: apply the cache update, then surface the app-wide "Scan
+  // completed" toast (previously wired directly in AppShell).
+  const applyScanWithToast = useCallback((qc: QueryClient, msg: WSMessage) => {
+    applyScanEvent(qc, msg);
+    if (msg.type === 'scan_completed') showToast('Scan completed', 'success');
+  }, []);
+
   useChannel('/api/system/ws/jobs', queryClient, applyJobEvent, invalidateJobs, setJobsConnected);
-  useChannel('/api/system/ws/scans', queryClient, applyScanEvent, invalidateScans, setScansConnected);
+  useChannel('/api/system/ws/scans', queryClient, applyScanWithToast, invalidateScans, setScansConnected);
   useChannel(
     '/api/system/ws/printers',
     queryClient,

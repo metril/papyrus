@@ -1,21 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Button from '../common/Button';
 import ProgressBar from '../common/ProgressBar';
-import { initiateScan, initiateBatchScan, getScanDownloadUrl } from '../../api/scanner';
+import {
+  initiateScan,
+  initiateBatchScan,
+  getScanDownloadUrl,
+  createScanProfile,
+  deleteScanProfile,
+} from '../../api/scanner';
+import type { ScanProfileCreate } from '../../api/scanner';
+import { useScanProfiles, queryKeys } from '../../api/queries';
 import { useScanStore } from '../../store/scanStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
-import api from '../../api/client';
-import type { ScanJob } from '../../types';
-
-interface ScanProfile {
-  id: number;
-  name: string;
-  resolution: number;
-  color_mode: string;
-  format: string;
-  source: string;
-  ocr_enabled: boolean;
-}
+import type { ScanJob, ScanRequest } from '../../types';
 
 export default function ScanForm() {
   const [resolution, setResolution] = useState(300);
@@ -26,17 +24,14 @@ export default function ScanForm() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ScanJob | null>(null);
 
-  const [profiles, setProfiles] = useState<ScanProfile[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<number | ''>('');
-  const [savingProfile, setSavingProfile] = useState(false);
   const [profileName, setProfileName] = useState('');
   const [showSaveProfile, setShowSaveProfile] = useState(false);
 
-  const { progress, setProgress, fetchScans } = useScanStore();
-
-  useEffect(() => {
-    api.get('/scanner/profiles').then(({ data }) => setProfiles(data)).catch(() => {});
-  }, []);
+  const { progress, setProgress } = useScanStore();
+  const queryClient = useQueryClient();
+  const profilesQuery = useScanProfiles();
+  const profiles = profilesQuery.data ?? [];
 
   const loadProfile = (profileId: number | '') => {
     setSelectedProfileId(profileId);
@@ -50,39 +45,49 @@ export default function ScanForm() {
     }
   };
 
-  const handleSaveProfile = async () => {
-    if (!profileName.trim()) return;
-    setSavingProfile(true);
-    try {
-      const { data } = await api.post('/scanner/profiles', {
-        name: profileName.trim(),
-        resolution,
-        color_mode: mode,
-        format,
-        source,
-        ocr_enabled: false,
-      });
-      setProfiles((prev) => [...prev, data]);
+  const saveProfileMutation = useMutation({
+    mutationFn: (body: ScanProfileCreate) => createScanProfile(body),
+    meta: { suppressGlobalError: true },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.scanProfiles });
       setSelectedProfileId(data.id);
       setShowSaveProfile(false);
       setProfileName('');
-    } catch {
-      // ignore
-    } finally {
-      setSavingProfile(false);
-    }
+    },
+  });
+
+  const deleteProfileMutation = useMutation({
+    mutationFn: (id: number) => deleteScanProfile(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.scanProfiles });
+      setSelectedProfileId('');
+    },
+  });
+
+  const handleSaveProfile = () => {
+    if (!profileName.trim()) return;
+    saveProfileMutation.mutate({
+      name: profileName.trim(),
+      resolution,
+      color_mode: mode,
+      format,
+      source,
+      ocr_enabled: false,
+    });
   };
 
-  const handleDeleteProfile = async () => {
+  const handleDeleteProfile = () => {
     if (!selectedProfileId) return;
-    try {
-      await api.delete(`/scanner/profiles/${selectedProfileId}`);
-      setProfiles((prev) => prev.filter((p) => p.id !== selectedProfileId));
-      setSelectedProfileId('');
-    } catch {
-      // ignore
-    }
+    deleteProfileMutation.mutate(selectedProfileId);
   };
+
+  const scanMutation = useMutation({
+    mutationFn: ({ request, batch }: { request: ScanRequest; batch: boolean }) =>
+      batch ? initiateBatchScan(request) : initiateScan(request),
+    meta: { suppressGlobalError: true },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.scans.list() }),
+  });
 
   useWebSocket({
     url: result?.scan_id ? `/api/scanner/ws/scan/${result.scan_id}` : null,
@@ -92,7 +97,7 @@ export default function ScanForm() {
       }
       if (msg.type === 'scan_completed') {
         setScanning(false);
-        fetchScans();
+        queryClient.invalidateQueries({ queryKey: queryKeys.scans.list() });
       }
     },
   });
@@ -104,12 +109,9 @@ export default function ScanForm() {
     setProgress(0);
 
     try {
-      const scanRequest = { resolution, mode, format, source };
-      const job = batch
-        ? await initiateBatchScan(scanRequest)
-        : await initiateScan(scanRequest);
+      const request: ScanRequest = { resolution, mode, format, source };
+      const job = await scanMutation.mutateAsync({ request, batch });
       setResult(job);
-      await fetchScans();
     } catch (err: unknown) {
       const data = (err as { response?: { data?: unknown } }).response?.data;
       const axiosDetail = typeof data === 'string'
@@ -153,7 +155,7 @@ export default function ScanForm() {
               placeholder="Profile name"
               className="rounded-lg border-gray-300 dark:border-gray-600 text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100 w-36"
             />
-            <Button size="sm" onClick={handleSaveProfile} disabled={savingProfile || !profileName.trim()}>
+            <Button size="sm" onClick={handleSaveProfile} disabled={saveProfileMutation.isPending || !profileName.trim()}>
               Save
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setShowSaveProfile(false)}>

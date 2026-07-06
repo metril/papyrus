@@ -1,7 +1,16 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
-import { useScanStore } from '../../store/scanStore';
-import { useWebSocket } from '../../hooks/useWebSocket';
-import { getScanDownloadUrl, getScanThumbnailUrl } from '../../api/scanner';
+import { useEffect, useRef, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useScans, queryKeys } from '../../api/queries';
+import { applyScanEvent } from '../../hooks/useRealtimeBridge';
+import {
+  getScanDownloadUrl,
+  getScanThumbnailUrl,
+  deleteScan,
+  sendScanToPaperless,
+  enhanceScan,
+  ocrScan,
+  collateScans,
+} from '../../api/scanner';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
 import Toggle from '../common/Toggle';
@@ -9,8 +18,7 @@ import FilePreviewModal from '../common/FilePreviewModal';
 import EmailScanDialog from './EmailScanDialog';
 import CloudSaveDialog from './CloudSaveDialog';
 import { useToast } from '../../hooks/useToast';
-import api from '../../api/client';
-import type { ScanJob, WSMessage } from '../../types';
+import type { ScanJob } from '../../types';
 
 function formatSize(bytes: number | null): string {
   if (!bytes) return '';
@@ -45,25 +53,81 @@ function ScanThumbnail({ scanId }: { scanId: string }) {
 }
 
 export default function ScanList() {
-  const { scans, loading, fetchScans, upsertScan, removeScan, deleteScan } = useScanStore();
+  const queryClient = useQueryClient();
+  const scansQuery = useScans();
+  const scans = scansQuery.data?.scans ?? [];
   const toast = useToast();
   const [emailScanId, setEmailScanId] = useState<string | null>(null);
   const [cloudScanId, setCloudScanId] = useState<string | null>(null);
   const [previewScan, setPreviewScan] = useState<ScanJob | null>(null);
   const [mergeSelection, setMergeSelection] = useState<Set<string>>(new Set());
-  const [merging, setMerging] = useState(false);
   const [enhanceScanId, setEnhanceScanId] = useState<string | null>(null);
   const [enhanceForm, setEnhanceForm] = useState({ brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false, deskew: false });
-  const [enhancing, setEnhancing] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   const defaultEnhanceForm = { brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false, deskew: false };
 
+  const invalidateScans = () =>
+    queryClient.invalidateQueries({ queryKey: queryKeys.scans.list() });
+
   const closeEnhanceDialog = () => {
     setEnhanceScanId(null);
     setEnhanceForm(defaultEnhanceForm);
   };
+
+  // Side-action responses aren't guaranteed to be full scans, so each mutation
+  // invalidates the scans list rather than upserting a returned object.
+  const deleteMutation = useMutation({
+    mutationFn: (scanId: string) => deleteScan(scanId),
+    meta: { suppressGlobalError: true },
+    onSuccess: (_result, scanId) =>
+      applyScanEvent(queryClient, { type: 'scan_deleted', data: { scan_id: scanId } }),
+  });
+
+  const paperlessMutation = useMutation({
+    mutationFn: (scanId: string) => sendScanToPaperless(scanId),
+    meta: { suppressGlobalError: true },
+    onSuccess: () => { toast.show('Sent to Paperless-ngx', 'success'); invalidateScans(); },
+    onError: () => toast.show('Failed to send to Paperless-ngx'),
+  });
+
+  const enhanceMutation = useMutation({
+    mutationFn: ({ scanId, form }: { scanId: string; form: typeof enhanceForm }) =>
+      enhanceScan(scanId, form),
+    meta: { suppressGlobalError: true },
+    onSuccess: () => {
+      toast.show('Enhancement applied', 'success');
+      invalidateScans();
+      closeEnhanceDialog();
+    },
+    onError: () => toast.show('Failed to apply enhancement'),
+  });
+
+  const ocrMutation = useMutation({
+    mutationFn: (scanId: string) => ocrScan(scanId),
+    meta: { suppressGlobalError: true },
+    onSuccess: () => { toast.show('OCR applied successfully', 'success'); invalidateScans(); },
+    onError: () => toast.show('Failed to apply OCR'),
+  });
+
+  const convertMutation = useMutation({
+    mutationFn: (scanId: string) => collateScans([scanId]),
+    meta: { suppressGlobalError: true },
+    onSuccess: () => { toast.show('Converted to PDF', 'success'); invalidateScans(); },
+    onError: () => toast.show('Failed to convert to PDF'),
+  });
+
+  const mergeMutation = useMutation({
+    mutationFn: (scanIds: string[]) => collateScans(scanIds),
+    meta: { suppressGlobalError: true },
+    onSuccess: (_result, scanIds) => {
+      toast.show(scanIds.length === 1 ? 'Converted to PDF' : 'Scans merged into PDF', 'success');
+      invalidateScans();
+      setMergeSelection(new Set());
+    },
+    onError: () => toast.show('Failed to merge scans'),
+  });
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -77,48 +141,9 @@ export default function ScanList() {
     return () => document.removeEventListener('mousedown', handler);
   }, [openMenuId]);
 
-  const sendToPaperless = async (scanId: string) => {
-    try {
-      await api.post(`/scanner/scans/${scanId}/paperless`);
-      toast.show('Sent to Paperless-ngx', 'success');
-    } catch {
-      toast.show('Failed to send to Paperless-ngx');
-    }
-  };
-
-  const applyEnhance = async () => {
-    if (!enhanceScanId || enhancing) return;
-    setEnhancing(true);
-    try {
-      await api.post(`/scanner/scans/${enhanceScanId}/enhance`, enhanceForm);
-      toast.show('Enhancement applied', 'success');
-      closeEnhanceDialog();
-      fetchScans();
-    } catch {
-      toast.show('Failed to apply enhancement');
-    } finally {
-      setEnhancing(false);
-    }
-  };
-
-  const applyOcr = async (scanId: string) => {
-    try {
-      await api.post(`/scanner/scans/${scanId}/ocr`);
-      toast.show('OCR applied successfully', 'success');
-      fetchScans();
-    } catch {
-      toast.show('Failed to apply OCR');
-    }
-  };
-
-  const convertToPdf = async (scanId: string) => {
-    try {
-      await api.post('/scanner/collate', { scan_ids: [scanId] });
-      toast.show('Converted to PDF', 'success');
-      fetchScans();
-    } catch {
-      toast.show('Failed to convert to PDF');
-    }
+  const applyEnhance = () => {
+    if (!enhanceScanId || enhanceMutation.isPending) return;
+    enhanceMutation.mutate({ scanId: enhanceScanId, form: enhanceForm });
   };
 
   const toggleMergeSelect = (scanId: string) => {
@@ -130,47 +155,15 @@ export default function ScanList() {
     });
   };
 
-  const handleMerge = async () => {
-    if (mergeSelection.size < 1) return;
-    setMerging(true);
-    try {
-      const orderedIds = scans
-        .filter((s) => mergeSelection.has(s.scan_id))
-        .map((s) => s.scan_id);
-      await api.post('/scanner/collate', { scan_ids: orderedIds });
-      toast.show(orderedIds.length === 1 ? 'Converted to PDF' : 'Scans merged into PDF', 'success');
-      setMergeSelection(new Set());
-      fetchScans();
-    } catch {
-      toast.show('Failed to merge scans');
-    } finally {
-      setMerging(false);
-    }
+  const handleMerge = () => {
+    if (mergeSelection.size < 1 || mergeMutation.isPending) return;
+    const orderedIds = scans
+      .filter((s) => mergeSelection.has(s.scan_id))
+      .map((s) => s.scan_id);
+    mergeMutation.mutate(orderedIds);
   };
 
-  // Apply scan WS events incrementally instead of refetching the whole list.
-  // ScanList renders every scan in the store (status is only used to derive the
-  // merge toolbar), so any scan_completed payload applies directly.
-  const handleScanEvent = useCallback((msg: WSMessage) => {
-    if (msg.type === 'scan_completed') {
-      upsertScan(msg.data as unknown as ScanJob);
-    } else if (msg.type === 'scan_deleted') {
-      const scanId = (msg.data as { scan_id?: string }).scan_id;
-      if (scanId) removeScan(scanId);
-    }
-    // scan_progress arrives on the per-scan channel, not here; ignore anything else.
-  }, [upsertScan, removeScan]);
-
-  useWebSocket({
-    url: '/api/system/ws/scans',
-    onMessage: handleScanEvent,
-  });
-
-  useEffect(() => {
-    fetchScans();
-  }, [fetchScans]);
-
-  if (loading && scans.length === 0) {
+  if (scansQuery.isLoading && scans.length === 0) {
     return <p className="text-gray-500 text-sm">Loading scans...</p>;
   }
 
@@ -192,8 +185,8 @@ export default function ScanList() {
             : 'Select scans to merge or convert to PDF'}
         </span>
         {mergeSelection.size >= 1 && (
-          <Button size="sm" onClick={handleMerge} disabled={merging}>
-            {merging ? 'Processing...' : mergeLabel}
+          <Button size="sm" onClick={handleMerge} disabled={mergeMutation.isPending}>
+            {mergeMutation.isPending ? 'Processing...' : mergeLabel}
           </Button>
         )}
         {mergeSelection.size > 0 && (
@@ -274,14 +267,14 @@ export default function ScanList() {
                       </button>
                       <button
                         className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        onClick={() => { sendToPaperless(scan.scan_id); setOpenMenuId(null); }}
+                        onClick={() => { paperlessMutation.mutate(scan.scan_id); setOpenMenuId(null); }}
                       >
                         Send to Paperless
                       </button>
                       {scan.format === 'pdf' && (
                         <button
                           className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
-                          onClick={() => { applyOcr(scan.scan_id); setOpenMenuId(null); }}
+                          onClick={() => { ocrMutation.mutate(scan.scan_id); setOpenMenuId(null); }}
                         >
                           OCR
                         </button>
@@ -296,7 +289,7 @@ export default function ScanList() {
                           </button>
                           <button
                             className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
-                            onClick={() => { convertToPdf(scan.scan_id); setOpenMenuId(null); }}
+                            onClick={() => { convertMutation.mutate(scan.scan_id); setOpenMenuId(null); }}
                           >
                             Convert to PDF
                           </button>
@@ -307,7 +300,7 @@ export default function ScanList() {
                 </div>
               </>
             )}
-            <Button size="sm" variant="danger" onClick={() => deleteScan(scan.scan_id)}>
+            <Button size="sm" variant="danger" onClick={() => deleteMutation.mutate(scan.scan_id)}>
               Delete
             </Button>
           </div>
@@ -367,8 +360,8 @@ export default function ScanList() {
           </div>
           <div className="flex gap-2 justify-end mt-5">
             <Button size="sm" variant="secondary" onClick={closeEnhanceDialog}>Cancel</Button>
-            <Button size="sm" onClick={applyEnhance} disabled={enhancing}>
-              {enhancing ? 'Applying...' : 'Apply'}
+            <Button size="sm" onClick={applyEnhance} disabled={enhanceMutation.isPending}>
+              {enhanceMutation.isPending ? 'Applying...' : 'Apply'}
             </Button>
           </div>
         </div>

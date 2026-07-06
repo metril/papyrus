@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { listJobs, getPrinterStatus } from './printer';
-import { listScans } from './scanner';
+import { listScans, listScanProfiles } from './scanner';
 import { listPrinters } from './printers';
+import { useConnectionStore } from '../store/connectionStore';
 import { getSettings, getEmailWebhookInfo } from './settings';
 import { listScanners } from './scanners';
 import { listProviders } from './cloud';
@@ -72,10 +73,32 @@ export function usePrinters() {
   });
 }
 
+/**
+ * Poll interval for the printer-status query. The realtime bridge invalidates
+ * `printerStatus` on every `printer_status` event, so while that socket is up we
+ * never poll; when it's down we fall back to a slow 3-minute safety-net refetch.
+ */
+export function printerStatusRefetchInterval(printersConnected: boolean): number | false {
+  return printersConnected ? false : 180_000;
+}
+
 export function usePrinterStatus() {
+  const printersConnected = useConnectionStore((s) => s.printersConnected);
   return useQuery({
     queryKey: queryKeys.printerStatus,
     queryFn: () => getPrinterStatus(),
+    refetchInterval: printerStatusRefetchInterval(printersConnected),
+    // The old component swallowed status-fetch errors (rendered nothing); keep
+    // that silent behaviour instead of surfacing a global toast.
+    meta: { suppressGlobalError: true },
+  });
+}
+
+/** Saved scan profiles for the scan form. */
+export function useScanProfiles() {
+  return useQuery({
+    queryKey: queryKeys.scanProfiles,
+    queryFn: () => listScanProfiles(),
   });
 }
 

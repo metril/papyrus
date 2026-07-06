@@ -31,9 +31,7 @@ const SystemIcon = () => (
     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
   </svg>
 );
-import { useWebSocket } from '../../hooks/useWebSocket';
 import { useRealtimeBridge } from '../../hooks/useRealtimeBridge';
-import { useToast } from '../../hooks/useToast';
 import {
   PrinterIcon,
   DocumentScannerIcon,
@@ -200,20 +198,10 @@ function LoginScreen() {
 }
 
 export default function AppShell() {
-  const toast = useToast();
   const { user, loading, logout, fetchUser } = useAuthStore();
   useEffect(() => { fetchUser(); }, [fetchUser]);
   const isAdmin = user?.role === 'admin';
   const visibleNavItems = navItems.filter((item) => !item.adminOnly || isAdmin);
-
-  useWebSocket({
-    url: '/api/system/ws/scans',
-    onMessage: (msg) => {
-      if (msg.type === 'scan_completed') {
-        toast.show('Scan completed', 'success');
-      }
-    },
-  });
 
   if (loading) {
     return (

@@ -83,3 +83,66 @@ export async function saveScanToCloud(
   });
   return data;
 }
+
+// --- Scan side-actions (paperless / enhance / OCR / collate) ---
+// Response shapes aren't guaranteed to be full ScanJobs, so callers invalidate
+// the scans list rather than upsert a returned object.
+
+export async function sendScanToPaperless(scanId: string): Promise<void> {
+  await api.post(`/scanner/scans/${scanId}/paperless`);
+}
+
+export interface ScanEnhanceOptions {
+  brightness: number;
+  contrast: number;
+  rotation: number;
+  auto_crop: boolean;
+  deskew: boolean;
+}
+
+export async function enhanceScan(scanId: string, options: ScanEnhanceOptions): Promise<void> {
+  await api.post(`/scanner/scans/${scanId}/enhance`, options);
+}
+
+export async function ocrScan(scanId: string): Promise<void> {
+  await api.post(`/scanner/scans/${scanId}/ocr`);
+}
+
+export async function collateScans(scanIds: string[]): Promise<void> {
+  await api.post('/scanner/collate', { scan_ids: scanIds });
+}
+
+// --- Scan profiles ---
+
+export interface ScanProfile {
+  id: number;
+  name: string;
+  resolution: number;
+  color_mode: string;
+  format: string;
+  source: string;
+  ocr_enabled: boolean;
+}
+
+export interface ScanProfileCreate {
+  name: string;
+  resolution: number;
+  color_mode: string;
+  format: string;
+  source: string;
+  ocr_enabled: boolean;
+}
+
+export async function listScanProfiles(): Promise<ScanProfile[]> {
+  const { data } = await api.get('/scanner/profiles');
+  return data;
+}
+
+export async function createScanProfile(body: ScanProfileCreate): Promise<ScanProfile> {
+  const { data } = await api.post('/scanner/profiles', body);
+  return data;
+}
+
+export async function deleteScanProfile(id: number): Promise<void> {
+  await api.delete(`/scanner/profiles/${id}`);
+}
