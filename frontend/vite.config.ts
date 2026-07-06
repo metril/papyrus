@@ -3,9 +3,20 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
+// React Compiler experiment (Phase 3, Task 10): OFF by default. Build with
+// `REACT_COMPILER=1 npm run build` (or `vite dev`) to try the babel
+// auto-memoization transform. This file runs in Node at config-load time, so
+// reading process.env here is safe and doesn't leak into client code. See
+// frontend section of the repo README for the experiment's results.
+const reactCompilerEnabled = process.env.REACT_COMPILER === '1'
+
 export default defineConfig({
   plugins: [
-    react(),
+    react({
+      babel: reactCompilerEnabled
+        ? { plugins: [['babel-plugin-react-compiler', {}]] }
+        : undefined,
+    }),
     tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
