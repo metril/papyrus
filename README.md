@@ -34,7 +34,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Backup / Restore**: Export and import all application settings as JSON (admin)
 - **Detailed Health Check**: System health endpoint with CUPS, scanner, database, disk, and uptime status
 - **PWA Support**: Installable as a Progressive Web App on mobile and desktop
-- **Responsive Design**: Works on phones, tablets, and desktops
+- **Responsive Design**: Works on phones, tablets, and desktops, with light and dark themes
 - **Authentication**: OIDC (Authentik/Keycloak) with group-based role mapping, API tokens with fine-grained permissions
 - **User Management**: Admin user list with role management, user profile display with logout
 - **Login Screen**: Clean SSO login page for unauthenticated users
@@ -48,6 +48,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 
 - **Backend**: Python 3.12, FastAPI, SQLAlchemy (async), PostgreSQL
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, TanStack Query (server state), Zustand (client state), lazy-loaded routes, vitest/Testing Library (unit tests)
+- **Design**: "Paper & ink" design system — warm paper-toned grays with a process-cyan ink accent, IBM Plex Sans/Mono type (mono for data readouts), LED status dots and perforation dividers as an office-machine motif, full light/dark parity
 - **Printing**: CUPS (driverless/IPP Everywhere), AirPrint via Avahi mDNS, printer discovery via python-zeroconf
 - **Scanning**: SANE via scanimage (sane-airscan for WSD), eSCL server for network scanning
 - **Deployment**: Docker with multi-stage build (`network_mode: host` for mDNS), behind Traefik

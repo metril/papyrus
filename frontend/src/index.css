@@ -6,9 +6,9 @@
  *   warm, low-chroma oklch scale evoking uncoated paper in light mode and
  *   toner charcoal in dark mode. Every existing gray-* class app-wide picks
  *   this up automatically — no component changes needed.
- * - "Ink" scale: a new process-cyan accent scale (ink-50..950) that replaces
- *   blue-* for focus rings and, surface-by-surface in later tasks, for
- *   primary actions/links.
+ * - "Ink" scale: a process-cyan accent scale (ink-50..950) used for focus
+ *   rings, primary actions, links, and accent chips app-wide. New code should
+ *   use ink-* — the stock blue-* palette is retired.
  * - Mono-for-data rule: --font-mono (IBM Plex Mono) is reserved for numeric
  *   and data readouts (job counts, timestamps, file sizes, IDs) — not
  *   general UI copy, which stays on --font-sans (IBM Plex Sans).

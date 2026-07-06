@@ -27,7 +27,7 @@ interface FilePreviewModalProps {
 }
 
 function Spinner() {
-  return <LoaderCircle className="animate-spin h-8 w-8 text-blue-500" strokeWidth={1.75} aria-hidden="true" />;
+  return <LoaderCircle className="animate-spin h-8 w-8 text-ink-500 dark:text-ink-400" strokeWidth={1.75} aria-hidden="true" />;
 }
 
 export default function FilePreviewModal({ url, previewUrl, thumbnailUrl, filename, mimeType, onClose }: FilePreviewModalProps) {
