@@ -2,25 +2,49 @@ interface StatusBadgeProps {
   status: string;
 }
 
-const statusColors: Record<string, { badge: string; dot: string }> = {
-  held: { badge: 'bg-yellow-50 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300', dot: 'bg-yellow-500' },
-  converting: { badge: 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300', dot: 'bg-blue-500 animate-pulse' },
-  printing: { badge: 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300', dot: 'bg-blue-500 animate-pulse' },
-  scanning: { badge: 'bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300', dot: 'bg-blue-500 animate-pulse' },
-  completed: { badge: 'bg-green-50 text-green-700 dark:bg-green-900/30 dark:text-green-400', dot: 'bg-green-500' },
-  failed: { badge: 'bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-400', dot: 'bg-red-500' },
-  cancelled: { badge: 'bg-gray-50 text-gray-600 dark:bg-gray-800 dark:text-gray-300', dot: 'bg-gray-400' },
-  deleted: { badge: 'bg-gray-50 text-gray-600 dark:bg-gray-800 dark:text-gray-300', dot: 'bg-gray-400' },
+type StatusFamily = 'success' | 'active' | 'pending' | 'error' | 'neutral';
+
+// Every status string the app currently passes (held/converting/printing/
+// scanning/completed/failed/cancelled/deleted — see JobRow/ScanRow/HistoryRow)
+// plus the wider vocabulary future pages may use for the same families.
+const statusFamily: Record<string, StatusFamily> = {
+  ready: 'success',
+  completed: 'success',
+  success: 'success',
+  printing: 'active',
+  processing: 'active',
+  converting: 'active',
+  scanning: 'active',
+  held: 'pending',
+  pending: 'pending',
+  error: 'error',
+  failed: 'error',
+  offline: 'neutral',
+  unknown: 'neutral',
+  cancelled: 'neutral',
+  deleted: 'neutral',
 };
 
-const fallback = { badge: 'bg-gray-50 text-gray-600 dark:bg-gray-800 dark:text-gray-300', dot: 'bg-gray-400' };
+const dotClasses: Record<StatusFamily, string> = {
+  success: 'text-green-500 dark:text-green-400',
+  active: 'text-ink-500 dark:text-ink-400',
+  pending: 'text-amber-500 dark:text-amber-400',
+  error: 'text-red-500 dark:text-red-400',
+  neutral: 'text-gray-400',
+};
+
+function sentenceCase(value: string): string {
+  const spaced = value.replace(/[_-]/g, ' ');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
 
 export default function StatusBadge({ status }: StatusBadgeProps) {
-  const { badge, dot } = statusColors[status] || fallback;
+  const family = statusFamily[status] ?? 'neutral';
+  const pulse = family === 'active';
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium ${badge}`}>
-      <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
-      {status}
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-gray-100 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-700 dark:border-gray-800 dark:bg-gray-800/60 dark:text-gray-300">
+      <span aria-hidden="true" className={`led ${dotClasses[family]} ${pulse ? 'led-pulse' : ''}`} />
+      {sentenceCase(status)}
     </span>
   );
 }

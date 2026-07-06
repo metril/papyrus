@@ -6,10 +6,10 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variants = {
-  primary: 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm shadow-blue-600/25 hover:shadow-md dark:bg-blue-500 dark:hover:bg-blue-400 focus-visible:ring-blue-500',
-  secondary: 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-200 dark:hover:bg-gray-600 focus-visible:ring-gray-500',
-  danger: 'bg-red-600 text-white hover:bg-red-700 shadow-sm shadow-red-600/25 hover:shadow-md focus-visible:ring-red-500',
-  ghost: 'text-gray-600 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800 focus-visible:ring-gray-500',
+  primary: 'bg-ink-600 text-white hover:bg-ink-700 shadow-sm shadow-ink-600/25 hover:shadow-md dark:bg-ink-500 dark:hover:bg-ink-400 focus-visible:ring-ink-500',
+  secondary: 'bg-white text-gray-700 border border-gray-200 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-700 dark:hover:bg-gray-700 focus-visible:ring-ink-500',
+  danger: 'bg-red-600 text-white hover:bg-red-700 shadow-sm shadow-red-600/25 hover:shadow-md dark:bg-red-500 dark:hover:bg-red-400 focus-visible:ring-ink-500',
+  ghost: 'text-gray-600 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800 focus-visible:ring-ink-500',
 };
 
 const sizes = {

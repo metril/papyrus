@@ -47,7 +47,7 @@ describe('JobQueue', () => {
     expect(screen.getByText('Loading jobs...')).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByText('doc.pdf')).toBeInTheDocument());
-    expect(screen.getByText('held')).toBeInTheDocument();
+    expect(screen.getByText('Held')).toBeInTheDocument();
     expect(screen.queryByText('Loading jobs...')).not.toBeInTheDocument();
   });
 
@@ -71,15 +71,15 @@ describe('JobQueue', () => {
     render(<JobQueue />, { wrapper: makeWrapper() });
 
     await waitFor(() => expect(screen.getByText('doc.pdf')).toBeInTheDocument());
-    expect(screen.getByText('held')).toBeInTheDocument();
+    expect(screen.getByText('Held')).toBeInTheDocument();
     expect(jobsGetCount).toBe(1);
 
     await user.click(screen.getByRole('button', { name: 'Print' }));
 
     await waitFor(() => expect(releaseCalled).toBe(true));
     // The row status flips using the API response only — no refetch.
-    await waitFor(() => expect(screen.getByText('printing')).toBeInTheDocument());
-    expect(screen.queryByText('held')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Printing')).toBeInTheDocument());
+    expect(screen.queryByText('Held')).not.toBeInTheDocument();
     expect(jobsGetCount).toBe(1);
   });
 });

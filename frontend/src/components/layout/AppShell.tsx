@@ -4,6 +4,7 @@ import api from '../../api/client';
 import { useThemeStore } from '../../store/themeStore';
 import { useAuthStore } from '../../store/authStore';
 import { useRealtimeBridge } from '../../hooks/useRealtimeBridge';
+import Skeleton from '../common/Skeleton';
 import {
   Printer,
   ScanLine,
@@ -23,11 +24,19 @@ import {
 // Shared default so every icon in this file gets the same visual weight.
 const ICON_STROKE_WIDTH = 1.75;
 
-// Full-viewport centered spinner, shared by the auth-loading state, the
-// LoginScreen providers fetch, and the Suspense fallback for lazy routes.
+// Full-viewport centered spinner, shared by the auth-loading state and the
+// LoginScreen providers fetch. The Suspense fallback for lazy routes uses a
+// Skeleton page block instead (see RouteFallback below).
 const CenteredSpinner = () => (
   <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
-    <div className="w-6 h-6 border-2 border-gray-200 border-t-blue-500 rounded-full animate-spinner dark:border-gray-700 dark:border-t-blue-400" />
+    <div className="w-6 h-6 border-2 border-gray-200 border-t-ink-500 rounded-full animate-spinner dark:border-gray-700 dark:border-t-ink-400" />
+  </div>
+);
+
+// Page-shaped placeholder shown while a lazy route chunk loads.
+const RouteFallback = () => (
+  <div className="space-y-4">
+    <Skeleton variant="card" count={3} />
   </div>
 );
 
@@ -119,8 +128,8 @@ function LoginScreen() {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
       <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl shadow-gray-300/30 dark:shadow-black/30 border border-gray-100 dark:border-gray-800 p-8 w-full max-w-sm space-y-6">
         <div className="text-center">
-          <div className="mx-auto w-12 h-12 bg-blue-50 dark:bg-blue-950/50 rounded-xl flex items-center justify-center mb-3">
-            <Printer className="w-6 h-6 text-blue-600 dark:text-blue-400" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />
+          <div className="mx-auto w-12 h-12 bg-ink-50 dark:bg-ink-950/50 rounded-xl flex items-center justify-center mb-3">
+            <Printer className="w-6 h-6 text-ink-600 dark:text-ink-400" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">Papyrus</h1>
           <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">Print & Scan Server</p>
@@ -147,7 +156,7 @@ function LoginScreen() {
             <button
               type="submit"
               disabled={loggingIn || !username || !password}
-              className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium rounded-lg transition-all duration-150 shadow-sm shadow-blue-600/25 hover:shadow-md active:scale-[0.98] dark:bg-blue-500 dark:hover:bg-blue-400"
+              className="w-full px-4 py-2.5 bg-ink-600 hover:bg-ink-700 disabled:opacity-50 text-white font-medium rounded-lg transition-all duration-150 shadow-sm shadow-ink-600/25 hover:shadow-md active:scale-[0.98] dark:bg-ink-500 dark:hover:bg-ink-400"
             >
               {loggingIn ? 'Signing in...' : 'Sign in'}
             </button>
@@ -217,7 +226,7 @@ export default function AppShell() {
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
                   isActive
-                    ? 'bg-blue-50/70 text-blue-700 border-l-2 border-blue-600 dark:bg-blue-950/50 dark:text-blue-300 dark:border-blue-400'
+                    ? 'bg-ink-50/70 text-ink-700 border-l-2 border-ink-600 dark:bg-ink-950/50 dark:text-ink-300 dark:border-ink-400'
                     : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 border-l-2 border-transparent dark:text-gray-400 dark:hover:bg-gray-800/50 dark:hover:text-gray-100'
                 }`
               }
@@ -254,7 +263,7 @@ export default function AppShell() {
       {/* Main content */}
       <main className="md:ml-64 flex-1 flex flex-col min-h-screen">
         <div className="flex-1 p-4 md:p-8 pb-20 md:pb-8">
-          <Suspense fallback={<CenteredSpinner />}>
+          <Suspense fallback={<RouteFallback />}>
             <Outlet />
           </Suspense>
         </div>
@@ -268,7 +277,7 @@ export default function AppShell() {
             to={to}
             className={({ isActive }) =>
               `flex flex-col items-center gap-1 px-3 py-1 text-xs font-medium ${
-                isActive ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400'
+                isActive ? 'text-ink-600 dark:text-ink-400' : 'text-gray-500 dark:text-gray-400'
               }`
             }
           >
@@ -280,7 +289,7 @@ export default function AppShell() {
           to="/settings"
           className={({ isActive }) =>
             `flex flex-col items-center gap-1 px-3 py-1 text-xs font-medium ${
-              isActive ? 'text-blue-600 dark:text-blue-400' : 'text-gray-500 dark:text-gray-400'
+              isActive ? 'text-ink-600 dark:text-ink-400' : 'text-gray-500 dark:text-gray-400'
             }`
           }
         >
