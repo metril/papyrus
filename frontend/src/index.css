@@ -47,6 +47,29 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+/*
+ * Chart palette (Task 6) — VALIDATED, do not substitute.
+ * print = process cyan, scan = process magenta: the CMYK vocabulary of the
+ * design system. Color follows the entity: print is ALWAYS cyan, scan is
+ * ALWAYS magenta, in every chart. These steps passed the four computable
+ * checks (lightness band, chroma floor, CVD separation ΔE≥23, ≥3:1 contrast)
+ * against the white and gray-900 card surfaces in both modes.
+ *
+ * Referenced as `var(--chart-*)` directly in HTML marks (legend/tooltip chips,
+ * supply-meter accents) so they flip automatically, and resolved to concrete
+ * hex for SVG marks via useChartColors() — CSS vars don't resolve inside SVG
+ * presentation attributes. The `.dark` block follows `:root` so its
+ * equal-specificity rule wins by source order when `.dark` is on <html>.
+ */
+:root {
+  --chart-print: #0089ab;
+  --chart-scan: #9a2068;
+}
+.dark {
+  --chart-print: #209fbc;
+  --chart-scan: #aa3b7c;
+}
+
 /* Typography */
 body {
   font-family: var(--font-sans);

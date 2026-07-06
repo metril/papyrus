@@ -1,6 +1,9 @@
 import Card from '../components/common/Card';
 import Skeleton from '../components/common/Skeleton';
 import ErrorState from '../components/common/ErrorState';
+import TrendChart from '../components/dashboard/TrendChart';
+import UserChart from '../components/dashboard/UserChart';
+import SupplyMeter from '../components/dashboard/SupplyMeter';
 import { useDashboardStats } from '../api/queries';
 
 interface StatTileProps {
@@ -34,7 +37,11 @@ export default function DashboardPage() {
             <Skeleton key={i} variant="card" />
           ))}
         </div>
-        <Skeleton variant="card" count={3} />
+        <Skeleton variant="card" />
+        <div className="grid gap-6 md:grid-cols-2">
+          <Skeleton variant="card" />
+          <Skeleton variant="card" />
+        </div>
       </div>
     );
   }
@@ -51,18 +58,11 @@ export default function DashboardPage() {
   const totalPrints = Object.values(stats.print_counts).reduce((a, b) => a + b, 0);
   const totalScans = Object.values(stats.scan_counts).reduce((a, b) => a + b, 0);
 
-  // Simple bar chart using divs
-  const maxDaily = Math.max(
-    ...stats.daily_prints.map((d) => d.count),
-    ...stats.daily_scans.map((d) => d.count),
-    1,
-  );
-
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Dashboard</h2>
 
-      {/* Summary cards */}
+      {/* Hero numbers */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatTile label="Total Prints" value={totalPrints} valueClassName="text-ink-600 dark:text-ink-400" />
         <StatTile label="Total Scans" value={totalScans} valueClassName="text-green-600 dark:text-green-400" />
@@ -70,7 +70,22 @@ export default function DashboardPage() {
         <StatTile label="Failed" value={stats.print_counts.failed || 0} valueClassName="text-red-600 dark:text-red-400" />
       </div>
 
-      {/* Print status breakdown */}
+      {/* 30-day trend */}
+      <Card title="Activity (Last 30 Days)">
+        <TrendChart data={stats.trend_30d} />
+      </Card>
+
+      {/* Per-user usage + printer supplies */}
+      <div className="grid gap-6 md:grid-cols-2">
+        <Card title="Usage by User">
+          <UserChart data={stats.per_user} />
+        </Card>
+        <Card title="Supplies">
+          <SupplyMeter />
+        </Card>
+      </div>
+
+      {/* Status breakdowns */}
       <Card title="Print Jobs by Status">
         <div className="flex flex-wrap gap-4">
           {Object.entries(stats.print_counts).map(([status, count]) => (
@@ -82,7 +97,6 @@ export default function DashboardPage() {
         </div>
       </Card>
 
-      {/* Scan status breakdown */}
       <Card title="Scan Jobs by Status">
         <div className="flex flex-wrap gap-4">
           {Object.entries(stats.scan_counts).map(([status, count]) => (
@@ -91,52 +105,6 @@ export default function DashboardPage() {
               <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{count}</span>
             </div>
           ))}
-        </div>
-      </Card>
-
-      {/* Daily activity */}
-      <Card title="Daily Activity (Last 30 Days)">
-        <div className="space-y-4">
-          {stats.daily_prints.length === 0 && stats.daily_scans.length === 0 ? (
-            <p className="text-gray-500 dark:text-gray-400 text-sm">No activity in the last 30 days.</p>
-          ) : (
-            <>
-              <div>
-                <h4 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Prints</h4>
-                <div className="flex items-end gap-1 h-24">
-                  {stats.daily_prints.map((d) => (
-                    <div
-                      key={d.day}
-                      className="flex h-full flex-1 flex-col justify-end overflow-hidden rounded-t bg-gray-100 dark:bg-gray-800"
-                      title={`${d.day}: ${d.count}`}
-                    >
-                      <div
-                        className="w-full bg-ink-600 dark:bg-ink-400 rounded-t"
-                        style={{ height: `${(d.count / maxDaily) * 100}%`, minHeight: d.count > 0 ? '4px' : '0' }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <h4 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Scans</h4>
-                <div className="flex items-end gap-1 h-24">
-                  {stats.daily_scans.map((d) => (
-                    <div
-                      key={d.day}
-                      className="flex h-full flex-1 flex-col justify-end overflow-hidden rounded-t bg-gray-100 dark:bg-gray-800"
-                      title={`${d.day}: ${d.count}`}
-                    >
-                      <div
-                        className="w-full bg-ink-600 dark:bg-ink-400 rounded-t"
-                        style={{ height: `${(d.count / maxDaily) * 100}%`, minHeight: d.count > 0 ? '4px' : '0' }}
-                      />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
         </div>
       </Card>
     </div>

@@ -16,11 +16,30 @@ export interface DailyCount {
   count: number;
 }
 
+/** One day of the 30-day trend (zero-filled by the backend, oldest first).
+ * `date` is a UTC calendar-day ISO string, e.g. `"2026-06-07"`. */
+export interface TrendPoint {
+  date: string;
+  prints: number;
+  scans: number;
+}
+
+/** Per-user print/scan totals. `username` is a display label: real usernames,
+ * plus the synthetic `"Network"` (unauthenticated jobs) and `"Other"`
+ * (rolled-up tail) buckets the backend emits. */
+export interface UserUsage {
+  username: string;
+  prints: number;
+  scans: number;
+}
+
 export interface DashboardStats {
   print_counts: Record<string, number>;
   scan_counts: Record<string, number>;
   daily_prints: DailyCount[];
   daily_scans: DailyCount[];
+  trend_30d: TrendPoint[];
+  per_user: UserUsage[];
 }
 
 export async function getDashboardStats(): Promise<DashboardStats> {

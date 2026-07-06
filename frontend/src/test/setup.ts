@@ -14,6 +14,20 @@ import { server } from './mocks/server';
   advanceTimersByTime: (ms) => vi.advanceTimersByTime(ms),
 };
 
+// jsdom (29) ships no ResizeObserver, which Recharts' <ResponsiveContainer>
+// constructs on mount. A no-op stub is enough: the chart tests mock
+// ResponsiveContainer to inject a fixed size, so the observer never needs to
+// report one — it only has to exist without throwing.
+if (!('ResizeObserver' in globalThis)) {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  (globalThis as unknown as { ResizeObserver: typeof ResizeObserverStub }).ResizeObserver =
+    ResizeObserverStub;
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 
 afterEach(() => {
