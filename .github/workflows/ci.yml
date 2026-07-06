@@ -37,7 +37,9 @@ jobs:
           cache-dependency-path: backend/pyproject.toml
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libcups2-dev
+        # ghostscript keeps the gs-dependent thumbnail test running so the
+        # skipped-tests guard below never trips on an optional-dep skip.
+        run: sudo apt-get update && sudo apt-get install -y libcups2-dev ghostscript
 
       - name: Install backend dependencies
         working-directory: backend

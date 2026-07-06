@@ -12,7 +12,7 @@ import logging
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from app.request_context import get_request_id
+from app.request_context import get_request_id, request_id_var
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +79,13 @@ def register_exception_handlers(app) -> None:
 
     @app.exception_handler(Exception)
     async def _handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-        # logger.exception records the traceback; the Task 1 RequestIdFilter
-        # stamps the request_id onto the log record.
-        logger.exception("Unhandled exception processing request")
         request_id = _request_id(request)
+        # Re-establish the contextvar before logging: this handler runs in
+        # ServerErrorMiddleware, outside RequestIDMiddleware, after the var was
+        # reset — without this the traceback below would log request_id="-"
+        # and the one log line an operator greps for couldn't be correlated.
+        request_id_var.set(request_id)
+        logger.exception("Unhandled exception processing request")
         # This response bypasses RequestIDMiddleware's send wrapper (it is
         # produced outside it), so the header must be set here.
         return JSONResponse(

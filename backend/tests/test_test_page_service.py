@@ -199,7 +199,9 @@ async def test_print_test_page_cups_failure_marks_job_failed_and_raises(monkeypa
     user = _user()
     db = _FakeDB()
 
-    with pytest.raises(test_page_service.TestPageError, match="printer offline"):
+    # The client-visible exception detail is curated; the raw failure text
+    # stays internal on job.error_message.
+    with pytest.raises(test_page_service.TestPageError, match="Printing the test page failed"):
         await test_page_service.print_test_page(db, printer, user)
 
     job = db._job

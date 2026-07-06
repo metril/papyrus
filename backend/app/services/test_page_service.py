@@ -167,6 +167,10 @@ async def print_test_page(db: AsyncSession, printer: Printer, user: User) -> Pri
         await ws_manager.broadcast("jobs", {
             "type": "job_updated", "data": serialize_print_job(job)
         })
-        raise TestPageError(str(exc)) from exc
+        # The raw failure text stays on job.error_message for the UI/history;
+        # the exception detail is client-visible and must stay curated.
+        raise TestPageError(
+            "Printing the test page failed. Check the printer connection."
+        ) from exc
 
     return job
