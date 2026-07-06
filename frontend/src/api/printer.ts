@@ -52,3 +52,7 @@ export async function listJobs(status?: string): Promise<{ jobs: PrintJob[]; tot
   const { data } = await api.get('/jobs', { params });
   return data;
 }
+
+export async function bulkDeleteJobs(ids: number[]): Promise<void> {
+  await api.post('/jobs/bulk-delete', { ids });
+}

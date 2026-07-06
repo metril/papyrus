@@ -35,6 +35,10 @@ export async function deleteScan(scanId: string): Promise<void> {
   await api.delete(`/scanner/scans/${scanId}`);
 }
 
+export async function bulkDeleteScans(scanIds: string[]): Promise<void> {
+  await api.post('/scanner/scans/bulk-delete', { scan_ids: scanIds });
+}
+
 export function getScanDownloadUrl(scanId: string): string {
   return `/api/scanner/scans/${scanId}/download`;
 }

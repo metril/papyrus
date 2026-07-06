@@ -1,14 +1,13 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useJobStore } from '../store/jobStore';
-import { useScanStore } from '../store/scanStore';
-import { useWebSocket } from '../hooks/useWebSocket';
-import { getScanDownloadUrl, getJobDownloadUrl, getJobPreviewUrl } from '../api/scanner';
+import { useState, useMemo } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useJobs, useScans, queryKeys } from '../api/queries';
+import { deleteJob, bulkDeleteJobs } from '../api/printer';
+import { deleteScan, bulkDeleteScans, getScanDownloadUrl, getJobDownloadUrl, getJobPreviewUrl } from '../api/scanner';
 import Card from '../components/common/Card';
 import StatusBadge from '../components/common/StatusBadge';
 import Button from '../components/common/Button';
 import FilePreviewModal from '../components/common/FilePreviewModal';
-import api from '../api/client';
-import type { PrintJob, ScanJob, WSMessage } from '../types';
+import type { PrintJob, ScanJob } from '../types';
 
 type Tab = 'all' | 'print' | 'scan';
 type StatusFilter = 'all' | 'completed' | 'failed' | 'held' | 'scanning';
@@ -42,6 +41,12 @@ function scanMimeType(scan: ScanJob): string {
   return `image/${scan.format}`;
 }
 
+// Stable empty-array fallbacks: a fresh `[] ` literal on every render would
+// change identity even when the underlying query data hasn't, defeating the
+// `items` useMemo below (which depends on `jobs`/`scans` by reference).
+const EMPTY_JOBS: PrintJob[] = [];
+const EMPTY_SCANS: ScanJob[] = [];
+
 function isWithinDate(timeStr: string, filter: DateFilter): boolean {
   if (filter === 'all') return true;
   const date = new Date(timeStr);
@@ -61,8 +66,15 @@ function isWithinDate(timeStr: string, filter: DateFilter): boolean {
 }
 
 export default function HistoryPage() {
-  const { jobs, fetchJobs, upsertJob, removeJob, deleteJob } = useJobStore();
-  const { scans, fetchScans, upsertScan, removeScan, deleteScan } = useScanStore();
+  const queryClient = useQueryClient();
+  const jobsQuery = useJobs();
+  const scansQuery = useScans();
+  const jobs = jobsQuery.data?.jobs ?? EMPTY_JOBS;
+  const scans = scansQuery.data?.scans ?? EMPTY_SCANS;
+  // Realtime updates arrive via the app-wide WS→Query bridge (mounted in
+  // AppShell), which upserts into queryKeys.jobs.list() / queryKeys.scans.list()
+  // as events come in — this page just renders whatever's in the cache.
+  const loading = jobsQuery.isLoading || scansQuery.isLoading;
 
   const [tab, setTab] = useState<Tab>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -70,37 +82,30 @@ export default function HistoryPage() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [previewItem, setPreviewItem] = useState<HistoryItem | null>(null);
-  const [bulkDeleting, setBulkDeleting] = useState(false);
-  const [loading, setLoading] = useState(true);
 
-  // Apply WS events incrementally to the shared stores. HistoryPage renders from
-  // the full jobs/scans lists and filters them at render time (tab/status/date/
-  // search in the useMemo below), so upserting into the store is always correct —
-  // the presentational filters hide any row that doesn't match the active view.
-  const handleJobEvent = useCallback((msg: WSMessage) => {
-    if (msg.type === 'job_created' || msg.type === 'job_updated') {
-      upsertJob(msg.data as unknown as PrintJob);
-    } else if (msg.type === 'job_deleted') {
-      const id = (msg.data as { id?: number }).id;
-      if (typeof id === 'number') removeJob(id);
-    }
-  }, [upsertJob, removeJob]);
+  const deleteJobMutation = useMutation({
+    mutationFn: (jobId: number) => deleteJob(jobId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.jobs.list() }),
+  });
 
-  const handleScanEvent = useCallback((msg: WSMessage) => {
-    if (msg.type === 'scan_completed') {
-      upsertScan(msg.data as unknown as ScanJob);
-    } else if (msg.type === 'scan_deleted') {
-      const scanId = (msg.data as { scan_id?: string }).scan_id;
-      if (scanId) removeScan(scanId);
-    }
-  }, [upsertScan, removeScan]);
+  const deleteScanMutation = useMutation({
+    mutationFn: (scanId: string) => deleteScan(scanId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.scans.list() }),
+  });
 
-  useWebSocket({ url: '/api/system/ws/jobs', onMessage: handleJobEvent });
-  useWebSocket({ url: '/api/system/ws/scans', onMessage: handleScanEvent });
-
-  useEffect(() => {
-    Promise.all([fetchJobs(), fetchScans()]).finally(() => setLoading(false));
-  }, [fetchJobs, fetchScans]);
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async ({ printIds, scanIds }: { printIds: number[]; scanIds: string[] }) => {
+      const promises: Promise<unknown>[] = [];
+      if (printIds.length > 0) promises.push(bulkDeleteJobs(printIds));
+      if (scanIds.length > 0) promises.push(bulkDeleteScans(scanIds));
+      await Promise.all(promises);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs.list() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.scans.list() });
+      setSelected(new Set());
+    },
+  });
 
   // Build unified history items
   const items = useMemo<HistoryItem[]>(() => {
@@ -175,9 +180,8 @@ export default function HistoryPage() {
     }
   };
 
-  const handleBulkDelete = async () => {
+  const handleBulkDelete = () => {
     if (!someSelected) return;
-    setBulkDeleting(true);
 
     const printIds: number[] = [];
     const scanIds: string[] = [];
@@ -188,29 +192,14 @@ export default function HistoryPage() {
       else if (item.scanId) scanIds.push(item.scanId);
     }
 
-    try {
-      const promises: Promise<unknown>[] = [];
-      if (printIds.length > 0) {
-        promises.push(api.post('/jobs/bulk-delete', { ids: printIds }));
-      }
-      if (scanIds.length > 0) {
-        promises.push(api.post('/scanner/scans/bulk-delete', { scan_ids: scanIds }));
-      }
-      await Promise.all(promises);
-      await Promise.all([fetchJobs(), fetchScans()]);
-      setSelected(new Set());
-    } catch {
-      // Errors handled by interceptor
-    } finally {
-      setBulkDeleting(false);
-    }
+    bulkDeleteMutation.mutate({ printIds, scanIds });
   };
 
-  const handleDeleteSingle = async (item: HistoryItem) => {
+  const handleDeleteSingle = (item: HistoryItem) => {
     if (item.type === 'print') {
-      await deleteJob(item.numericId);
+      deleteJobMutation.mutate(item.numericId);
     } else if (item.scanId) {
-      await deleteScan(item.scanId);
+      deleteScanMutation.mutate(item.scanId);
     }
   };
 
@@ -280,9 +269,9 @@ export default function HistoryPage() {
             size="sm"
             variant="danger"
             onClick={handleBulkDelete}
-            disabled={bulkDeleting}
+            disabled={bulkDeleteMutation.isPending}
           >
-            {bulkDeleting ? 'Deleting...' : `Delete Selected (${selected.size})`}
+            {bulkDeleteMutation.isPending ? 'Deleting...' : `Delete Selected (${selected.size})`}
           </Button>
         )}
       </div>
