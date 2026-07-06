@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import { useToast } from '../../hooks/useToast';
-import api from '../../api/client';
-import { listProviders, disconnectProvider, getAuthorizeUrl } from '../../api/cloud';
-import type { CloudProvider } from '../../types';
+import { disconnectProvider, connectWebdav, getAuthorizeUrl } from '../../api/cloud';
+import { useCloudProviders, queryKeys } from '../../api/queries';
 
 const providerLabels: Record<string, string> = {
   gdrive: 'Google Drive',
@@ -15,34 +15,42 @@ const providerLabels: Record<string, string> = {
 
 export default function CloudStorageCard() {
   const toast = useToast();
-  const [cloudProviders, setCloudProviders] = useState<CloudProvider[]>([]);
+  const queryClient = useQueryClient();
+  const { data: cloudProviders = [] } = useCloudProviders();
   const [showWebdav, setShowWebdav] = useState(false);
   const [webdavForm, setWebdavForm] = useState({ url: '', username: '', password: '' });
 
-  useEffect(() => {
-    listProviders().then(setCloudProviders).catch(() => {});
-  }, []);
+  const invalidateCloudProviders = () => queryClient.invalidateQueries({ queryKey: queryKeys.cloudProviders });
 
-  const handleDisconnectCloud = async (id: number) => {
-    try {
-      await disconnectProvider(id);
-      setCloudProviders(cloudProviders.filter((p) => p.id !== id));
-    } catch {
-      toast.show('Failed to disconnect provider');
-    }
+  const disconnectMutation = useMutation({
+    mutationFn: (id: number) => disconnectProvider(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidateCloudProviders,
+    onError: () => toast.show('Failed to disconnect provider'),
+  });
+
+  const connectWebdavMutation = useMutation({
+    mutationFn: (body: typeof webdavForm) => connectWebdav(body),
+    meta: { suppressGlobalError: true },
+    onSuccess: () => {
+      invalidateCloudProviders();
+      toast.show('WebDAV connected', 'success');
+    },
+    onError: () => toast.show('Failed to connect — check URL and credentials'),
+  });
+
+  const handleDisconnectCloud = (id: number) => {
+    disconnectMutation.mutate(id);
   };
 
-  const handleConnectWebdav = async () => {
+  const handleConnectWebdav = () => {
     if (!webdavForm.url || !webdavForm.username || !webdavForm.password) return;
-    try {
-      await api.post('/webdav/connect', webdavForm);
-      setShowWebdav(false);
-      setWebdavForm({ url: '', username: '', password: '' });
-      listProviders().then(setCloudProviders).catch(() => {});
-      toast.show('WebDAV connected', 'success');
-    } catch {
-      toast.show('Failed to connect — check URL and credentials');
-    }
+    connectWebdavMutation.mutate(webdavForm, {
+      onSuccess: () => {
+        setShowWebdav(false);
+        setWebdavForm({ url: '', username: '', password: '' });
+      },
+    });
   };
 
   return (

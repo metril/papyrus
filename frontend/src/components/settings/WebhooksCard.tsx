@@ -1,53 +1,61 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import { useToast } from '../../hooks/useToast';
-import api from '../../api/client';
-
-interface WebhookItem {
-  id: number;
-  name: string;
-  url: string;
-  events: string[];
-  enabled: boolean;
-  created_at: string;
-}
+import { createWebhook, updateWebhook, deleteWebhook, type Webhook, type WebhookCreate } from '../../api/webhooks';
+import { useWebhooks, useWebhookEvents, queryKeys } from '../../api/queries';
 
 export default function WebhooksCard() {
   const toast = useToast();
-  const [hooks, setHooks] = useState<WebhookItem[]>([]);
-  const [events, setEvents] = useState<string[]>([]);
+  const queryClient = useQueryClient();
+  const { data: hooks = [] } = useWebhooks();
+  const { data: events = [] } = useWebhookEvents();
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name: '', url: '', secret: '', events: [] as string[] });
 
-  const load = () => {
-    api.get('/webhooks').then(({ data }) => setHooks(data)).catch(() => {});
-    api.get('/webhooks/events').then(({ data }) => setEvents(data)).catch(() => {});
-  };
-  useEffect(() => { load(); }, []);
+  const invalidateWebhooks = () => queryClient.invalidateQueries({ queryKey: queryKeys.webhooks });
 
-  const handleCreate = async () => {
+  const createMutation = useMutation({
+    mutationFn: (body: WebhookCreate) => createWebhook(body),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidateWebhooks,
+    onError: () => toast.show('Failed to create webhook', 'error'),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, body }: { id: number; body: WebhookCreate }) => updateWebhook(id, body),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidateWebhooks,
+    onError: () => toast.show('Failed to update webhook', 'error'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => deleteWebhook(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidateWebhooks,
+    onError: () => toast.show('Failed to delete webhook', 'error'),
+  });
+
+  const handleCreate = () => {
     if (!form.name || !form.url || form.events.length === 0) return;
-    try {
-      await api.post('/webhooks', form);
-      setForm({ name: '', url: '', secret: '', events: [] });
-      setShowAdd(false);
-      load();
-    } catch { toast.show('Failed to create webhook', 'error'); }
+    createMutation.mutate(form, {
+      onSuccess: () => {
+        setForm({ name: '', url: '', secret: '', events: [] });
+        setShowAdd(false);
+      },
+    });
   };
 
-  const toggleEnabled = async (hook: WebhookItem) => {
-    try {
-      await api.put(`/webhooks/${hook.id}`, { ...hook, enabled: !hook.enabled });
-      load();
-    } catch { toast.show('Failed to update webhook', 'error'); }
+  const toggleEnabled = (hook: Webhook) => {
+    updateMutation.mutate({
+      id: hook.id,
+      body: { name: hook.name, url: hook.url, events: hook.events, enabled: !hook.enabled },
+    });
   };
 
-  const handleDelete = async (id: number) => {
-    try {
-      await api.delete(`/webhooks/${id}`);
-      load();
-    } catch { toast.show('Failed to delete webhook', 'error'); }
+  const handleDelete = (id: number) => {
+    deleteMutation.mutate(id);
   };
 
   const toggleEvent = (evt: string) => {

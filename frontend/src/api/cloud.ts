@@ -10,6 +10,16 @@ export async function disconnectProvider(id: number): Promise<void> {
   await api.delete(`/cloud/disconnect/${id}`);
 }
 
+export interface WebdavConnect {
+  url: string;
+  username: string;
+  password: string;
+}
+
+export async function connectWebdav(body: WebdavConnect): Promise<void> {
+  await api.post('/webdav/connect', body);
+}
+
 export function getAuthorizeUrl(provider: string): string {
   return `/api/cloud/authorize/${provider}`;
 }

@@ -1,21 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import { useToast } from '../../hooks/useToast';
-import api from '../../api/client';
-import type { APIToken } from '../../types';
+import { createApiToken, revokeApiToken } from '../../api/tokens';
+import { useApiTokens, queryKeys } from '../../api/queries';
 
 export default function ApiTokensCard() {
   const toast = useToast();
-  const [tokens, setTokens] = useState<APIToken[]>([]);
+  const queryClient = useQueryClient();
+  const { data: tokens = [] } = useApiTokens();
   const [newTokenName, setNewTokenName] = useState('');
   const [newTokenPermissions, setNewTokenPermissions] = useState<string[]>([]);
   const [newTokenExpiry, setNewTokenExpiry] = useState<number | null>(null);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
-
-  useEffect(() => {
-    api.get('/auth/tokens').then(({ data }) => setTokens(data)).catch(() => {});
-  }, []);
 
   const allPermissions = ['print', 'scan', 'files', 'admin', 'email'] as const;
   const permissionLabels: Record<string, string> = {
@@ -28,32 +26,37 @@ export default function ApiTokensCard() {
     );
   };
 
-  const createToken = async () => {
-    if (!newTokenName || newTokenPermissions.length === 0) return;
-    try {
-      const { data } = await api.post('/auth/tokens', {
-        name: newTokenName,
-        permissions: newTokenPermissions,
-        expires_in_days: newTokenExpiry,
-      });
+  const createMutation = useMutation({
+    mutationFn: () => createApiToken({
+      name: newTokenName,
+      permissions: newTokenPermissions,
+      expires_in_days: newTokenExpiry,
+    }),
+    meta: { suppressGlobalError: true },
+    onSuccess: (data) => {
       setCreatedToken(data.token);
       setNewTokenName('');
       setNewTokenPermissions([]);
       setNewTokenExpiry(null);
-      const { data: refreshed } = await api.get('/auth/tokens');
-      setTokens(refreshed);
-    } catch {
-      toast.show('Failed to create token');
-    }
+      queryClient.invalidateQueries({ queryKey: queryKeys.apiTokens });
+    },
+    onError: () => toast.show('Failed to create token'),
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: (id: string) => revokeApiToken(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.apiTokens }),
+    onError: () => toast.show('Failed to revoke token'),
+  });
+
+  const createToken = () => {
+    if (!newTokenName || newTokenPermissions.length === 0) return;
+    createMutation.mutate();
   };
 
-  const revokeToken = async (id: string) => {
-    try {
-      await api.delete(`/auth/tokens/${id}`);
-      setTokens(tokens.filter((t) => t.id !== id));
-    } catch {
-      toast.show('Failed to revoke token');
-    }
+  const revokeToken = (id: string) => {
+    revokeMutation.mutate(id);
   };
 
   return (

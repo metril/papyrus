@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Toggle from '../common/Toggle';
 import { useToast } from '../../hooks/useToast';
 import {
-  listScanners,
   addScanner,
   updateScanner,
   deleteScanner,
@@ -15,12 +15,14 @@ import {
   registerBrscan4,
 } from '../../api/scanners';
 import type { ScannerTestResult } from '../../api/scanners';
-import type { ManagedScanner, DiscoveredDevice } from '../../types';
+import { useScanners, queryKeys } from '../../api/queries';
+import type { ManagedScanner, ManagedScannerCreate, ManagedScannerUpdate, DiscoveredDevice } from '../../types';
 import { SettingField } from './shared';
 
 export default function ScannersCard() {
   const toast = useToast();
-  const [scanners, setScanners] = useState<ManagedScanner[]>([]);
+  const queryClient = useQueryClient();
+  const { data: scanners = [] } = useScanners();
   const [showAdd, setShowAdd] = useState(false);
   const [addMode, setAddMode] = useState<'manual' | 'ip' | 'discover' | 'brother'>('manual');
   const [editId, setEditId] = useState<number | null>(null);
@@ -44,9 +46,58 @@ export default function ScannersCard() {
   // Test existing scanner state
   const [testResults, setTestResults] = useState<Record<number, ScannerTestResult | 'testing' | 'error'>>({});
 
-  const load = () => listScanners().then(setScanners).catch(() => {});
+  const invalidateScanners = () => queryClient.invalidateQueries({ queryKey: queryKeys.scanners.list() });
 
-  useEffect(() => { load(); }, []);
+  const addMutation = useMutation({
+    mutationFn: (body: ManagedScannerCreate) => addScanner(body),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidateScanners,
+    onError: () => toast.show('Failed to add scanner'),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, body }: { id: number; body: ManagedScannerUpdate }) => updateScanner(id, body),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidateScanners,
+    onError: () => toast.show('Failed to update scanner'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => deleteScanner(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidateScanners,
+    onError: () => toast.show('Failed to delete scanner'),
+  });
+
+  const defaultMutation = useMutation({
+    mutationFn: (id: number) => setDefaultScanner(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidateScanners,
+    onError: () => toast.show('Failed to set default'),
+  });
+
+  // Imperative like the printer probe — feeds the local probe* state the
+  // IP-tab UI renders directly, rather than being read via query state.
+  const probeMutation = useMutation({
+    mutationFn: (ip: string) => probeScanner(ip),
+    meta: { suppressGlobalError: true },
+  });
+
+  const brotherRegisterMutation = useMutation({
+    mutationFn: () => registerBrscan4(form.name, brotherModel, ipAddress),
+    meta: { suppressGlobalError: true },
+  });
+
+  const testMutation = useMutation({
+    mutationFn: (id: number) => testScanner(id),
+    meta: { suppressGlobalError: true },
+  });
+
+  const discoverMutation = useMutation({
+    mutationFn: () => discoverScanners(),
+    meta: { suppressGlobalError: true },
+    onError: () => toast.show('Discovery failed'),
+  });
 
   const ipDevice = ipAddress
     ? `airscan:e:${form.name || 'Scanner'}:http://${ipAddress}/eSCL`
@@ -65,7 +116,7 @@ export default function ScannersCard() {
     setProbeAirscanUrl(null);
     setProbeProtocol(null);
     try {
-      const result = await probeScanner(ipAddress);
+      const result = await probeMutation.mutateAsync(ipAddress);
       if (result.reachable) {
         setProbeStatus('reachable');
         setProbeDevice(result.device);
@@ -87,7 +138,7 @@ export default function ScannersCard() {
     setBrotherRegisterStatus('registering');
     setBrotherError(null);
     try {
-      const result = await registerBrscan4(form.name, brotherModel, ipAddress);
+      const result = await brotherRegisterMutation.mutateAsync();
       if (result.device) {
         setBrotherDevice(result.device);
         setBrotherRegisterStatus('ok');
@@ -104,7 +155,7 @@ export default function ScannersCard() {
   const handleTestScanner = async (id: number) => {
     setTestResults((r) => ({ ...r, [id]: 'testing' }));
     try {
-      const result = await testScanner(id);
+      const result = await testMutation.mutateAsync(id);
       setTestResults((r) => ({ ...r, [id]: result }));
     } catch {
       setTestResults((r) => ({ ...r, [id]: 'error' }));
@@ -114,13 +165,13 @@ export default function ScannersCard() {
   const handleDiscover = async () => {
     setDiscovering(true);
     try {
-      const devices = await discoverScanners();
+      const devices = await discoverMutation.mutateAsync();
       setDiscovered(devices);
-    } catch { toast.show('Discovery failed'); }
+    } catch { /* toast handled by discoverMutation.onError */ }
     finally { setDiscovering(false); }
   };
 
-  const handleAdd = async () => {
+  const handleAdd = () => {
     const device = addMode === 'ip' ? (probeDevice || ipDevice)
       : addMode === 'brother' ? brotherDevice
       : form.device;
@@ -130,31 +181,27 @@ export default function ScannersCard() {
       : addMode === 'ip' && probeAirscanUrl && probeProtocol
       ? { post_scan_config: { airscan_url: probeAirscanUrl, airscan_protocol: probeProtocol } }
       : {};
-    try {
-      await addScanner({ ...form, device, ...extra });
-      setForm({ name: '', device: '', description: '', auto_deliver: false });
-      setIpAddress('');
-      setProbeStatus('idle');
-      setShowAdd(false);
-      setDiscovered([]);
-      load();
-    } catch { toast.show('Failed to add scanner'); }
+    addMutation.mutate({ ...form, device, ...extra }, {
+      onSuccess: () => {
+        setForm({ name: '', device: '', description: '', auto_deliver: false });
+        setIpAddress('');
+        setProbeStatus('idle');
+        setShowAdd(false);
+        setDiscovered([]);
+      },
+    });
   };
 
-  const handleUpdate = async (id: number) => {
-    try {
-      await updateScanner(id, editForm);
-      setEditId(null);
-      load();
-    } catch { toast.show('Failed to update scanner'); }
+  const handleUpdate = (id: number) => {
+    updateMutation.mutate({ id, body: editForm }, { onSuccess: () => setEditId(null) });
   };
 
-  const handleDelete = async (id: number) => {
-    try { await deleteScanner(id); setConfirmDeleteId(null); load(); } catch { toast.show('Failed to delete scanner'); }
+  const handleDelete = (id: number) => {
+    deleteMutation.mutate(id, { onSuccess: () => setConfirmDeleteId(null) });
   };
 
-  const handleDefault = async (id: number) => {
-    try { await setDefaultScanner(id); load(); } catch { toast.show('Failed to set default'); }
+  const handleDefault = (id: number) => {
+    defaultMutation.mutate(id);
   };
 
   const startEdit = (s: ManagedScanner) => {

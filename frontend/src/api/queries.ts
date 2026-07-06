@@ -3,6 +3,10 @@ import { listJobs, getPrinterStatus } from './printer';
 import { listScans } from './scanner';
 import { listPrinters } from './printers';
 import { getSettings, getEmailWebhookInfo } from './settings';
+import { listScanners } from './scanners';
+import { listProviders } from './cloud';
+import { listWebhooks, listWebhookEvents } from './webhooks';
+import { listApiTokens } from './tokens';
 
 /**
  * Single source of truth for React Query cache keys. Every hook derives its key
@@ -37,6 +41,7 @@ export const queryKeys = {
   scanProfiles: ['scanProfiles'] as const,
   scannerOptions: ['scannerOptions'] as const,
   webhooks: ['webhooks'] as const,
+  webhookEvents: ['webhookEvents'] as const,
   apiTokens: ['apiTokens'] as const,
 } as const;
 
@@ -84,5 +89,40 @@ export function useEmailWebhookQuery() {
   return useQuery({
     queryKey: queryKeys.emailWebhook,
     queryFn: () => getEmailWebhookInfo(),
+  });
+}
+
+export function useScanners() {
+  return useQuery({
+    queryKey: queryKeys.scanners.list(),
+    queryFn: () => listScanners(),
+  });
+}
+
+export function useCloudProviders() {
+  return useQuery({
+    queryKey: queryKeys.cloudProviders,
+    queryFn: () => listProviders(),
+  });
+}
+
+export function useWebhooks() {
+  return useQuery({
+    queryKey: queryKeys.webhooks,
+    queryFn: () => listWebhooks(),
+  });
+}
+
+export function useWebhookEvents() {
+  return useQuery({
+    queryKey: queryKeys.webhookEvents,
+    queryFn: () => listWebhookEvents(),
+  });
+}
+
+export function useApiTokens() {
+  return useQuery({
+    queryKey: queryKeys.apiTokens,
+    queryFn: () => listApiTokens(),
   });
 }
