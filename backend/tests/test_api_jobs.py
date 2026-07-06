@@ -19,8 +19,9 @@ import shutil
 import pytest
 from PIL import Image
 
+from app.auth.tokens import hash_token
 from app.exceptions import ExternalServiceError
-from app.models import AppConfig, Printer, PrintJob
+from app.models import APIToken, AppConfig, Printer, PrintJob, User
 from app.routers import jobs as jobs_router
 from app.services import settings_cache
 
@@ -516,3 +517,93 @@ async def test_ensure_preview_pdf_wraps_conversion_failure(tmp_path, monkeypatch
 
     with pytest.raises(ExternalServiceError):
         await jobs_router._ensure_preview_pdf(job)
+
+
+# --------------------------------------------------------------------------- #
+# Share-target (PWA share_target action, POST /api/share-target)
+#
+# Mounted outside the /api/jobs prefix (see main.py), so these use `client`
+# (unaugmented) directly rather than `user_client`. The route's soft-auth
+# path calls `get_current_user` for real instead of depending on it, so the
+# `user_client` fixture's dependency_overrides trick doesn't apply here — a
+# real Bearer token exercises the exact same auth resolution the browser's
+# session cookie would go through, same as test_api_auth.py's token tests.
+# --------------------------------------------------------------------------- #
+async def _seed_share_user_and_token(db, *, plaintext: str = "pprs_test_share_token") -> str:
+    user = User(
+        email="share@example.com", display_name="Share", role="user",
+        is_local=True, username="share",
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    token = APIToken(
+        user_id=user.id,
+        name="share-token",
+        token_hash=hash_token(plaintext),
+        permissions=["print"],
+    )
+    db.add(token)
+    await db.commit()
+    return plaintext
+
+
+async def test_share_target_authenticated_creates_held_job_and_redirects(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    plaintext = await _seed_share_user_and_token(db)
+
+    resp = await client.post(
+        "/api/share-target",
+        files=_pdf_file(),
+        headers={"Authorization": f"Bearer {plaintext}"},
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/print"
+
+    list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
+    assert list_resp.status_code == 200
+    jobs = list_resp.json()["jobs"]
+    assert len(jobs) == 1
+    assert jobs[0]["status"] == "held"
+    assert jobs[0]["filename"] == "test.pdf"
+
+
+async def test_share_target_multiple_files_each_create_a_job(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    plaintext = await _seed_share_user_and_token(db)
+
+    resp = await client.post(
+        "/api/share-target",
+        files=[
+            ("file", ("a.pdf", io.BytesIO(_MINIMAL_PDF), "application/pdf")),
+            ("file", ("b.pdf", io.BytesIO(_MINIMAL_PDF), "application/pdf")),
+        ],
+        headers={"Authorization": f"Bearer {plaintext}"},
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/print"
+
+    list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
+    jobs = list_resp.json()["jobs"]
+    assert len(jobs) == 2
+    assert {j["filename"] for j in jobs} == {"a.pdf", "b.pdf"}
+
+
+async def test_share_target_unauthenticated_redirects_to_login(client, tmp_path):
+    resp = await client.post("/api/share-target", files=_pdf_file())
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/api/auth/login"
+
+
+async def test_share_target_oversize_file_is_413(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    await _seed_setting(db, "max_upload_size_mb", "1")
+    plaintext = await _seed_share_user_and_token(db)
+
+    oversized = b"0" * (2 * 1024 * 1024)  # 2 MiB > 1 MiB cap
+    resp = await client.post(
+        "/api/share-target",
+        files={"file": ("big.pdf", io.BytesIO(oversized), "application/pdf")},
+        headers={"Authorization": f"Bearer {plaintext}"},
+    )
+    assert resp.status_code == 413

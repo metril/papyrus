@@ -3,7 +3,7 @@ import sys
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,19 +41,38 @@ from app.services.ws_manager import ws_manager
 
 router = APIRouter()
 
+# Mounted separately at /api (not /api/jobs) in main.py — the PWA share-target
+# manifest action is a fixed, well-known path the browser navigates to
+# directly, so it can't live under the jobs prefix.
+share_target_router = APIRouter()
 
-@router.post("/upload", response_model=PrintJobResponse, status_code=201)
-async def upload_and_create_job(
-    file: UploadFile = File(...),
-    copies: int = Form(default=1),
-    duplex: bool = Form(default=False),
-    media: str = Form(default="A4"),
-    hold: bool = Form(default=True),
-    release_pin: str = Form(default=""),
-    user: User = Depends(require_permission("print")),
-    db: AsyncSession = Depends(get_db),
-):
-    """Upload a file and create a print job (held by default)."""
+
+async def _create_print_job_from_upload(
+    db: AsyncSession,
+    user: User,
+    file: UploadFile,
+    *,
+    copies: int = 1,
+    duplex: bool = False,
+    media: str = "A4",
+    hold: bool = True,
+    release_pin: str = "",
+) -> tuple[PrintJob, str | None]:
+    """Validate, stream-save, and create a print job from an uploaded file.
+
+    This is the shared core behind ``POST /upload`` and ``POST
+    /api/share-target`` so both pipelines stay byte-identical — validation,
+    streaming save, PIN handling, held/auto-print dispatch, and the
+    print.held webhook all live here exactly once.
+
+    Raises HTTPException(400) for a missing filename or unsupported mime
+    type. UploadTooLargeError (a PapyrusError, 413) propagates from
+    save_upload_streaming to the global handler unchanged.
+
+    Returns the created (and already committed/refreshed) job plus the
+    plaintext PIN, if one was provided or generated — the caller decides
+    whether/how to surface it.
+    """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
 
@@ -82,7 +101,6 @@ async def upload_and_create_job(
     # Determine PIN: use provided value, or check if global setting requires one
     pin = release_pin.strip() if release_pin else None
     if not pin:
-        from app.routers.settings import get_setting
         require_pin_val = await get_setting(db, "require_release_pin") or ""
         require_pin = require_pin_val.lower() in ("true", "1", "yes")
         if require_pin:
@@ -126,6 +144,26 @@ async def upload_and_create_job(
     else:
         await _process_job(job, db, default_printer)
 
+    return job, pin
+
+
+@router.post("/upload", response_model=PrintJobResponse, status_code=201)
+async def upload_and_create_job(
+    file: UploadFile = File(...),
+    copies: int = Form(default=1),
+    duplex: bool = Form(default=False),
+    media: str = Form(default="A4"),
+    hold: bool = Form(default=True),
+    release_pin: str = Form(default=""),
+    user: User = Depends(require_permission("print")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload a file and create a print job (held by default)."""
+    job, pin = await _create_print_job_from_upload(
+        db, user, file,
+        copies=copies, duplex=duplex, media=media, hold=hold, release_pin=release_pin,
+    )
+
     # Return the PIN in the initial response so the user can note it
     if pin and hold:
         resp = PrintJobResponse.model_validate(job, from_attributes=True)
@@ -133,6 +171,48 @@ async def upload_and_create_job(
         resp_dict["release_pin"] = pin
         return JSONResponse(content=resp_dict, status_code=201)
     return job
+
+
+async def _user_from_request_or_none(request: Request, db: AsyncSession) -> User | None:
+    """Resolve the current user exactly like `get_current_user` (Bearer token
+    or session cookie), but return None instead of raising HTTPException(401).
+
+    Used only by the share-target route below: it's a browser navigation
+    target (the OS share sheet POSTs here directly), so an unauthenticated
+    request needs a 303 redirect to the login page, not a JSON 401 body.
+    Calling `get_current_user` directly (rather than depending on it via
+    `Depends`) and catching its 401 reuses the exact same auth resolution —
+    Bearer token *and* session cookie — instead of duplicating the session
+    user-lookup here and risking drift if that logic changes.
+    """
+    try:
+        return await get_current_user(request, db)
+    except HTTPException:
+        return None
+
+
+@share_target_router.post("/share-target")
+async def share_target(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """PWA share-target action: the OS share sheet POSTs one or more files
+    here (Android/Chromium only — iOS Safari ignores `share_target` in the
+    manifest). Deliberately NOT the usual JSON-401 contract: this is a
+    browser navigation, so unauthenticated requests redirect to the login
+    page and authenticated ones redirect to the print queue, both 303.
+    """
+    user = await _user_from_request_or_none(request, db)
+    if user is None:
+        return RedirectResponse("/api/auth/login", status_code=303)
+
+    form = await request.form()
+    for shared_file in form.getlist("file"):
+        if isinstance(shared_file, str):
+            continue  # not a file part; ignore a stray non-file "file" field
+        await _create_print_job_from_upload(db, user, shared_file)
+
+    return RedirectResponse("/print", status_code=303)
 
 
 async def get_default_printer(db: AsyncSession):

@@ -33,6 +33,34 @@ export default defineConfig({
           { src: '/pwa-512.png', sizes: '512x512', type: 'image/png' },
           { src: '/pwa-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
+        // Android/Chromium only — iOS Safari ignores share_target entirely,
+        // so iPhone users fall back to the normal upload flow. The action
+        // path is under /api/, already excluded from the SW's navigateFallback
+        // by navigateFallbackDenylist below, so no service-worker change is
+        // needed for the share POST to reach the network/backend.
+        share_target: {
+          action: '/api/share-target',
+          method: 'POST',
+          enctype: 'multipart/form-data',
+          params: {
+            files: [
+              {
+                name: 'file',
+                accept: [
+                  'application/pdf',
+                  'image/*',
+                  '.doc',
+                  '.docx',
+                  '.odt',
+                  '.xls',
+                  '.xlsx',
+                  '.ppt',
+                  '.pptx',
+                ],
+              },
+            ],
+          },
+        },
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
