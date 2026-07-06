@@ -159,3 +159,33 @@ async def test_domain_exception_echoes_custom_request_id(db, admin_client, monke
     assert resp.status_code == 500
     assert resp.headers["x-request-id"] == "myid123"
     assert resp.json()["request_id"] == "myid123"
+
+
+async def test_unhandled_error_traceback_log_carries_request_id(admin_client, monkeypatch):
+    """Regression: the catch-all handler re-establishes the request-id
+    contextvar before logging (it runs in ServerErrorMiddleware, after
+    RequestIDMiddleware reset the var), so the traceback log line carries the
+    same id the client received — not "-"."""
+    import logging
+
+    from app.logging_config import RequestIdFilter
+
+    _patch_discover_to_raise(monkeypatch)
+
+    records: list[logging.LogRecord] = []
+    capture = logging.Handler()
+    capture.emit = records.append  # runs after handler-level filters
+    capture.addFilter(RequestIdFilter())
+    exc_logger = logging.getLogger("app.exceptions")
+    exc_logger.addHandler(capture)
+    try:
+        resp = await admin_client.get(
+            "/api/printers/discover", headers={"X-Request-ID": "corr-123"}
+        )
+    finally:
+        exc_logger.removeHandler(capture)
+
+    assert resp.status_code == 500
+    tracebacks = [r for r in records if r.exc_info]
+    assert tracebacks, "expected the catch-all to log the traceback"
+    assert all(r.request_id == "corr-123" for r in tracebacks)
