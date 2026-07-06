@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import { Outlet, NavLink } from 'react-router-dom';
 import api from '../../api/client';
 import { useThemeStore } from '../../store/themeStore';
@@ -42,6 +42,14 @@ import {
   ShieldIcon,
   SettingsIcon,
 } from '../common/Icons';
+
+// Full-viewport centered spinner, shared by the auth-loading state, the
+// LoginScreen providers fetch, and the Suspense fallback for lazy routes.
+const CenteredSpinner = () => (
+  <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
+    <div className="w-6 h-6 border-2 border-gray-200 border-t-blue-500 rounded-full animate-spinner dark:border-gray-700 dark:border-t-blue-400" />
+  </div>
+);
 
 const navItems = [
   { to: '/print', label: 'Print', icon: PrinterIcon },
@@ -124,11 +132,7 @@ function LoginScreen() {
   };
 
   if (!providers) {
-    return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
-        <div className="w-6 h-6 border-2 border-gray-200 border-t-blue-500 rounded-full animate-spinner dark:border-gray-700 dark:border-t-blue-400" />
-      </div>
-    );
+    return <CenteredSpinner />;
   }
 
   return (
@@ -204,11 +208,7 @@ export default function AppShell() {
   const visibleNavItems = navItems.filter((item) => !item.adminOnly || isAdmin);
 
   if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex items-center justify-center">
-        <div className="w-6 h-6 border-2 border-gray-200 border-t-blue-500 rounded-full animate-spinner dark:border-gray-700 dark:border-t-blue-400" />
-      </div>
-    );
+    return <CenteredSpinner />;
   }
 
   if (!user) {
@@ -269,7 +269,9 @@ export default function AppShell() {
       {/* Main content */}
       <main className="md:ml-64 flex-1 flex flex-col min-h-screen">
         <div className="flex-1 p-4 md:p-8 pb-20 md:pb-8">
-          <Outlet />
+          <Suspense fallback={<CenteredSpinner />}>
+            <Outlet />
+          </Suspense>
         </div>
       </main>
 

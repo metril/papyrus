@@ -4,16 +4,19 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import AppShell from './components/layout/AppShell';
 import { ToastProvider } from './components/common/Toast';
 import { queryClient } from './api/queryClient';
-import PrintPage from './pages/PrintPage';
-import ScanPage from './pages/ScanPage';
-import CopyPage from './pages/CopyPage';
-import FilesPage from './pages/FilesPage';
-import HistoryPage from './pages/HistoryPage';
-import SettingsPage from './pages/SettingsPage';
-import AuditPage from './pages/AuditPage';
-import DashboardPage from './pages/DashboardPage';
-import UsersPage from './pages/UsersPage';
 import { useThemeStore } from './store/themeStore';
+
+// Route-level code splitting: each page becomes its own chunk, loaded on
+// first navigation. The Suspense boundary lives in AppShell around <Outlet/>.
+const PrintPage = lazy(() => import('./pages/PrintPage'));
+const ScanPage = lazy(() => import('./pages/ScanPage'));
+const CopyPage = lazy(() => import('./pages/CopyPage'));
+const FilesPage = lazy(() => import('./pages/FilesPage'));
+const HistoryPage = lazy(() => import('./pages/HistoryPage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const AuditPage = lazy(() => import('./pages/AuditPage'));
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const UsersPage = lazy(() => import('./pages/UsersPage'));
 
 // Dev-only: lazily loaded and gated on import.meta.env.DEV so it is dead-code
 // eliminated from the production bundle.
