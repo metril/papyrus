@@ -1,9 +1,55 @@
 @import "tailwindcss";
+
+/*
+ * Design system (Phase 4 visual refresh):
+ * - "Paper" gray scale: the stock Tailwind gray-* palette is remapped to a
+ *   warm, low-chroma oklch scale evoking uncoated paper in light mode and
+ *   toner charcoal in dark mode. Every existing gray-* class app-wide picks
+ *   this up automatically — no component changes needed.
+ * - "Ink" scale: a new process-cyan accent scale (ink-50..950) that replaces
+ *   blue-* for focus rings and, surface-by-surface in later tasks, for
+ *   primary actions/links.
+ * - Mono-for-data rule: --font-mono (IBM Plex Mono) is reserved for numeric
+ *   and data readouts (job counts, timestamps, file sizes, IDs) — not
+ *   general UI copy, which stays on --font-sans (IBM Plex Sans).
+ * - Perforation motif: `rule-perf` renders a dotted "tear line" divider and
+ *   `led`/`led-pulse` render status-indicator dots, both nodding to the
+ *   office-machine heritage of the product.
+ */
+@theme {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", monospace;
+
+  --color-gray-50: oklch(98.4% 0.004 85);
+  --color-gray-100: oklch(96.7% 0.005 85);
+  --color-gray-200: oklch(92.7% 0.006 85);
+  --color-gray-300: oklch(87.1% 0.006 85);
+  --color-gray-400: oklch(70.9% 0.008 85);
+  --color-gray-500: oklch(55.4% 0.009 85);
+  --color-gray-600: oklch(44.6% 0.009 85);
+  --color-gray-700: oklch(37.3% 0.008 85);
+  --color-gray-800: oklch(27.9% 0.007 85);
+  --color-gray-900: oklch(21.1% 0.006 85);
+  --color-gray-950: oklch(14.5% 0.005 85);
+
+  --color-ink-50: oklch(97.5% 0.013 200);
+  --color-ink-100: oklch(94% 0.03 200);
+  --color-ink-200: oklch(88% 0.05 200);
+  --color-ink-300: oklch(80% 0.07 202);
+  --color-ink-400: oklch(70% 0.09 205);
+  --color-ink-500: oklch(59% 0.095 210);
+  --color-ink-600: oklch(50% 0.09 212);
+  --color-ink-700: oklch(43% 0.08 213);
+  --color-ink-800: oklch(36% 0.065 214);
+  --color-ink-900: oklch(30% 0.05 215);
+  --color-ink-950: oklch(22% 0.04 216);
+}
+
 @custom-variant dark (&:where(.dark, .dark *));
 
 /* Typography */
 body {
-  font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -34,8 +80,8 @@ input[type="url"]:focus,
 input[type="search"]:focus,
 textarea:focus,
 select:focus {
-  border-color: var(--color-blue-500);
-  box-shadow: 0 0 0 3px rgb(59 130 246 / 0.15);
+  border-color: var(--color-ink-500);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-ink-500) 20%, transparent);
 }
 input::placeholder,
 textarea::placeholder {
@@ -63,8 +109,8 @@ textarea::placeholder {
 .dark input[type="search"]:focus,
 .dark textarea:focus,
 .dark select:focus {
-  border-color: var(--color-blue-400);
-  box-shadow: 0 0 0 3px rgb(96 165 250 / 0.15);
+  border-color: var(--color-ink-400);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-ink-400) 20%, transparent);
 }
 .dark input::placeholder,
 .dark textarea::placeholder {
@@ -77,20 +123,20 @@ input[type="checkbox"] {
   height: 1rem;
   border-radius: 0.25rem;
   border: 1.5px solid var(--color-gray-300);
-  accent-color: var(--color-blue-600);
+  accent-color: var(--color-ink-600);
   cursor: pointer;
   transition: box-shadow 150ms;
 }
 input[type="checkbox"]:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px rgb(59 130 246 / 0.15);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-ink-500) 20%, transparent);
 }
 .dark input[type="checkbox"] {
   border-color: var(--color-gray-600);
-  accent-color: var(--color-blue-500);
+  accent-color: var(--color-ink-500);
 }
 .dark input[type="checkbox"]:focus-visible {
-  box-shadow: 0 0 0 3px rgb(96 165 250 / 0.15);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-ink-400) 20%, transparent);
 }
 
 /* Spinner animation */
@@ -99,4 +145,38 @@ input[type="checkbox"]:focus-visible {
 }
 .animate-spinner {
   animation: spinner 0.7s linear infinite;
+}
+
+/* Perforation divider: a dotted "tear line" motif, works on <hr> or <div>,
+   inherits currentColor so it adapts to light/dark automatically. */
+@utility rule-perf {
+  height: 2px;
+  border: 0;
+  background-image: radial-gradient(circle, currentColor 1px, transparent 1px);
+  background-size: 8px 2px;
+  background-repeat: repeat-x;
+  background-position: left center;
+  opacity: 0.3;
+}
+
+/* LED status dot: pair with a text-* color class to set the dot's color. */
+@utility led {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  display: inline-block;
+  box-shadow: 0 0 6px 0 currentColor;
+}
+
+@keyframes led-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@utility led-pulse {
+  animation: led-pulse 2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .led-pulse {
+    animation: none;
+  }
 }
