@@ -1,38 +1,20 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ToastContext, type ToastType } from '../../hooks/useToast';
-
-interface ToastItem {
-  id: number;
-  message: string;
-  type: ToastType;
-}
-
-let nextId = 0;
+import { useEffect, useRef } from 'react';
+import type { ToastType } from '../../hooks/useToast';
+import { useToastStore, type ToastItem } from '../../store/toastStore';
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
-
-  const show = useCallback((message: string, type: ToastType = 'error') => {
-    const id = nextId++;
-    setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
-  }, []);
-
-  const dismiss = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
+  const toasts = useToastStore((s) => s.toasts);
+  const dismiss = useToastStore((s) => s.dismiss);
 
   return (
-    <ToastContext.Provider value={{ show }}>
+    <>
       {children}
       <div className="fixed bottom-20 md:bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full pointer-events-none">
         {toasts.map((t) => (
           <ToastBanner key={t.id} toast={t} onDismiss={dismiss} />
         ))}
       </div>
-    </ToastContext.Provider>
+    </>
   );
 }
 
