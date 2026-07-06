@@ -68,7 +68,7 @@ function ThemeToggle({ compact = false }: { compact?: boolean }) {
       <button
         onClick={() => setTheme(next)}
         title={`Theme: ${labels[theme]}`}
-        className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+        className="flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800 transition-colors"
       >
         {icons[theme]}
       </button>
@@ -131,7 +131,7 @@ function LoginScreen() {
           <div className="mx-auto w-12 h-12 bg-ink-50 dark:bg-ink-950/50 rounded-xl flex items-center justify-center mb-3">
             <Printer className="w-6 h-6 text-ink-600 dark:text-ink-400" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />
           </div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">Papyrus</h1>
+          <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 tracking-tight">Papyrus</h1>
           <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">Print & Scan Server</p>
         </div>
 
@@ -214,20 +214,22 @@ export default function AppShell() {
       <RealtimeBridge />
       {/* Desktop sidebar */}
       <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800">
-        <div className="flex flex-col justify-center h-16 px-6 border-b border-gray-100 dark:border-gray-800">
-          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">Papyrus</h1>
-          <p className="text-xs text-gray-400 dark:text-gray-500 -mt-0.5">Print & Scan</p>
+        <div className="flex flex-col justify-center h-16 px-6">
+          <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-100 tracking-tight">Papyrus</h1>
+          <span className="mt-1 h-0.5 w-8 rounded-full bg-ink-600 dark:bg-ink-400" aria-hidden="true" />
+          <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">Print & Scan</p>
         </div>
+        <hr className="rule-perf mx-6 text-gray-300 dark:text-gray-700" />
         <nav className="flex-1 px-4 py-4 space-y-1">
           {visibleNavItems.map(({ to, label, icon: Icon }) => (
             <NavLink
               key={to}
               to={to}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
+                `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors duration-150 ${
                   isActive
-                    ? 'bg-ink-50/70 text-ink-700 border-l-2 border-ink-600 dark:bg-ink-950/50 dark:text-ink-300 dark:border-ink-400'
-                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 border-l-2 border-transparent dark:text-gray-400 dark:hover:bg-gray-800/50 dark:hover:text-gray-100'
+                    ? 'bg-ink-50 text-ink-700 dark:bg-ink-950 dark:text-ink-300'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 dark:text-gray-400 dark:hover:bg-gray-800/50 dark:hover:text-gray-100'
                 }`
               }
             >
@@ -270,14 +272,16 @@ export default function AppShell() {
       </main>
 
       {/* Mobile bottom navigation */}
-      <nav className="md:hidden fixed bottom-0 inset-x-0 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex justify-around py-2 z-50">
+      <nav className="md:hidden fixed bottom-0 inset-x-0 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex items-center justify-around py-1.5 z-50">
         {visibleNavItems.slice(0, 3).map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}
             className={({ isActive }) =>
-              `flex flex-col items-center gap-1 px-3 py-1 text-xs font-medium ${
-                isActive ? 'text-ink-600 dark:text-ink-400' : 'text-gray-500 dark:text-gray-400'
+              `flex min-h-11 min-w-11 flex-col items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                isActive
+                  ? 'bg-ink-50 text-ink-700 dark:bg-ink-950 dark:text-ink-300'
+                  : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
               }`
             }
           >
@@ -288,8 +292,10 @@ export default function AppShell() {
         <NavLink
           to="/settings"
           className={({ isActive }) =>
-            `flex flex-col items-center gap-1 px-3 py-1 text-xs font-medium ${
-              isActive ? 'text-ink-600 dark:text-ink-400' : 'text-gray-500 dark:text-gray-400'
+            `flex min-h-11 min-w-11 flex-col items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+              isActive
+                ? 'bg-ink-50 text-ink-700 dark:bg-ink-950 dark:text-ink-300'
+                : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
             }`
           }
         >
