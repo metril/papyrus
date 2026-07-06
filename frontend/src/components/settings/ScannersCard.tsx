@@ -226,16 +226,16 @@ export default function ScannersCard() {
   };
 
   return (
-    <Card title="Scanners">
+    <Card title="Scanners" description="SANE and eSCL devices Papyrus can scan from.">
       <div className="space-y-3">
-        {scanners.length === 0 && <p className="text-sm text-gray-500">No scanners configured yet.</p>}
+        {scanners.length === 0 && <p className="text-sm text-gray-500 dark:text-gray-400">No scanners configured yet.</p>}
         {scanners.map((s) => (
           <div key={s.id} className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 space-y-2">
             {editId === s.id ? (
               <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <SettingField label="Name" value={editForm.name} onChange={(v) => setEditForm((f) => ({ ...f, name: v }))} />
-                  <SettingField label="SANE Device" value={editForm.device} onChange={(v) => setEditForm((f) => ({ ...f, device: v }))} placeholder="airscan:w:Brother DCP-L2540DW" />
+                  <SettingField label="SANE device" value={editForm.device} onChange={(v) => setEditForm((f) => ({ ...f, device: v }))} placeholder="airscan:w:Brother DCP-L2540DW" mono />
                   <SettingField label="Description" value={editForm.description} onChange={(v) => setEditForm((f) => ({ ...f, description: v }))} />
                   <div className="self-center">
                     <Toggle checked={editForm.auto_deliver} onChange={(v) => setEditForm((f) => ({ ...f, auto_deliver: v }))} label="Auto-deliver" />
@@ -260,7 +260,7 @@ export default function ScannersCard() {
                   </div>
                   <div className="flex gap-1 ml-2 flex-shrink-0 items-center">
                     {!s.is_default && (
-                      <Button size="sm" variant="ghost" onClick={() => handleDefault(s.id)}>Set Default</Button>
+                      <Button size="sm" variant="ghost" onClick={() => handleDefault(s.id)}>Set default</Button>
                     )}
                     <Button size="sm" variant="ghost" onClick={() => handleTestScanner(s.id)}>
                       {testResults[s.id] === 'testing' ? '…' : 'Test'}
@@ -273,7 +273,7 @@ export default function ScannersCard() {
                         <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteId(null)}>No</Button>
                       </>
                     ) : (
-                      <Button size="sm" variant="danger" onClick={() => setConfirmDeleteId(s.id)}>Delete</Button>
+                      <Button size="sm" variant="danger-ghost" onClick={() => setConfirmDeleteId(s.id)}>Delete</Button>
                     )}
                   </div>
                 </div>
@@ -288,8 +288,10 @@ export default function ScannersCard() {
                           return (
                             <>
                               <div className="flex items-center gap-1.5">
-                                <span className={r.escl_ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
-                                  {r.escl_ok ? '✓' : '✗'} eSCL
+                                <span className={`inline-flex items-center gap-1.5 ${r.escl_ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                  <span aria-hidden="true" className={`led ${r.escl_ok ? 'text-green-500 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`} />
+                                  eSCL
+                                  <span className="sr-only">{r.escl_ok ? 'OK' : 'failed'}</span>
                                 </span>
                                 {!r.escl_ok && r.escl_error && (
                                   <span className="text-gray-500 dark:text-gray-400 truncate">{r.escl_error}</span>
@@ -299,8 +301,10 @@ export default function ScannersCard() {
                                 )}
                               </div>
                               <div className="flex items-center gap-1.5">
-                                <span className={r.sane_ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}>
-                                  {r.sane_ok ? '✓' : '✗'} SANE
+                                <span className={`inline-flex items-center gap-1.5 ${r.sane_ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
+                                  <span aria-hidden="true" className={`led ${r.sane_ok ? 'text-green-500 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`} />
+                                  SANE
+                                  <span className="sr-only">{r.sane_ok ? 'OK' : 'failed'}</span>
                                 </span>
                                 {!r.sane_ok && r.sane_error && (
                                   <span className="text-gray-500 dark:text-gray-400 truncate">{r.sane_error}</span>
@@ -319,56 +323,62 @@ export default function ScannersCard() {
         ))}
 
         {showAdd ? (
-          <div className="p-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 space-y-3">
+          <div className="p-3 rounded-lg border border-ink-200 dark:border-ink-800 bg-ink-50/60 dark:bg-ink-950/30 space-y-3">
             {/* Mode tabs */}
-            <div className="flex gap-1 text-xs">
+            <div className="flex flex-wrap gap-1 text-xs">
               {(['ip', 'brother', 'manual', 'discover'] as const).map((m) => (
                 <button
                   key={m}
                   onClick={() => setAddMode(m)}
-                  className={`px-3 py-1 rounded-full font-medium ${addMode === m ? 'bg-blue-600 text-white' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+                  className={`px-3 py-1 rounded-full font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-500 ${addMode === m ? 'bg-ink-600 text-white dark:bg-ink-500' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
                 >
-                  {m === 'ip' ? 'IP Address' : m === 'brother' ? 'Brother' : m === 'manual' ? 'Manual' : 'Discover'}
+                  {m === 'ip' ? 'IP address' : m === 'brother' ? 'Brother' : m === 'manual' ? 'Manual' : 'Discover'}
                 </button>
               ))}
             </div>
 
             {addMode === 'ip' && (
               <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP Address</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP address</label>
                     <div className="flex gap-1">
                       <input
                         type="text"
                         value={ipAddress}
                         onChange={(e) => { setIpAddress(e.target.value); setProbeStatus('idle'); }}
                         placeholder="192.168.1.100"
-                        className="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+                        className="flex-1 min-w-0 rounded-lg border border-gray-300 dark:border-gray-600 font-mono text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
                       />
                       <Button size="sm" onClick={handleProbe} disabled={!ipAddress || probeStatus === 'probing'}>
                         {probeStatus === 'probing' ? '…' : 'Test'}
                       </Button>
                     </div>
-                    {probeStatus === 'reachable' && <p className="text-xs text-green-600 dark:text-green-400 mt-0.5">Scanner reachable</p>}
+                    {probeStatus === 'reachable' && (
+                      <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+                        <span aria-hidden="true" className="led text-green-500 dark:text-green-400" />
+                        Scanner reachable
+                      </p>
+                    )}
                     {probeStatus === 'unreachable' && (
-                      <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">
-                        Not reachable{probeError ? `: ${probeError}` : ' — check IP and network'}
+                      <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400">
+                        <span aria-hidden="true" className="led shrink-0 text-red-500 dark:text-red-400" />
+                        <span>Not reachable{probeError ? `: ${probeError}` : ' — check IP and network'}</span>
                       </p>
                     )}
                   </div>
                   <SettingField label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="Brother DCP-L2540DW" />
                 </div>
                 {(probeDevice || ipDevice) && (
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Device string: <span className="font-mono">{probeDevice || ipDevice}</span></p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Device string: <span className="font-mono break-all">{probeDevice || ipDevice}</span></p>
                 )}
               </div>
             )}
 
             {addMode === 'manual' && (
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <SettingField label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="Brother DCP-L2540DW" />
-                <SettingField label="SANE Device String" value={form.device} onChange={(v) => setForm((f) => ({ ...f, device: v }))} placeholder="airscan:w:Brother DCP-L2540DW" />
+                <SettingField label="SANE device string" value={form.device} onChange={(v) => setForm((f) => ({ ...f, device: v }))} placeholder="airscan:w:Brother DCP-L2540DW" mono />
               </div>
             )}
 
@@ -378,7 +388,7 @@ export default function ScannersCard() {
                   <SettingField label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="Brother DCP-L2540DW" />
                   <div className="self-end">
                     <Button size="sm" variant="secondary" onClick={handleDiscover} disabled={discovering}>
-                      {discovering ? 'Scanning…' : 'Scan Network'}
+                      {discovering ? 'Scanning…' : 'Scan network'}
                     </Button>
                   </div>
                 </div>
@@ -390,9 +400,9 @@ export default function ScannersCard() {
                         <button
                           key={d.device}
                           onClick={() => setForm((f) => ({ ...f, device: d.device, name: f.name || d.description }))}
-                          className={`block w-full text-left text-xs p-2 rounded border hover:bg-gray-50 dark:hover:bg-gray-700 ${form.device === d.device ? 'border-blue-400 bg-blue-50 dark:bg-blue-950/30' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'}`}
+                          className={`block w-full text-left text-xs p-2 rounded-lg border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-500 hover:bg-gray-50 dark:hover:bg-gray-700 ${form.device === d.device ? 'border-ink-400 bg-ink-50 dark:border-ink-600 dark:bg-ink-950/30' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'}`}
                         >
-                          <span className="font-mono dark:text-gray-300">{d.device}</span>
+                          <span className="font-mono break-all dark:text-gray-300">{d.device}</span>
                           {d.description && <span className="text-gray-500 dark:text-gray-400 ml-1">— {d.description}</span>}
                         </button>
                       ))}
@@ -400,15 +410,15 @@ export default function ScannersCard() {
                   </div>
                 )}
                 {discovered.length === 0 && !discovering && (
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Click "Scan Network" to find scanners via mDNS.</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Click "Scan network" to find scanners via mDNS.</p>
                 )}
               </div>
             )}
 
             {addMode === 'brother' && (
               <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <SettingField label="Scanner Name" value={form.name}
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <SettingField label="Scanner name" value={form.name}
                     onChange={(v) => setForm((f) => ({ ...f, name: v }))}
                     placeholder="Brother DCP-L2540DW" />
                   <div>
@@ -418,19 +428,19 @@ export default function ScannersCard() {
                       value={brotherModel}
                       onChange={(e) => setBrotherModel(e.target.value)}
                       placeholder="DCP-L2540DW"
-                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 font-mono text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
                     />
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Exact Brother model name (e.g. DCP-L2540DW)</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP Address</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP address</label>
                     <div className="flex gap-1">
                       <input
                         type="text"
                         value={ipAddress}
                         onChange={(e) => setIpAddress(e.target.value)}
                         placeholder="10.10.77.50"
-                        className="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+                        className="flex-1 min-w-0 rounded-lg border border-gray-300 dark:border-gray-600 font-mono text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
                       />
                       <Button size="sm" onClick={handleBrotherRegister}
                         disabled={!ipAddress || !brotherModel || !form.name || brotherRegisterStatus === 'registering'}>
@@ -440,17 +450,21 @@ export default function ScannersCard() {
                   </div>
                 </div>
                 {brotherRegisterStatus === 'ok' && (
-                  <p className="text-xs text-green-600 dark:text-green-400">
-                    Registered — device: <span className="font-mono">{brotherDevice}</span>
+                  <p className="inline-flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+                    <span aria-hidden="true" className="led text-green-500 dark:text-green-400" />
+                    <span>Registered — device: <span className="font-mono break-all">{brotherDevice}</span></span>
                   </p>
                 )}
                 {brotherRegisterStatus === 'error' && (
-                  <p className="text-xs text-red-600 dark:text-red-400">{brotherError}</p>
+                  <p className="inline-flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400">
+                    <span aria-hidden="true" className="led shrink-0 text-red-500 dark:text-red-400" />
+                    <span>{brotherError}</span>
+                  </p>
                 )}
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <SettingField label="Description (optional)" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
               <div className="self-center">
                 <Toggle checked={form.auto_deliver} onChange={(v) => setForm((f) => ({ ...f, auto_deliver: v }))} label="Auto-deliver scans" />
@@ -458,12 +472,12 @@ export default function ScannersCard() {
             </div>
 
             <div className="flex gap-2">
-              <Button size="sm" onClick={handleAdd} disabled={!canAddScanner}>Add Scanner</Button>
+              <Button size="sm" onClick={handleAdd} disabled={!canAddScanner}>Add scanner</Button>
               <Button size="sm" variant="ghost" onClick={resetAdd}>Cancel</Button>
             </div>
           </div>
         ) : (
-          <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>+ Add Scanner</Button>
+          <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>+ Add scanner</Button>
         )}
       </div>
     </Card>

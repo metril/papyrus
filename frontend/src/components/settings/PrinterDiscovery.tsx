@@ -5,7 +5,7 @@ import { queryKeys } from '../../api/queries';
 import type { DiscoveredPrinter } from '../../types';
 
 const protocolColors: Record<string, string> = {
-  ipp: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+  ipp: 'bg-ink-100 text-ink-700 dark:bg-ink-900/40 dark:text-ink-300',
   ipps: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400',
   lpd: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
 };
@@ -79,22 +79,24 @@ function DiscoveredPrinterRow({
   onSelect: (device: DiscoveredPrinter) => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 p-2 rounded-lg border border-gray-200 dark:border-gray-700">
+    <div className="flex items-center justify-between gap-2 p-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900">
       <div className="min-w-0">
         <div className="flex items-center gap-1.5 flex-wrap">
+          {/* Reachability LED: the device answered the mDNS scan just now. */}
+          <span aria-hidden="true" className="led shrink-0 text-green-500 dark:text-green-400" />
           <span className="text-sm font-semibold text-gray-900 dark:text-gray-100 truncate">
             {device.make_model || device.name}
           </span>
           {device.protocols.map((proto) => (
             <span
               key={proto}
-              className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${protocolColors[proto] || 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}
+              className={`font-mono text-xs px-1.5 py-0.5 rounded-full font-medium ${protocolColors[proto] || 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}
             >
               {proto}
             </span>
           ))}
         </div>
-        <div className="text-xs text-gray-500 dark:text-gray-400 truncate">
+        <div className="font-mono text-xs text-gray-500 dark:text-gray-400 truncate">
           {device.ip}
           {device.location ? ` · ${device.location}` : ''}
         </div>

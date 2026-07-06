@@ -66,20 +66,21 @@ export default function WebhooksCard() {
   };
 
   return (
-    <Card title="Webhooks" collapsible>
+    <Card
+      title="Webhooks"
+      description="Send HTTP POST notifications when events occur. Payloads are signed with HMAC-SHA256 if a secret is set."
+      collapsible
+    >
       <div className="space-y-4">
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          Send HTTP POST notifications when events occur. Payloads are signed with HMAC-SHA256 if a secret is set.
-        </p>
         {hooks.length === 0 && !showAdd && (
-          <p className="text-gray-500 text-sm">No webhooks configured.</p>
+          <p className="text-gray-500 dark:text-gray-400 text-sm">No webhooks configured.</p>
         )}
         {hooks.map((hook) => (
           <div key={hook.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-200 dark:border-gray-700">
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{hook.name}</div>
-              <div className="text-xs text-gray-500 dark:text-gray-400 truncate">{hook.url}</div>
-              <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">{hook.events.join(', ')}</div>
+              <div className="font-mono text-xs text-gray-500 dark:text-gray-400 truncate">{hook.url}</div>
+              <div className="font-mono text-xs text-gray-400 dark:text-gray-500 mt-1">{hook.events.join(', ')}</div>
             </div>
             <div className="flex items-center gap-2 ml-3">
               <button
@@ -104,14 +105,14 @@ export default function WebhooksCard() {
               placeholder="https://example.com/webhook"
               value={form.url}
               onChange={(e) => setForm({ ...form, url: e.target.value })}
-              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 font-mono text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
             />
             <input
               type="text"
               placeholder="Signing secret (optional)"
               value={form.secret}
               onChange={(e) => setForm({ ...form, secret: e.target.value })}
-              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 font-mono text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
             />
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Events</label>
@@ -120,7 +121,7 @@ export default function WebhooksCard() {
                   <button
                     key={evt}
                     onClick={() => toggleEvent(evt)}
-                    className={`px-2 py-1 text-xs rounded border ${form.events.includes(evt) ? 'bg-blue-50 border-blue-300 text-blue-700 dark:bg-blue-950 dark:border-blue-700 dark:text-blue-300' : 'border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400'}`}
+                    className={`px-2 py-1 font-mono text-xs rounded border ${form.events.includes(evt) ? 'bg-ink-50 border-ink-300 text-ink-700 dark:bg-ink-950 dark:border-ink-700 dark:text-ink-300' : 'border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400'}`}
                   >{evt}</button>
                 ))}
               </div>
@@ -131,7 +132,7 @@ export default function WebhooksCard() {
             </div>
           </div>
         ) : (
-          <Button size="sm" onClick={() => setShowAdd(true)}>Add Webhook</Button>
+          <Button size="sm" onClick={() => setShowAdd(true)}>Add webhook</Button>
         )}
       </div>
     </Card>

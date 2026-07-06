@@ -54,7 +54,11 @@ export default function CloudStorageCard() {
   };
 
   return (
-    <Card title="Cloud Storage" collapsible>
+    <Card
+      title="Cloud Storage"
+      description="Connected accounts for saving scans to and printing from the cloud."
+      collapsible
+    >
       <div className="space-y-4">
         {cloudProviders.length > 0 && (
           <div className="space-y-2">
@@ -82,9 +86,9 @@ export default function CloudStorageCard() {
               placeholder="https://cloud.example.com/remote.php/dav/files/user"
               value={webdavForm.url}
               onChange={(e) => setWebdavForm({ ...webdavForm, url: e.target.value })}
-              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 font-mono text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
             />
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <input
                 type="text"
                 placeholder="Username"

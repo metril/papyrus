@@ -37,16 +37,19 @@ export default function BackupRestoreCard() {
   });
 
   return (
-    <Card title="Backup / Restore" collapsible>
+    <Card
+      title="Backup / Restore"
+      description="Export all application settings as JSON, or restore from a previous backup."
+      collapsible
+    >
       <div className="space-y-3">
-        <p className="text-sm text-gray-600 dark:text-gray-400">Export all application settings as JSON, or restore from a previous backup.</p>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button size="sm" variant="secondary" onClick={() => exportMutation.mutate()}>
-            Export Backup
+            Export backup
           </Button>
           <label className="cursor-pointer">
             <Button size="sm" variant="secondary" onClick={() => document.getElementById('restore-file')?.click()}>
-              Restore Backup
+              Restore backup
             </Button>
             <input id="restore-file" type="file" accept=".json" className="hidden" onChange={async (e) => {
               const file = e.target.files?.[0];

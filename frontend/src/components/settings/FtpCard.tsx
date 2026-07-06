@@ -3,20 +3,21 @@ import { SettingField, SaveButton, type SettingsSectionProps } from './shared';
 
 export default function FtpCard({ appSettings, set, save }: SettingsSectionProps) {
   return (
-    <Card title="FTP / SFTP" collapsible>
+    <Card
+      title="FTP / SFTP"
+      description="Upload scans to an FTP or SFTP server. Used as a post-scan delivery target."
+      collapsible
+    >
       <div className="space-y-3">
-        <p className="text-sm text-gray-500 dark:text-gray-400">
-          Upload scans to an FTP or SFTP server. Used as a post-scan delivery target.
-        </p>
-        <div className="grid grid-cols-2 gap-3">
-          <SettingField label="Host" value={appSettings.ftp_host ?? ''} onChange={set('ftp_host')} placeholder="ftp.example.com" />
-          <SettingField label="Port" value={appSettings.ftp_port ?? '21'} onChange={set('ftp_port')} placeholder="21" />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <SettingField label="Host" value={appSettings.ftp_host ?? ''} onChange={set('ftp_host')} placeholder="ftp.example.com" mono />
+          <SettingField label="Port" value={appSettings.ftp_port ?? '21'} onChange={set('ftp_port')} placeholder="21" mono />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <SettingField label="Username" value={appSettings.ftp_username ?? ''} onChange={set('ftp_username')} />
           <SettingField label="Password" value={appSettings.ftp_password ?? ''} onChange={set('ftp_password')} type="password" />
         </div>
-        <SettingField label="Remote Directory" value={appSettings.ftp_remote_dir ?? '/'} onChange={set('ftp_remote_dir')} placeholder="/" />
+        <SettingField label="Remote directory" value={appSettings.ftp_remote_dir ?? '/'} onChange={set('ftp_remote_dir')} placeholder="/" mono />
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Protocol</label>
           <select

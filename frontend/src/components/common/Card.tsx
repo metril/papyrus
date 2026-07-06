@@ -3,6 +3,9 @@ import { ChevronDown } from 'lucide-react';
 
 interface CardProps {
   title?: string;
+  /** Optional one-line summary rendered under the title, inside the header
+   * (above the perforation rule) — part of the shared card anatomy. */
+  description?: string;
   actions?: ReactNode;
   children: ReactNode;
   className?: string;
@@ -10,7 +13,7 @@ interface CardProps {
   defaultOpen?: boolean;
 }
 
-export default function Card({ title, actions, children, className = '', collapsible = false, defaultOpen = false }: CardProps) {
+export default function Card({ title, description, actions, children, className = '', collapsible = false, defaultOpen = false }: CardProps) {
   const [open, setOpen] = useState(defaultOpen || !collapsible);
 
   return (
@@ -35,6 +38,9 @@ export default function Card({ title, actions, children, className = '', collaps
               </div>
             )}
           </div>
+          {description && (
+            <p className="mt-0.5 text-sm text-gray-500 dark:text-gray-400">{description}</p>
+          )}
         </div>
       )}
       {title && open && <hr className="rule-perf mx-6 text-gray-300 dark:text-gray-700" />}

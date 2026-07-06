@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { useSettingsQuery, queryKeys } from '../api/queries';
 import { updateSettings } from '../api/settings';
+import Button from '../components/common/Button';
 import type { AppSettings, SaveControls } from '../components/settings/shared';
 import PrintersCard from '../components/settings/PrintersCard';
 import ScannersCard from '../components/settings/ScannersCard';
@@ -89,19 +90,16 @@ export default function SettingsPage() {
       <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Settings</h2>
 
       {isLoading && (
-        <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 px-4 py-3 rounded">
+        <div className="bg-ink-50 dark:bg-ink-950/40 border border-ink-200 dark:border-ink-800 text-ink-700 dark:text-ink-300 px-4 py-3 rounded-lg text-sm">
           Loading settings...
         </div>
       )}
       {settingsError && (
-        <div className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 px-4 py-3 rounded flex items-center justify-between">
+        <div className="bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 text-red-700 dark:text-red-300 px-4 py-3 rounded-lg text-sm flex items-center justify-between gap-4">
           <span>{settingsError}</span>
-          <button
-            className="ml-4 px-3 py-1 bg-red-100 dark:bg-red-800 hover:bg-red-200 dark:hover:bg-red-700 rounded text-sm"
-            onClick={() => window.location.reload()}
-          >
+          <Button size="sm" variant="secondary" className="shrink-0" onClick={() => window.location.reload()}>
             Retry
-          </button>
+          </Button>
         </div>
       )}
 

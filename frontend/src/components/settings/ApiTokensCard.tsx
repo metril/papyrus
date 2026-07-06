@@ -60,7 +60,11 @@ export default function ApiTokensCard() {
   };
 
   return (
-    <Card title="API Tokens" collapsible>
+    <Card
+      title="API Tokens"
+      description="Bearer tokens for scripted access to the Papyrus API."
+      collapsible
+    >
       <div className="space-y-4">
         <div className="space-y-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
           <input
@@ -107,15 +111,16 @@ export default function ApiTokensCard() {
           </div>
         </div>
         {createdToken && (
-          <div className="bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3">
-            <p className="text-sm text-yellow-800 dark:text-yellow-300 font-medium">
+          <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-lg p-3">
+            <p className="text-sm text-amber-800 dark:text-amber-300 font-medium">
               Token created! Copy it now &mdash; it won&apos;t be shown again:
             </p>
-            <code className="text-xs break-all block mt-1 bg-yellow-100 dark:bg-yellow-900/50 dark:text-yellow-200 p-2 rounded">{createdToken}</code>
+            {/* select-all: one click/tap selects the whole token for copying. */}
+            <code className="font-mono text-xs break-all block mt-1 bg-amber-100 dark:bg-amber-900/40 text-amber-900 dark:text-amber-200 p-2 rounded-lg select-all cursor-text">{createdToken}</code>
           </div>
         )}
         {tokens.length === 0 ? (
-          <p className="text-gray-500 text-sm">No API tokens created.</p>
+          <p className="text-gray-500 dark:text-gray-400 text-sm">No API tokens created.</p>
         ) : (
           <div className="space-y-2">
             {tokens.map((token) => (
@@ -124,10 +129,10 @@ export default function ApiTokensCard() {
                   <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{token.name}</div>
                   <div className="flex flex-wrap gap-1 mt-1">
                     {token.permissions.map((p) => (
-                      <span key={p} className="text-xs px-1.5 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">{p}</span>
+                      <span key={p} className="font-mono text-xs px-1.5 py-0.5 rounded-full font-medium bg-ink-100 text-ink-700 dark:bg-ink-900/40 dark:text-ink-300">{p}</span>
                     ))}
                   </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                  <div className="font-mono text-xs text-gray-500 dark:text-gray-400 mt-1">
                     {token.expires_at ? `Expires: ${new Date(token.expires_at).toLocaleDateString()}` : 'No expiry'}
                     {token.last_used_at && ` · Last used: ${new Date(token.last_used_at).toLocaleDateString()}`}
                   </div>

@@ -29,12 +29,16 @@ export function SettingField({
   onChange,
   type = 'text',
   placeholder,
+  mono = false,
 }: {
   label: string;
   value: string | number | boolean;
   onChange: (v: string) => void;
   type?: string;
   placeholder?: string;
+  /** Renders the input in the mono-for-data face — reserve for technical
+   * values (URLs, hosts, ports, IPs, tokens, key names). */
+  mono?: boolean;
 }) {
   if (type === 'checkbox') {
     return (
@@ -53,7 +57,7 @@ export function SettingField({
         value={String(value)}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+        className={`w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100 ${mono ? 'font-mono' : ''}`}
       />
     </div>
   );

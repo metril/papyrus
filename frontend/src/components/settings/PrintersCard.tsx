@@ -24,7 +24,7 @@ const printerStateLabels: Record<number, string> = { 3: 'Idle', 4: 'Printing', 5
 
 function probeStateBadgeColor(state: number): string {
   if (state === 3) return 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400';
-  if (state === 4) return 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300';
+  if (state === 4) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300';
   if (state === 5) return 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400';
   return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400';
 }
@@ -201,16 +201,16 @@ export default function PrintersCard() {
   };
 
   return (
-    <Card title="Printers">
+    <Card title="Printers" description="Devices Papyrus can print to, including the network hold queue.">
       <div className="space-y-3">
-        {printers.length === 0 && <p className="text-sm text-gray-500">No printers configured yet.</p>}
+        {printers.length === 0 && <p className="text-sm text-gray-500 dark:text-gray-400">No printers configured yet.</p>}
         {printers.map((p) => (
           <div key={p.id} className="p-3 rounded-lg border border-gray-200 dark:border-gray-700 space-y-2">
             {editId === p.id ? (
               <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <SettingField label="Display Name" value={editForm.display_name} onChange={(v) => setEditForm((f) => ({ ...f, display_name: v }))} />
-                  {!p.is_network_queue && <SettingField label="URI" value={editForm.uri} onChange={(v) => setEditForm((f) => ({ ...f, uri: v }))} placeholder="ipp://10.0.0.1/ipp" />}
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <SettingField label="Display name" value={editForm.display_name} onChange={(v) => setEditForm((f) => ({ ...f, display_name: v }))} />
+                  {!p.is_network_queue && <SettingField label="URI" value={editForm.uri} onChange={(v) => setEditForm((f) => ({ ...f, uri: v }))} placeholder="ipp://10.0.0.1/ipp" mono />}
                   <SettingField label="Description" value={editForm.description} onChange={(v) => setEditForm((f) => ({ ...f, description: v }))} />
                   <div className="self-center">
                     <Toggle checked={editForm.auto_release} onChange={(v) => setEditForm((f) => ({ ...f, auto_release: v }))} label="Auto-release" />
@@ -227,13 +227,13 @@ export default function PrintersCard() {
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-gray-900 dark:text-gray-100">{p.display_name}</span>
                     {p.is_default && <span className="text-xs bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400 px-1.5 py-0.5 rounded-full font-medium">Default</span>}
-                    {p.is_network_queue && <span className="text-xs bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300 px-1.5 py-0.5 rounded-full font-medium">Network Queue</span>}
+                    {p.is_network_queue && <span className="text-xs bg-ink-100 text-ink-700 dark:bg-ink-900/40 dark:text-ink-300 px-1.5 py-0.5 rounded-full font-medium">Network queue</span>}
                     {p.auto_release && <span className="text-xs bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400 px-1.5 py-0.5 rounded-full font-medium">Auto-release</span>}
-                    <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${p.cups_status.state === 3 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400' : p.cups_status.state === 4 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300' : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400'}`}>
+                    <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${p.cups_status.state === 3 ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400' : p.cups_status.state === 4 ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400'}`}>
                       {printerStateLabels[p.cups_status.state] || 'Unknown'}
                     </span>
                   </div>
-                  {p.uri && <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{p.uri}</div>}
+                  {p.uri && <div className="font-mono text-xs text-gray-500 dark:text-gray-400 mt-0.5">{p.uri}</div>}
                   {(p.make_and_model || p.location) && (
                     <div className="text-xs text-gray-400 dark:text-gray-500">
                       {p.make_and_model}
@@ -248,10 +248,10 @@ export default function PrintersCard() {
                     <Button size="sm" variant="secondary" onClick={() => handleResume(p.id)}>Resume</Button>
                   )}
                   {!p.is_default && !p.is_network_queue && (
-                    <Button size="sm" variant="ghost" onClick={() => handleDefault(p.id)}>Set Default</Button>
+                    <Button size="sm" variant="ghost" onClick={() => handleDefault(p.id)}>Set default</Button>
                   )}
                   {!p.is_network_queue && (
-                    <Button size="sm" variant="ghost" onClick={() => handleTestPage(p)}>Test Page</Button>
+                    <Button size="sm" variant="ghost" onClick={() => handleTestPage(p)}>Test page</Button>
                   )}
                   {!p.is_network_queue && p.make_and_model === null && (
                     <Button size="sm" variant="ghost" onClick={() => handleRefreshInfo(p.id)}>Refresh info</Button>
@@ -264,7 +264,7 @@ export default function PrintersCard() {
                       <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteId(null)}>No</Button>
                     </>
                   ) : (
-                    <Button size="sm" variant="danger" onClick={() => setConfirmDeleteId(p.id)}>Delete</Button>
+                    <Button size="sm" variant="danger-ghost" onClick={() => setConfirmDeleteId(p.id)}>Delete</Button>
                   )}
                 </div>
               </div>
@@ -273,16 +273,16 @@ export default function PrintersCard() {
         ))}
 
         {showAdd ? (
-          <div className="p-3 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950/30 space-y-3">
+          <div className="p-3 rounded-lg border border-ink-200 dark:border-ink-800 bg-ink-50/60 dark:bg-ink-950/30 space-y-3">
             {/* Mode tabs */}
-            <div className="flex gap-1 text-xs">
+            <div className="flex flex-wrap gap-1 text-xs">
               {(['discover', 'ip', 'manual'] as const).map((m) => (
                 <button
                   key={m}
                   onClick={() => switchAddMode(m)}
-                  className={`px-3 py-1 rounded-full font-medium ${addMode === m ? 'bg-blue-600 text-white' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
+                  className={`px-3 py-1 rounded-full font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-500 ${addMode === m ? 'bg-ink-600 text-white dark:bg-ink-500' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700'}`}
                 >
-                  {m === 'discover' ? 'Discover' : m === 'ip' ? 'IP Address' : 'Manual'}
+                  {m === 'discover' ? 'Discover' : m === 'ip' ? 'IP address' : 'Manual'}
                 </button>
               ))}
             </div>
@@ -290,11 +290,11 @@ export default function PrintersCard() {
             {addMode === 'discover' && (
               selectedDevice ? (
                 <div className="space-y-2">
-                  <div className="grid grid-cols-2 gap-2">
-                    <SettingField label="Display Name" value={form.display_name} onChange={(v) => setForm((f) => ({ ...f, display_name: v }))} placeholder="Brother DCP-L2540DW" />
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <SettingField label="Display name" value={form.display_name} onChange={(v) => setForm((f) => ({ ...f, display_name: v }))} placeholder="Brother DCP-L2540DW" />
                     <SettingField label="Description" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
                   </div>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">URI: <span className="font-mono">{form.uri}</span></p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">URI: <span className="font-mono break-all">{form.uri}</span></p>
                   <Button size="sm" variant="ghost" onClick={() => setSelectedDevice(null)}>Choose a different device</Button>
                 </div>
               ) : (
@@ -304,28 +304,38 @@ export default function PrintersCard() {
 
             {addMode === 'ip' && (
               <div className="space-y-2">
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP Address</label>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP address</label>
                     <div className="flex gap-1">
                       <input
                         type="text"
                         value={ipAddress}
                         onChange={(e) => { setIpAddress(e.target.value); setProbeStatus('idle'); setProbeResult(null); }}
                         placeholder="192.168.1.100"
-                        className="flex-1 rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+                        className="flex-1 min-w-0 rounded-lg border border-gray-300 dark:border-gray-600 font-mono text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
                       />
                       <Button size="sm" onClick={handleProbe} disabled={!ipAddress || probeStatus === 'probing'}>
                         {probeStatus === 'probing' ? '…' : 'Test'}
                       </Button>
                     </div>
-                    {probeStatus === 'reachable' && <p className="text-xs text-green-600 dark:text-green-400 mt-0.5">Printer reachable</p>}
-                    {probeStatus === 'unreachable' && <p className="text-xs text-red-600 dark:text-red-400 mt-0.5">Not reachable — check IP and network</p>}
+                    {probeStatus === 'reachable' && (
+                      <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+                        <span aria-hidden="true" className="led text-green-500 dark:text-green-400" />
+                        Printer reachable
+                      </p>
+                    )}
+                    {probeStatus === 'unreachable' && (
+                      <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400">
+                        <span aria-hidden="true" className="led text-red-500 dark:text-red-400" />
+                        Not reachable — check IP and network
+                      </p>
+                    )}
                   </div>
-                  <SettingField label="Printer Name" value={form.display_name} onChange={(v) => setForm((f) => ({ ...f, display_name: v }))} placeholder="Brother DCP-L2540DW" />
+                  <SettingField label="Printer name" value={form.display_name} onChange={(v) => setForm((f) => ({ ...f, display_name: v }))} placeholder="Brother DCP-L2540DW" />
                 </div>
                 {probeResult && probeResult.reachable && (probeResult.make_model || probeResult.location || probeResult.state !== null) && (
-                  <div className="text-xs rounded-lg border border-gray-200 dark:border-gray-700 p-2 space-y-1">
+                  <div className="text-xs rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-2 space-y-1">
                     {probeResult.make_model && <div className="font-medium text-gray-900 dark:text-gray-100">{probeResult.make_model}</div>}
                     {probeResult.location && <div className="text-gray-500 dark:text-gray-400">{probeResult.location}</div>}
                     {probeResult.state !== null && (
@@ -336,30 +346,30 @@ export default function PrintersCard() {
                   </div>
                 )}
                 {ipUri && (
-                  <p className="text-xs text-gray-500 dark:text-gray-400">URI: <span className="font-mono">{probeResult?.uri || ipUri}</span></p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">URI: <span className="font-mono break-all">{probeResult?.uri || ipUri}</span></p>
                 )}
               </div>
             )}
 
             {addMode === 'manual' && (
-              <div className="grid grid-cols-2 gap-2">
-                <SettingField label="Display Name" value={form.display_name} onChange={(v) => setForm((f) => ({ ...f, display_name: v }))} placeholder="Brother DCP-L2540DW" />
-                <SettingField label="URI" value={form.uri} onChange={(v) => setForm((f) => ({ ...f, uri: v }))} placeholder="ipp://10.0.0.1/ipp" />
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <SettingField label="Display name" value={form.display_name} onChange={(v) => setForm((f) => ({ ...f, display_name: v }))} placeholder="Brother DCP-L2540DW" />
+                <SettingField label="URI" value={form.uri} onChange={(v) => setForm((f) => ({ ...f, uri: v }))} placeholder="ipp://10.0.0.1/ipp" mono />
                 <SettingField label="Description" value={form.description} onChange={(v) => setForm((f) => ({ ...f, description: v }))} />
               </div>
             )}
 
-            <div className="flex gap-4">
+            <div className="flex flex-wrap gap-4">
               <Toggle checked={form.is_network_queue} onChange={(v) => setForm((f) => ({ ...f, is_network_queue: v }))} label="Network queue only" />
               <Toggle checked={form.auto_release} onChange={(v) => setForm((f) => ({ ...f, auto_release: v }))} label="Auto-release jobs" />
             </div>
             <div className="flex gap-2">
-              <Button size="sm" onClick={handleAdd} disabled={!canAddPrinter}>Add Printer</Button>
+              <Button size="sm" onClick={handleAdd} disabled={!canAddPrinter}>Add printer</Button>
               <Button size="sm" variant="ghost" onClick={resetAdd}>Cancel</Button>
             </div>
           </div>
         ) : (
-          <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>+ Add Printer</Button>
+          <Button size="sm" variant="secondary" onClick={() => setShowAdd(true)}>+ Add printer</Button>
         )}
       </div>
     </Card>
