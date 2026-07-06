@@ -43,7 +43,7 @@ export default function DashboardPage() {
     return (
       <div className="space-y-6">
         <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Dashboard</h2>
-        <ErrorState title="Failed to load stats" detail="Admin access required." onRetry={() => refetch()} />
+        <ErrorState title="Failed to load stats" detail="You may need admin access, or the server may be unavailable." onRetry={() => refetch()} />
       </div>
     );
   }
