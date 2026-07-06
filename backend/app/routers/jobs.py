@@ -150,6 +150,9 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
         if needs_conversion(job.mime_type):
             job.status = "converting"
             await db.commit()
+            # The UPDATE flush expires the server-generated updated_at; reload
+            # before the synchronous serialization or it lazy-loads and crashes.
+            await db.refresh(job)
             await ws_manager.broadcast("jobs", {
                 "type": "job_updated", "data": serialize_print_job(job)
             })
@@ -158,6 +161,7 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
 
         job.status = "printing"
         await db.commit()
+        await db.refresh(job)
         await ws_manager.broadcast("jobs", {
             "type": "job_updated", "data": serialize_print_job(job)
         })
@@ -175,6 +179,7 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
         job.status = "completed"
         job.completed_at = datetime.now(timezone.utc)
         await db.commit()
+        await db.refresh(job)
         await ws_manager.broadcast("jobs", {
             "type": "job_updated", "data": serialize_print_job(job)
         })
@@ -183,6 +188,7 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
         job.status = "failed"
         job.error_message = str(e)
         await db.commit()
+        await db.refresh(job)
         await ws_manager.broadcast("jobs", {
             "type": "job_updated", "data": serialize_print_job(job)
         })
@@ -438,6 +444,9 @@ async def release_job(
         if needs_conversion(job.mime_type):
             job.status = "converting"
             await db.commit()
+            # The UPDATE flush expires the server-generated updated_at; reload
+            # before the synchronous serialization or it lazy-loads and crashes.
+            await db.refresh(job)
             await ws_manager.broadcast("jobs", {
                 "type": "job_updated", "data": serialize_print_job(job)
             })

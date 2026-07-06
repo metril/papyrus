@@ -14,8 +14,6 @@ real AppConfig rows (committed via the ``db`` fixture, with
 """
 import io
 
-import pytest
-
 from app.models import AppConfig, Printer
 from app.routers import jobs as jobs_router
 from app.services import settings_cache
@@ -218,26 +216,10 @@ async def test_ingest_network_job_from_localhost_is_held(db, client, tmp_path):
     assert body["source_type"] == "network"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "app bug (not a test bug): _process_job (app/routers/jobs.py) commits "
-        "job.status = 'printing' and immediately broadcasts serialize_print_job(job) "
-        "with no intervening `await db.refresh(job)`. PrintJob.updated_at has "
-        "onupdate=func.now() (a server-side default), so after that UPDATE "
-        "SQLAlchemy marks `updated_at` expired; the Pydantic serialization in "
-        "serialize_print_job reads it synchronously and raises "
-        "sqlalchemy.exc.MissingGreenlet, well before create_held_job/release_job "
-        "are ever called. The blanket `except Exception` then marks the job "
-        "'failed' and retries the identical broadcast, which crashes the same "
-        "way -- uncaught this time, so the endpoint 500s instead of completing. "
-        "release_job() avoids this because it calls db.refresh(job) right after "
-        "its own commit, before broadcasting; _process_job does not. Affects both "
-        "callers of _process_job: hold=false uploads and auto_release network "
-        "ingestion. Remove this marker once app code adds the missing refresh "
-        "(or enables eager_defaults) -- see p5-task-4-report.md."
-    ),
-)
+# Regression test: _process_job used to broadcast serialize_print_job(job)
+# right after commit without db.refresh(job); the server-side updated_at was
+# expired by the UPDATE flush and the synchronous serialization raised
+# MissingGreenlet, 500ing every hold=false upload and auto_release ingest.
 async def test_ingest_network_job_with_auto_release_printer_completes(
     db, client, tmp_path, monkeypatch
 ):
