@@ -12,12 +12,35 @@ interface PrinterStatusData {
   accepting_jobs: boolean;
   markers: Marker[];
   state_reasons: string[];
+  // Forward-compatible: `/printer/status` (schemas.PrinterStatus) does not
+  // send these today, so they are currently always absent. Rendered only
+  // when present rather than fetched via a new query/field.
+  display_name?: string;
+  queue_count?: number;
+  media?: string;
 }
 
 const stateLabels: Record<number, string> = {
   3: 'Idle',
   4: 'Printing',
   5: 'Stopped',
+};
+
+type StateFamily = 'success' | 'active' | 'error';
+
+const stateFamily: Record<number, StateFamily> = {
+  3: 'success', // idle
+  4: 'active', // printing
+  5: 'error', // stopped
+};
+
+// Same dot-color language as StatusBadge's family map (success/active/error);
+// duplicated here because this component keys off CUPS's numeric `state`
+// (3/4/5), not the string status vocabulary StatusBadge maps.
+const dotClasses: Record<StateFamily, string> = {
+  success: 'text-green-500 dark:text-green-400',
+  active: 'text-ink-500 dark:text-ink-400',
+  error: 'text-red-500 dark:text-red-400',
 };
 
 function markerColor(color: string): string {
@@ -43,40 +66,53 @@ export default function PrinterStatus() {
 
   if (!status) return null;
 
-  const stateColor = status.state === 3 ? 'text-green-600 dark:text-green-400'
-    : status.state === 4 ? 'text-blue-600 dark:text-blue-400'
-    : 'text-red-600 dark:text-red-400';
-
+  const family = stateFamily[status.state] ?? 'error';
+  const label = stateLabels[status.state] || 'Unknown';
   const hasIssues = status.state_reasons.some((r) => r !== 'none');
 
   return (
-    <div className="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700 p-4 space-y-3">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${status.state === 3 ? 'bg-green-500' : status.state === 4 ? 'bg-blue-500 animate-pulse' : 'bg-red-500'}`} />
-          <span className={`text-sm font-medium ${stateColor}`}>
-            {stateLabels[status.state] || 'Unknown'}
-          </span>
-          {status.state_message && (
-            <span className="text-xs text-gray-500 dark:text-gray-400">
-              &mdash; {status.state_message}
-            </span>
-          )}
-        </div>
+    <div className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+          {status.display_name || 'Printer'}
+        </h3>
         {!status.accepting_jobs && (
-          <span className="text-xs text-red-500 font-medium">Not accepting jobs</span>
+          <span className="text-xs font-medium text-red-500 dark:text-red-400">Not accepting jobs</span>
         )}
       </div>
 
-      {/* Marker/toner levels */}
+      {/* Front-panel readouts: LED + mono value, like the machine's own display */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+        <div className="flex items-center gap-2">
+          <span aria-hidden="true" className={`led ${dotClasses[family]} ${family === 'active' ? 'led-pulse' : ''}`} />
+          <span className="font-mono text-sm text-gray-700 dark:text-gray-300">{label}</span>
+          {status.state_message && (
+            <span className="text-xs text-gray-500 dark:text-gray-400">&mdash; {status.state_message}</span>
+          )}
+        </div>
+        {typeof status.queue_count === 'number' && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-500 dark:text-gray-400">Queue</span>
+            <span className="font-mono text-sm text-gray-700 dark:text-gray-300">{status.queue_count}</span>
+          </div>
+        )}
+        {status.media && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-gray-500 dark:text-gray-400">Media</span>
+            <span className="font-mono text-sm text-gray-700 dark:text-gray-300">{status.media}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Marker/toner levels: thin ink meter bars with mono percentages */}
       {status.markers.length > 0 && (
         <div className="space-y-1.5">
           {status.markers.map((m, i) => (
             <div key={i} className="flex items-center gap-2">
-              <span className="text-xs text-gray-600 dark:text-gray-400 w-20 truncate" title={m.name}>
+              <span className="w-20 shrink-0 truncate text-xs text-gray-600 dark:text-gray-400" title={m.name}>
                 {m.name}
               </span>
-              <div className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
                 <div
                   className="h-full rounded-full transition-all"
                   style={{
@@ -85,8 +121,8 @@ export default function PrinterStatus() {
                   }}
                 />
               </div>
-              <span className="text-xs text-gray-500 dark:text-gray-400 w-8 text-right">
-                {m.level >= 0 ? `${m.level}%` : '?'}
+              <span className="w-10 shrink-0 text-right font-mono text-xs text-gray-500 dark:text-gray-400">
+                {m.level >= 0 ? `${m.level}%` : '—'}
               </span>
             </div>
           ))}
@@ -95,7 +131,7 @@ export default function PrinterStatus() {
 
       {/* State reasons / warnings */}
       {hasIssues && (
-        <div className="text-xs text-yellow-600 dark:text-yellow-400">
+        <div className="text-xs text-amber-600 dark:text-amber-400">
           {status.state_reasons.filter((r) => r !== 'none').join(', ')}
         </div>
       )}

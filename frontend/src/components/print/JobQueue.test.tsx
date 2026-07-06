@@ -42,13 +42,15 @@ describe('JobQueue', () => {
       http.get('/api/printers', () => HttpResponse.json([])),
     );
 
-    render(<JobQueue />, { wrapper: makeWrapper() });
+    const { container } = render(<JobQueue />, { wrapper: makeWrapper() });
 
-    expect(screen.getByText('Loading jobs...')).toBeInTheDocument();
+    // Loading state is now a row-shaped Skeleton (no text) rather than a
+    // "Loading jobs..." string; assert on its shimmer marker instead.
+    expect(container.querySelector('.skeleton-shimmer')).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByText('doc.pdf')).toBeInTheDocument());
     expect(screen.getByText('Held')).toBeInTheDocument();
-    expect(screen.queryByText('Loading jobs...')).not.toBeInTheDocument();
+    expect(container.querySelector('.skeleton-shimmer')).not.toBeInTheDocument();
   });
 
   it('release upserts the mutation response into the row without a second list GET', async () => {

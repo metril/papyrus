@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDropzone, type FileRejection } from 'react-dropzone';
+import { Upload } from 'lucide-react';
 import Button from '../common/Button';
 import Toggle from '../common/Toggle';
 import { uploadPrintJob } from '../../api/printer';
@@ -90,16 +91,23 @@ export default function UploadForm() {
     <div className="space-y-4">
       <div
         {...getRootProps()}
-        className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-colors
-          ${isDragActive ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/50' : 'border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500'}`}
+        className={`rounded-xl border-2 border-dashed p-8 text-center cursor-pointer transition-colors
+          ${isDragActive
+            ? 'border-ink-500 bg-ink-50 dark:bg-ink-950/50'
+            : 'border-gray-300 hover:border-gray-400 dark:border-gray-700 dark:hover:border-gray-500'}`}
       >
         <input {...getInputProps()} />
+        <Upload
+          className={`mx-auto mb-3 h-8 w-8 ${isDragActive ? 'text-ink-500 dark:text-ink-400' : 'text-gray-400 dark:text-gray-500'}`}
+          strokeWidth={1.75}
+          aria-hidden="true"
+        />
         {isDragActive ? (
-          <p className="text-blue-600 dark:text-blue-400 font-medium">Drop files here...</p>
+          <p className="font-medium text-ink-600 dark:text-ink-400">Drop files here...</p>
         ) : (
           <div>
             <p className="text-gray-600 dark:text-gray-400">Drag & drop files here, or click to browse</p>
-            <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">PDF, images, DOC(X), ODT, XLS(X), ODS, PPT(X), ODP</p>
+            <p className="mt-1 font-mono text-xs text-gray-400 dark:text-gray-500">PDF, images, DOC(X), ODT, XLS(X), ODS, PPT(X), ODP</p>
           </div>
         )}
       </div>
@@ -114,7 +122,9 @@ export default function UploadForm() {
           <ul className="text-sm space-y-1">
             {files.map((f) => (
               <li key={f.name} className="flex items-center justify-between text-gray-700 dark:text-gray-300">
-                <span className="truncate">{f.name} ({(f.size / 1024).toFixed(1)} KB)</span>
+                <span className="truncate">
+                  {f.name} <span className="font-mono text-gray-500 dark:text-gray-400">({(f.size / 1024).toFixed(1)} KB)</span>
+                </span>
                 <button
                   type="button"
                   onClick={() => removeFile(f.name)}

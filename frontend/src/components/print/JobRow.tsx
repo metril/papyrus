@@ -23,7 +23,7 @@ const sourceLabels: Record<string, string> = {
 };
 
 const sourceColors: Record<string, string> = {
-  network: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
+  network: 'bg-ink-100 text-ink-700 dark:bg-ink-900/40 dark:text-ink-300',
   email: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400',
   cloud: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-400',
   smb: 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400',
@@ -103,12 +103,12 @@ export function JobRowComponent({
   onAssign,
 }: JobRowProps) {
   return (
-    <div className="flex items-center justify-between p-4 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
+    <div className="flex flex-col gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => onPreview(job)}
-            className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline truncate text-left"
+            className="truncate text-left text-sm font-medium text-ink-600 hover:underline dark:text-ink-400"
           >
             {job.filename}
           </button>
@@ -124,7 +124,7 @@ export function JobRowComponent({
             </span>
           )}
         </div>
-        <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+        <div className="mt-1 font-mono text-xs text-gray-500 dark:text-gray-400">
           {formatSize(job.file_size)} &middot; {job.copies} cop{job.copies > 1 ? 'ies' : 'y'}
           {job.duplex && ' · Duplex'}
           {' · '}{job.media}
@@ -136,18 +136,18 @@ export function JobRowComponent({
           </div>
         )}
         {job.error_message && (
-          <p className="text-xs text-red-600 mt-1">{job.error_message}</p>
+          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{job.error_message}</p>
         )}
       </div>
 
-      <div className="flex gap-2 ml-4">
+      <div className="flex flex-wrap gap-2 sm:ml-4 sm:shrink-0">
         {job.status === 'held' && (
           <Button size="sm" onClick={() => onRelease(job)} disabled={busy}>
             {busy ? 'Releasing...' : 'Print'}
           </Button>
         )}
         {['held', 'printing'].includes(job.status) && (
-          <Button size="sm" variant="secondary" onClick={() => onCancel(job.id)} disabled={busy}>
+          <Button size="sm" variant="ghost" onClick={() => onCancel(job.id)} disabled={busy}>
             Cancel
           </Button>
         )}

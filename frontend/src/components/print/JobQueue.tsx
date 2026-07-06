@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Printer } from 'lucide-react';
 import { useJobs, usePrinters, queryKeys } from '../../api/queries';
 import { releaseJob, cancelJob, deleteJob, reprintJob } from '../../api/printer';
 import { assignJobPrinter } from '../../api/printers';
@@ -7,6 +8,9 @@ import { applyJobEvent } from '../../hooks/useRealtimeBridge';
 import { getJobDownloadUrl, getJobPreviewUrl } from '../../api/scanner';
 import Button from '../common/Button';
 import FilePreviewModal from '../common/FilePreviewModal';
+import Skeleton from '../common/Skeleton';
+import EmptyState from '../common/EmptyState';
+import ErrorState from '../common/ErrorState';
 import JobRow from './JobRow';
 import { useToast } from '../../hooks/useToast';
 import type { PrintJob } from '../../types';
@@ -158,12 +162,22 @@ export default function JobQueue() {
     [assignMutate],
   );
 
-  if (jobsQuery.isLoading && jobs.length === 0) {
-    return <p className="text-gray-500 text-sm">Loading jobs...</p>;
+  if (jobsQuery.isPending) {
+    return <Skeleton variant="row" count={3} />;
+  }
+
+  if (jobsQuery.isError) {
+    return <ErrorState onRetry={() => jobsQuery.refetch()} />;
   }
 
   if (jobs.length === 0) {
-    return <p className="text-gray-500 text-sm">No print jobs yet. Upload a file to get started.</p>;
+    return (
+      <EmptyState
+        icon={Printer}
+        title="No jobs in the queue"
+        hint="Upload a document or print to the Papyrus queue from any device"
+      />
+    );
   }
 
   return (
@@ -199,7 +213,7 @@ export default function JobQueue() {
     {/* PIN entry dialog */}
     {pinJobId !== null && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setPinJobId(null)} role="dialog" aria-label="Enter release PIN">
-        <div className="bg-white dark:bg-gray-900 rounded-xl p-6 w-full max-w-xs shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="w-full max-w-xs rounded-xl border border-gray-200 bg-white p-6 shadow-md shadow-gray-200/50 dark:border-gray-800 dark:bg-gray-900 dark:shadow-none" onClick={(e) => e.stopPropagation()}>
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Enter Release PIN</h3>
           <input
             ref={pinInputRef}
@@ -213,9 +227,9 @@ export default function JobQueue() {
             placeholder="PIN"
             autoFocus
             aria-label="Release PIN"
-            className="w-full rounded-lg border border-gray-300 dark:border-gray-600 p-2 text-center text-2xl tracking-widest bg-white dark:bg-gray-800 dark:text-gray-100"
+            className="w-full rounded-lg border border-gray-300 dark:border-gray-600 p-2 text-center text-2xl tracking-widest bg-white dark:bg-gray-800 dark:text-gray-100 font-mono"
           />
-          {pinError && <p className="text-sm text-red-600 mt-2">{pinError}</p>}
+          {pinError && <p className="text-sm text-red-600 dark:text-red-400 mt-2">{pinError}</p>}
           <div className="flex gap-2 justify-end mt-4">
             <Button size="sm" variant="secondary" onClick={() => setPinJobId(null)}>Cancel</Button>
             <Button size="sm" onClick={handlePinSubmit} disabled={pinSubmitting || !pinValue}>
