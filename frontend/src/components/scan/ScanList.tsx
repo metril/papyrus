@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { ScanLine } from 'lucide-react';
 import { useScans, queryKeys } from '../../api/queries';
 import { applyScanEvent } from '../../hooks/useRealtimeBridge';
 import {
@@ -14,6 +15,9 @@ import {
 import Button from '../common/Button';
 import Toggle from '../common/Toggle';
 import FilePreviewModal from '../common/FilePreviewModal';
+import Skeleton from '../common/Skeleton';
+import EmptyState from '../common/EmptyState';
+import ErrorState from '../common/ErrorState';
 import EmailScanDialog from './EmailScanDialog';
 import CloudSaveDialog from './CloudSaveDialog';
 import ScanRow from './ScanRow';
@@ -149,12 +153,28 @@ export default function ScanList() {
   // nothing. Closing the actions dropdown after firing is composed inside
   // ScanRow itself (`runAndCloseMenu`), not baked in here.
 
-  if (scansQuery.isLoading && scans.length === 0) {
-    return <p className="text-gray-500 text-sm">Loading scans...</p>;
+  if (scansQuery.isPending) {
+    return (
+      <div className="flex flex-wrap gap-3">
+        {Array.from({ length: 6 }, (_, i) => (
+          <Skeleton key={i} variant="thumbnail" />
+        ))}
+      </div>
+    );
+  }
+
+  if (scansQuery.isError) {
+    return <ErrorState onRetry={() => scansQuery.refetch()} />;
   }
 
   if (scans.length === 0) {
-    return <p className="text-gray-500 text-sm">No scans yet.</p>;
+    return (
+      <EmptyState
+        icon={ScanLine}
+        title="No scans yet"
+        hint="Start a scan and it will appear here"
+      />
+    );
   }
 
   const completedScans = scans.filter((s) => s.status === 'completed');
@@ -165,7 +185,7 @@ export default function ScanList() {
     <>
     {/* Merge toolbar */}
     {completedScans.length >= 1 && (
-      <div className="flex items-center gap-3 mb-3">
+      <div className="flex flex-wrap items-center gap-3 mb-3">
         <span className="text-sm text-gray-600 dark:text-gray-400">
           {mergeSelection.size > 0
             ? `${mergeSelection.size} selected`
@@ -224,7 +244,7 @@ export default function ScanList() {
     )}
     {enhanceScanId && (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={closeEnhanceDialog} role="dialog" aria-label="Enhance scan">
-        <div className="bg-white dark:bg-gray-900 rounded-xl p-6 w-full max-w-sm shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-6 shadow-md shadow-gray-200/50 dark:border-gray-800 dark:bg-gray-900 dark:shadow-none" onClick={(e) => e.stopPropagation()}>
           <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-4">Enhance Scan</h3>
           <div className="space-y-4">
             <div>
@@ -245,11 +265,11 @@ export default function ScanList() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Rotation</label>
-              <div className="flex gap-2" role="group" aria-label="Rotation angle">
+              <div className="flex flex-wrap gap-2" role="group" aria-label="Rotation angle">
                 {[0, 90, 180, 270].map((deg) => (
                   <button key={deg} onClick={() => setEnhanceForm({ ...enhanceForm, rotation: deg })}
                     aria-pressed={enhanceForm.rotation === deg}
-                    className={`px-3 py-1 text-sm rounded border ${enhanceForm.rotation === deg ? 'bg-blue-50 border-blue-300 text-blue-700 dark:bg-blue-950 dark:border-blue-700 dark:text-blue-300' : 'border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400'}`}
+                    className={`px-3 py-1 text-sm rounded border ${enhanceForm.rotation === deg ? 'bg-ink-50 border-ink-300 text-ink-700 dark:bg-ink-950 dark:border-ink-700 dark:text-ink-300' : 'border-gray-300 text-gray-500 dark:border-gray-600 dark:text-gray-400'}`}
                   >{deg}&deg;</button>
                 ))}
               </div>

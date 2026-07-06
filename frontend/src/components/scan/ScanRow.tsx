@@ -1,5 +1,18 @@
 import { memo, useState } from 'react';
 import type { RefObject } from 'react';
+import {
+  ChevronDown,
+  Cloud,
+  Download,
+  Eye,
+  FileOutput,
+  FileSearch,
+  FolderUp,
+  ImageOff,
+  Mail,
+  Trash2,
+  Wand2,
+} from 'lucide-react';
 import { getScanDownloadUrl, getScanThumbnailUrl } from '../../api/scanner';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
@@ -16,23 +29,28 @@ interface ScanThumbnailProps {
   scanId: string;
 }
 
+// Paper-framed thumbnail: a bordered, lightly-shadowed mount around the
+// preview image (or a muted fallback glyph if the image 404s/errors), never
+// a bare <img> with its own border.
 function ScanThumbnailComponent({ scanId }: ScanThumbnailProps) {
   const [failed, setFailed] = useState(false);
 
-  if (failed) {
-    return (
-      <div className="w-12 h-12 rounded border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 mr-3 shrink-0" />
-    );
-  }
-
   return (
-    <img
-      src={getScanThumbnailUrl(scanId)}
-      alt=""
-      loading="lazy"
-      onError={() => setFailed(true)}
-      className="w-12 h-12 object-cover rounded border border-gray-200 dark:border-gray-700 mr-3 shrink-0 bg-gray-100 dark:bg-gray-800"
-    />
+    <div className="h-12 w-12 shrink-0 overflow-hidden rounded border border-gray-200 bg-gray-50 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+      {failed ? (
+        <div className="flex h-full w-full items-center justify-center">
+          <ImageOff className="h-4 w-4 text-gray-300 dark:text-gray-600" strokeWidth={1.75} aria-hidden="true" />
+        </div>
+      ) : (
+        <img
+          src={getScanThumbnailUrl(scanId)}
+          alt=""
+          loading="lazy"
+          onError={() => setFailed(true)}
+          className="h-full w-full object-cover"
+        />
+      )}
+    </div>
   );
 }
 
@@ -97,46 +115,52 @@ export function ScanRowComponent({
 
   return (
     <div
-      className={`flex items-center justify-between p-4 bg-white dark:bg-gray-900 rounded-lg border ${merging ? 'border-blue-400 dark:border-blue-500 ring-1 ring-blue-200 dark:ring-blue-800' : 'border-gray-200 dark:border-gray-700'}`}
+      className={`flex flex-col gap-3 rounded-lg border bg-white p-4 dark:bg-gray-900 sm:flex-row sm:items-center sm:justify-between ${merging ? 'border-ink-400 ring-1 ring-ink-200 dark:border-ink-500 dark:ring-ink-800' : 'border-gray-200 dark:border-gray-700'}`}
     >
-      {/* Merge checkbox */}
-      {scan.status === 'completed' && mergeColumnVisible && (
-        <input
-          type="checkbox"
-          checked={merging}
-          onChange={() => onToggleMergeSelect(scan.scan_id)}
-          className="mr-3 rounded border-gray-300 dark:border-gray-600"
-        />
-      )}
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        {/* Merge checkbox */}
+        {scan.status === 'completed' && mergeColumnVisible && (
+          <input
+            type="checkbox"
+            checked={merging}
+            onChange={() => onToggleMergeSelect(scan.scan_id)}
+            className="shrink-0"
+          />
+        )}
 
-      {scan.status === 'completed' && <ScanThumbnail scanId={scan.scan_id} />}
+        {scan.status === 'completed' && <ScanThumbnail scanId={scan.scan_id} />}
 
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => scan.status === 'completed' && onPreview(scan)}
-            className={`text-sm font-medium truncate text-left ${scan.status === 'completed' ? 'text-blue-600 dark:text-blue-400 hover:underline cursor-pointer' : 'text-gray-900 dark:text-gray-100'}`}
-          >
-            {scan.format.toUpperCase()} &middot; {scan.resolution} DPI &middot; {scan.mode}
-          </button>
-          <StatusBadge status={scan.status} />
-        </div>
-        <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-          {scan.source}
-          {scan.page_count > 1 && ` · ${scan.page_count} pages`}
-          {scan.file_size && ` · ${formatSize(scan.file_size)}`}
-          {' · '}{new Date(scan.created_at).toLocaleString()}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => scan.status === 'completed' && onPreview(scan)}
+              className={`truncate text-left text-sm font-medium ${scan.status === 'completed' ? 'text-ink-600 hover:underline cursor-pointer dark:text-ink-400' : 'text-gray-900 dark:text-gray-100'}`}
+            >
+              {scan.format.toUpperCase()} &middot; {scan.resolution} DPI &middot; {scan.mode}
+            </button>
+            <StatusBadge status={scan.status} />
+          </div>
+          <div className="mt-1 font-mono text-xs text-gray-500 dark:text-gray-400">
+            {scan.source}
+            {scan.page_count > 1 && ` · ${scan.page_count} pages`}
+            {scan.file_size && ` · ${formatSize(scan.file_size)}`}
+            {' · '}{new Date(scan.created_at).toLocaleString()}
+          </div>
         </div>
       </div>
 
-      <div className="flex gap-2 ml-4 items-center">
+      <div className="flex flex-wrap items-center gap-2 sm:ml-4 sm:shrink-0">
         {scan.status === 'completed' && (
           <>
             <Button size="sm" variant="secondary" onClick={() => onPreview(scan)}>
+              <Eye className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
               View
             </Button>
             <a href={getScanDownloadUrl(scan.scan_id)} download>
-              <Button size="sm" variant="secondary">Download</Button>
+              <Button size="sm" variant="secondary">
+                <Download className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+                Download
+              </Button>
             </a>
             {/* Actions dropdown */}
             <div className="relative" ref={menuOpen ? menuRef : undefined}>
@@ -145,48 +169,59 @@ export function ScanRowComponent({
                 variant="secondary"
                 onClick={() => onToggleMenu(scan.scan_id)}
               >
-                Actions &#9662;
+                Actions
+                <ChevronDown
+                  className={`h-3.5 w-3.5 transition-transform duration-200 ${menuOpen ? 'rotate-180' : ''}`}
+                  strokeWidth={1.75}
+                  aria-hidden="true"
+                />
               </Button>
               {menuOpen && (
-                <div className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-20 py-1">
+                <div className="absolute right-0 top-full z-20 mt-1 w-52 rounded-lg border border-gray-200 bg-white py-1 shadow-md shadow-gray-200/50 dark:border-gray-700 dark:bg-gray-800 dark:shadow-none">
                   <button
-                    className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
                     onClick={() => runAndCloseMenu(onEmail)}
                   >
+                    <Mail className="h-4 w-4 text-gray-400" strokeWidth={1.75} aria-hidden="true" />
                     Email
                   </button>
                   <button
-                    className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
                     onClick={() => runAndCloseMenu(onCloudSave)}
                   >
+                    <Cloud className="h-4 w-4 text-gray-400" strokeWidth={1.75} aria-hidden="true" />
                     Save to Cloud
                   </button>
                   <button
-                    className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
                     onClick={() => runAndCloseMenu(onPaperless)}
                   >
+                    <FolderUp className="h-4 w-4 text-gray-400" strokeWidth={1.75} aria-hidden="true" />
                     Send to Paperless
                   </button>
                   {scan.format === 'pdf' && (
                     <button
-                      className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
                       onClick={() => runAndCloseMenu(onOcr)}
                     >
+                      <FileSearch className="h-4 w-4 text-gray-400" strokeWidth={1.75} aria-hidden="true" />
                       OCR
                     </button>
                   )}
                   {scan.format !== 'pdf' && (
                     <>
                       <button
-                        className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
                         onClick={() => runAndCloseMenu(onEnhance)}
                       >
+                        <Wand2 className="h-4 w-4 text-gray-400" strokeWidth={1.75} aria-hidden="true" />
                         Enhance
                       </button>
                       <button
-                        className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700"
                         onClick={() => runAndCloseMenu(onConvert)}
                       >
+                        <FileOutput className="h-4 w-4 text-gray-400" strokeWidth={1.75} aria-hidden="true" />
                         Convert to PDF
                       </button>
                     </>
@@ -197,6 +232,7 @@ export function ScanRowComponent({
           </>
         )}
         <Button size="sm" variant="danger" onClick={() => onDelete(scan.scan_id)}>
+          <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
           Delete
         </Button>
       </div>

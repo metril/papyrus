@@ -128,8 +128,8 @@ export default function ScanForm() {
   return (
     <div className="space-y-4">
       {/* Profile selector */}
-      <div className="flex items-end gap-2">
-        <div className="flex-1">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="min-w-[10rem] flex-1">
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Profile</label>
           <select
             value={selectedProfileId}
@@ -148,7 +148,7 @@ export default function ScanForm() {
             Save as Profile
           </Button>
         ) : (
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             <input
               type="text"
               value={profileName}
@@ -170,6 +170,8 @@ export default function ScanForm() {
           </Button>
         )}
       </div>
+
+      <hr className="rule-perf text-gray-300 dark:text-gray-700" />
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div>
@@ -226,16 +228,24 @@ export default function ScanForm() {
         </div>
       </div>
 
-      {scanning && <ProgressBar progress={progress} label="Scanning..." />}
+      {scanning && (
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-gray-600 dark:text-gray-400">Scanning...</span>
+            <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{Math.round(progress)}%</span>
+          </div>
+          <ProgressBar progress={progress} />
+        </div>
+      )}
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       {result && result.status === 'completed' && (
         <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg p-4">
           <p className="text-green-800 dark:text-green-400 text-sm font-medium">Scan completed!</p>
           <a
             href={getScanDownloadUrl(result.scan_id)}
-            className="text-blue-600 dark:text-blue-400 hover:underline text-sm"
+            className="text-ink-600 dark:text-ink-400 hover:underline text-sm"
             download
           >
             Download scan
@@ -243,9 +253,9 @@ export default function ScanForm() {
         </div>
       )}
 
-      <div className="flex gap-3">
+      <div className="flex flex-wrap gap-3">
         <Button onClick={() => handleScan(false)} disabled={scanning} className="flex-1">
-          {scanning ? 'Scanning...' : 'Scan'}
+          {scanning ? 'Scanning...' : 'Start scan'}
         </Button>
         <Button
           onClick={() => handleScan(true)}
@@ -253,7 +263,7 @@ export default function ScanForm() {
           variant="secondary"
           className="flex-1"
         >
-          {scanning ? 'Scanning...' : 'Batch Scan (ADF)'}
+          {scanning ? 'Scanning...' : 'Batch scan (ADF)'}
         </Button>
       </div>
     </div>

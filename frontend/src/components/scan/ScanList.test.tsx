@@ -55,7 +55,7 @@ describe('ScanList', () => {
     await user.click(screen.getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => expect(deleteCalled).toBe(true));
-    await waitFor(() => expect(screen.getByText('No scans yet.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('No scans yet')).toBeInTheDocument());
     expect(screen.queryByText(/300 DPI/)).not.toBeInTheDocument();
     // Removal is a cache update from the delete, not a refetch.
     expect(scansGetCount).toBe(1);
