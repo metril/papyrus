@@ -4,7 +4,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 
 ## Features
 
-- **Print Management**: Upload documents (streamed to disk with early size-limit rejection), hold-release print queue, rich history with preview/selection/bulk delete
+- **Print Management**: Upload documents (streamed to disk with early size-limit rejection), hold-release print queue with cached thumbnail previews for held jobs, rich history with preview/selection/bulk delete
 - **Document Conversion**: Automatically converts DOCX, ODT, XLSX, PPTX to PDF for printing (via LibreOffice)
 - **Scanning**: Initiate scans from the web UI with configurable resolution, color mode, and format
 - **Multi-page ADF Scanning**: Batch scan from the automatic document feeder into a single PDF
@@ -25,8 +25,9 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Network Scanner**: Appears as an eSCL/AirScan scanner on the LAN; devices can scan directly via the eSCL protocol
 - **Webhooks**: Outgoing HTTP notifications with HMAC-SHA256 signing for print/scan events
 - **Printer Status**: Live toner/ink levels and state display from CUPS marker attributes, pushed to clients over WebSocket as changes are detected (no polling)
+- **Supply & Error Alerts**: Background poller watches toner/ink levels and printer error/offline state; fires a webhook (`printer.supply_low` / `printer.error`) and an optional email the moment a condition starts, with hysteresis so it doesn't repeat while the condition persists and a quiet (webhook-only) notice when it clears
 - **Audit Log**: Tracks print releases, scan completions, deletions, and settings changes (admin view)
-- **Usage Dashboard**: Print/scan counts by status, daily activity charts (admin view)
+- **Usage Dashboard**: Print/scan counts by status, a 30-day activity trend chart, per-user breakdown, and per-printer supply levels (admin view)
 - **Real-time Updates**: WebSocket-based live updates — job/scan events push the full object so the UI applies them incrementally, plus scan progress and eSCL scan toast notifications
 - **Release PIN**: Optional PIN-protected print release for secure shared environments
 - **Reprint**: Re-submit completed, failed, or cancelled print jobs from history
@@ -34,7 +35,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Backup / Restore**: Export and import all application settings as JSON (admin)
 - **Detailed Health Check**: System health endpoint with CUPS, scanner, database, disk, and uptime status
 - **Structured Logging**: JSON (or plain dev-mode) logs with a per-request `X-Request-ID`, echoed to the client and included in every log line and error response for easy correlation
-- **PWA Support**: Installable as a Progressive Web App on mobile and desktop
+- **PWA Support**: Installable as a Progressive Web App on mobile and desktop; share files into Papyrus directly from the OS share sheet (Android/Chromium only — iOS Safari ignores the manifest's `share_target`, so iPhone users use the in-app upload flow instead)
 - **Responsive Design**: Works on phones, tablets, and desktops, with light and dark themes
 - **Authentication**: OIDC (Authentik/Keycloak) with group-based role mapping, API tokens with fine-grained permissions
 - **User Management**: Admin user list with role management, user profile display with logout
@@ -141,6 +142,7 @@ After first login, configure everything else via **Settings**:
 - **FTP/SFTP**: Upload targets
 - **Paperless-ngx**: URL and API token
 - **Retention**: Scan and print job cleanup periods
+- **Alerts**: Enable supply/error alerts, toner threshold percentage, notification email, and poll interval
 
 ## License
 
