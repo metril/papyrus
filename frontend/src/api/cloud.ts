@@ -32,6 +32,29 @@ export async function listFiles(
   return data;
 }
 
+export async function downloadCloudFile(
+  providerId: number,
+  fileId: string,
+  isDropbox: boolean,
+  filename: string,
+  mimeType?: string,
+): Promise<Blob> {
+  const params = new URLSearchParams();
+  if (isDropbox) {
+    params.set('path', fileId);
+  } else {
+    params.set('file_id', fileId);
+  }
+  params.set('filename', filename);
+  if (mimeType) {
+    params.set('mime_type', mimeType);
+  }
+  const { data } = await api.get(`/cloud/download/${providerId}?${params.toString()}`, {
+    responseType: 'blob',
+  });
+  return data;
+}
+
 export function getDownloadUrl(
   providerId: number,
   fileId: string,

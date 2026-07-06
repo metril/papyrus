@@ -1,9 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import FilePreviewModal from '../components/common/FilePreviewModal';
-import api from '../api/client';
-import { listProviders, listFiles, getDownloadUrl } from '../api/cloud';
+import { queryKeys, useCloudProviders } from '../api/queries';
+import { listSmbShares, browseSmb, downloadSmbFile } from '../api/smb';
+import { uploadPrintJob } from '../api/printer';
+import { listFiles, getDownloadUrl, downloadCloudFile } from '../api/cloud';
 import type { SMBShare, SMBFileEntry, CloudProvider, CloudFileEntry } from '../types';
 import { useToast } from '../hooks/useToast';
 
@@ -49,33 +52,53 @@ export default function FilesPage() {
 
 function NetworkBrowser() {
   const toast = useToast();
-  const [shares, setShares] = useState<SMBShare[]>([]);
+  const queryClient = useQueryClient();
   const [selectedShare, setSelectedShare] = useState<SMBShare | null>(null);
   const [currentPath, setCurrentPath] = useState('/');
-  const [files, setFiles] = useState<SMBFileEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    api.get('/smb/shares').then(({ data }) => setShares(data));
-  }, []);
+  const { data: shares = [] } = useQuery({
+    queryKey: queryKeys.smbShares,
+    queryFn: listSmbShares,
+  });
 
-  const browse = async (share: SMBShare, path: string) => {
-    setLoading(true);
-    setError(null);
+  // Query cache is keyed by (shareId, path), so revisiting an already-browsed
+  // directory (e.g. navigating back up) serves instantly from cache instead of
+  // re-fetching.
+  const {
+    data: files = [],
+    isLoading: loading,
+    isError,
+    error: browseError,
+  } = useQuery({
+    queryKey: queryKeys.smbBrowse(selectedShare?.id ?? 0, currentPath),
+    queryFn: () => browseSmb(selectedShare!.id, currentPath),
+    enabled: !!selectedShare,
+  });
+  const error = isError
+    ? browseError instanceof Error
+      ? browseError.message
+      : 'Failed to browse share'
+    : null;
+
+  const printMutation = useMutation({
+    mutationFn: async (entry: SMBFileEntry) => {
+      if (!selectedShare) throw new Error('No share selected');
+      const filePath = currentPath === '/' ? `/${entry.name}` : `${currentPath}/${entry.name}`;
+      const blob = await downloadSmbFile(selectedShare.id, filePath);
+      const file = new File([blob], entry.name);
+      return uploadPrintJob(file, { copies: 1, duplex: false, media: 'A4', hold: true });
+    },
+    meta: { suppressGlobalError: true },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs.list() });
+      toast.show('File added to print queue (held)', 'success');
+    },
+    onError: () => toast.show('Failed to print file'),
+  });
+
+  const browse = (share: SMBShare, path: string) => {
     setSelectedShare(share);
     setCurrentPath(path);
-
-    try {
-      const { data } = await api.get(`/smb/browse/${share.id}`, { params: { path } });
-      setFiles(data);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to browse share';
-      setError(message);
-      setFiles([]);
-    } finally {
-      setLoading(false);
-    }
   };
 
   const navigateTo = (entry: SMBFileEntry) => {
@@ -90,30 +113,6 @@ function NetworkBrowser() {
     if (!selectedShare || currentPath === '/') return;
     const parent = currentPath.split('/').slice(0, -1).join('/') || '/';
     browse(selectedShare, parent);
-  };
-
-  const printFile = async (entry: SMBFileEntry) => {
-    if (!selectedShare) return;
-    const filePath = currentPath === '/' ? `/${entry.name}` : `${currentPath}/${entry.name}`;
-    try {
-      const response = await api.get(`/smb/download/${selectedShare.id}`, {
-        params: { path: filePath },
-        responseType: 'blob',
-      });
-      const file = new File([response.data], entry.name);
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('copies', '1');
-      formData.append('duplex', 'false');
-      formData.append('media', 'A4');
-      formData.append('hold', 'true');
-      await api.post('/jobs/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      toast.show('File added to print queue (held)', 'success');
-    } catch {
-      toast.show('Failed to print file');
-    }
   };
 
   if (!selectedShare) {
@@ -182,7 +181,7 @@ function NetworkBrowser() {
               )}
             </button>
             {!entry.is_directory && (
-              <Button size="sm" variant="secondary" onClick={() => printFile(entry)}>
+              <Button size="sm" variant="secondary" onClick={() => printMutation.mutate(entry)}>
                 Print
               </Button>
             )}
@@ -207,13 +206,10 @@ const providerLabels: Record<string, string> = {
 
 function CloudBrowser() {
   const toast = useToast();
-  const [providers, setProviders] = useState<CloudProvider[]>([]);
+  const queryClient = useQueryClient();
+  const { data: providers = [], isLoading: loadingProviders } = useCloudProviders();
   const [selectedProvider, setSelectedProvider] = useState<CloudProvider | null>(null);
-  const [files, setFiles] = useState<CloudFileEntry[]>([]);
   const [folderStack, setFolderStack] = useState<{ id: string; name: string }[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [loadingProviders, setLoadingProviders] = useState(true);
   const [previewFile, setPreviewFile] = useState<CloudFileEntry | null>(null);
 
   const googleExportMimes: Record<string, string> = {
@@ -235,85 +231,68 @@ function CloudBrowser() {
     return mimeMap[ext || ''] || 'application/octet-stream';
   };
 
-  useEffect(() => {
-    listProviders()
-      .then(setProviders)
-      .catch(() => {})
-      .finally(() => setLoadingProviders(false));
-  }, []);
+  const currentFolderId = folderStack.length > 0 ? folderStack[folderStack.length - 1].id : undefined;
+  const folderKey = currentFolderId ?? 'root';
 
-  const browseFolder = async (provider: CloudProvider, folderId?: string, path?: string) => {
-    setLoading(true);
-    setError(null);
-    setSelectedProvider(provider);
-
-    try {
+  // Query cache is keyed by (providerId, folderKey), so revisiting an
+  // already-browsed folder (e.g. navigating back up) serves instantly from
+  // cache instead of re-fetching.
+  const {
+    data: files = [],
+    isLoading: loading,
+    isError,
+  } = useQuery({
+    queryKey: queryKeys.cloudFiles(selectedProvider?.id ?? 0, folderKey),
+    queryFn: () => {
+      const provider = selectedProvider!;
       const params: { folder_id?: string; path?: string } = {};
-      if ((provider.provider === 'gdrive' || provider.provider === 'onedrive') && folderId) {
-        params.folder_id = folderId;
+      if ((provider.provider === 'gdrive' || provider.provider === 'onedrive') && currentFolderId) {
+        params.folder_id = currentFolderId;
       } else if (provider.provider === 'dropbox') {
-        params.path = path || '';
+        params.path = currentFolderId || '';
       }
+      return listFiles(provider.id, params);
+    },
+    enabled: !!selectedProvider,
+  });
+  const error = isError ? 'Failed to browse cloud storage' : null;
 
-      const data = await listFiles(provider.id, params);
-      setFiles(data);
-    } catch {
-      setError('Failed to browse cloud storage');
-      setFiles([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const printMutation = useMutation({
+    mutationFn: async (entry: CloudFileEntry) => {
+      if (!selectedProvider) throw new Error('No provider selected');
+      const isDropbox = selectedProvider.provider === 'dropbox';
+      const blob = await downloadCloudFile(
+        selectedProvider.id,
+        entry.id,
+        isDropbox,
+        entry.name,
+        entry.mime_type || undefined,
+      );
+      const resolvedMime = getPreviewMime(entry);
+      const file = new File([blob], entry.name, { type: resolvedMime });
+      return uploadPrintJob(file, { copies: 1, duplex: false, media: 'A4', hold: true });
+    },
+    meta: { suppressGlobalError: true },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs.list() });
+      toast.show('File added to print queue (held)', 'success');
+    },
+    onError: () => toast.show('Failed to print file'),
+  });
 
   const openFolder = (entry: CloudFileEntry) => {
     if (!selectedProvider || !entry.is_directory) return;
     setFolderStack((prev) => [...prev, { id: entry.id, name: entry.name }]);
-    browseFolder(selectedProvider, entry.id, entry.id);
   };
 
   const goUp = () => {
     if (!selectedProvider || folderStack.length === 0) return;
-    const newStack = folderStack.slice(0, -1);
-    setFolderStack(newStack);
-    const parentId = newStack.length > 0 ? newStack[newStack.length - 1].id : undefined;
-    browseFolder(selectedProvider, parentId, parentId);
+    setFolderStack((prev) => prev.slice(0, -1));
   };
 
   const goToRoot = () => {
     setSelectedProvider(null);
-    setFiles([]);
     setFolderStack([]);
-    setError(null);
-  };
-
-  const printCloudFile = async (entry: CloudFileEntry) => {
-    if (!selectedProvider) return;
-    try {
-      const isDropbox = selectedProvider.provider === 'dropbox';
-      const params = new URLSearchParams();
-      if (isDropbox) params.set('path', entry.id);
-      else params.set('file_id', entry.id);
-      params.set('filename', entry.name);
-      if (entry.mime_type) params.set('mime_type', entry.mime_type);
-      const response = await api.get(
-        `/cloud/download/${selectedProvider.id}?${params}`,
-        { responseType: 'blob' },
-      );
-      const resolvedMime = getPreviewMime(entry);
-      const file = new File([response.data], entry.name, { type: resolvedMime });
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('copies', '1');
-      formData.append('duplex', 'false');
-      formData.append('media', 'A4');
-      formData.append('hold', 'true');
-      await api.post('/jobs/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      });
-      toast.show('File added to print queue (held)', 'success');
-    } catch {
-      toast.show('Failed to print file');
-    }
   };
 
   const formatSize = (bytes: number | null): string => {
@@ -339,7 +318,7 @@ function CloudBrowser() {
                 key={p.id}
                 onClick={() => {
                   setFolderStack([]);
-                  browseFolder(p);
+                  setSelectedProvider(p);
                 }}
                 className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-700 text-left"
               >
@@ -402,7 +381,7 @@ function CloudBrowser() {
                 <Button size="sm" variant="ghost" onClick={() => setPreviewFile(entry)}>
                   View
                 </Button>
-                <Button size="sm" variant="secondary" onClick={() => printCloudFile(entry)}>
+                <Button size="sm" variant="secondary" onClick={() => printMutation.mutate(entry)}>
                   Print
                 </Button>
               </div>
