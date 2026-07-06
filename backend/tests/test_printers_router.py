@@ -669,12 +669,32 @@ async def test_test_page_success_returns_serialized_job(monkeypatch):
 
     monkeypatch.setattr(printers_router, "print_test_page", fake_print_test_page)
 
+    # The endpoint now records an audit entry and dispatches a print.test_page
+    # webhook after a successful print; capture both (the real log_event needs
+    # db.flush(), which _FakeDB doesn't implement).
+    audits: list = []
+    hooks: list = []
+
+    async def fake_log_event(_db, action, *args, **kwargs):
+        audits.append((action, kwargs.get("detail")))
+
+    async def fake_dispatch(_db, event, data):
+        hooks.append((event, data))
+
+    monkeypatch.setattr(printers_router, "log_event", fake_log_event)
+    monkeypatch.setattr(printers_router, "dispatch_webhook", fake_dispatch)
+
     result = await printers_router.send_test_page(printer_id=4, db=db, user=_admin_user())
 
     assert result["id"] == 42
     assert result["status"] == "printing"
     assert result["cups_job_id"] == 555
     assert result["source_type"] == "test_page"
+
+    assert audits == [("print.test_page", {"job_id": 42})]
+    assert hooks == [("print.test_page", {
+        "printer_id": 4, "display_name": "Brother", "job_id": 42,
+    })]
 
 
 async def test_test_page_cups_failure_returns_502(monkeypatch):

@@ -113,7 +113,17 @@ async def upload_and_create_job(
         "data": serialize_print_job(job),
     })
 
-    if not hold:
+    if hold:
+        # The job landed in the hold queue — notify subscribers so they can
+        # surface a "waiting for release" prompt. Auto-printed jobs (not hold)
+        # never emit print.held.
+        await dispatch_webhook(db, "print.held", {
+            "id": job.id,
+            "title": job.title,
+            "user_id": str(user.id),
+            "source_type": job.source_type,
+        })
+    else:
         await _process_job(job, db, default_printer)
 
     # Return the PIN in the initial response so the user can note it
@@ -262,6 +272,15 @@ async def ingest_network_job(
 
     if auto_release:
         await _process_job(job, db, printer)
+    else:
+        # Held network job (auto-release off) — notify subscribers. When
+        # auto_release is on the job is printed immediately, so no print.held.
+        await dispatch_webhook(db, "print.held", {
+            "id": job.id,
+            "title": job.title,
+            "username": username,
+            "source_type": job.source_type,
+        })
 
     return job
 

@@ -21,9 +21,13 @@ WEBHOOK_EVENTS = [
     "print.release",
     "print.delete",
     "print.upload",
+    "print.held",
+    "print.test_page",
     "scan.complete",
     "scan.delete",
     "settings.update",
+    "printer.supply_low",
+    "printer.error",
 ]
 
 

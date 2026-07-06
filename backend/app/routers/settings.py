@@ -55,6 +55,11 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "print_retention_days": (int, False),
     # Email webhook (encryption managed by email.py, not the generic CONFIGURABLE pattern)
     "email_webhook_secret": (str, False),
+    # Supply/error alerts (poller in main.py + alert_service)
+    "alerts_enabled": (bool, False),
+    "alert_toner_threshold": (int, False),
+    "alert_email": (str, False),
+    "alert_poll_minutes": (int, False),
     # OIDC (configured via Settings UI)
     "oidc_enabled": (bool, False),
     "oidc_issuer": (str, False),
@@ -87,6 +92,10 @@ DEFAULTS: dict[str, str] = {
     "ftp_protocol": "ftp",
     "email_webhook_rate_limit": "10",
     "escl_enabled": "true",
+    "alerts_enabled": "false",
+    "alert_toner_threshold": "20",
+    "alert_email": "",
+    "alert_poll_minutes": "5",
     "local_auth_enabled": "true",
     "oidc_enabled": "false",
     "oidc_scopes": "openid email profile",

@@ -230,6 +230,81 @@ async def test_ingest_network_job_from_localhost_is_held(db, client, tmp_path):
     assert body["source_type"] == "network"
 
 
+# --------------------------------------------------------------------------- #
+# print.held webhook dispatch
+# --------------------------------------------------------------------------- #
+def _capture_held(monkeypatch) -> list:
+    """Patch jobs_router.dispatch_webhook to record (event, data) tuples."""
+    events: list = []
+
+    async def fake_dispatch(_db, event, data):
+        events.append((event, data))
+
+    monkeypatch.setattr(jobs_router, "dispatch_webhook", fake_dispatch)
+    return events
+
+
+async def test_upload_held_job_dispatches_print_held(db, user_client, tmp_path, monkeypatch):
+    await _seed_upload_dir(db, tmp_path)
+    events = _capture_held(monkeypatch)
+
+    resp = await user_client.post("/api/jobs/upload", files=_pdf_file())
+    assert resp.status_code == 201
+
+    held = [d for e, d in events if e == "print.held"]
+    assert len(held) == 1
+    assert held[0]["source_type"] == "upload"
+    assert held[0]["id"] == resp.json()["id"]
+    assert "user_id" in held[0]
+
+
+async def test_upload_not_held_does_not_dispatch_print_held(db, user_client, tmp_path, monkeypatch):
+    await _seed_upload_dir(db, tmp_path)
+    monkeypatch.setattr(jobs_router, "CupsService", _FakeCupsService)
+    events = _capture_held(monkeypatch)
+
+    resp = await user_client.post("/api/jobs/upload", files=_pdf_file(), data={"hold": "false"})
+    assert resp.status_code == 201
+
+    assert [e for e, _ in events if e == "print.held"] == []
+
+
+async def test_ingest_held_network_job_dispatches_print_held(db, client, tmp_path, monkeypatch):
+    await _seed_upload_dir(db, tmp_path)
+    events = _capture_held(monkeypatch)
+
+    resp = await client.post(
+        "/api/jobs/internal/ingest",
+        files=_pdf_file("network.pdf"),
+        data={"username": "someone"},
+    )
+    assert resp.status_code == 201
+
+    held = [d for e, d in events if e == "print.held"]
+    assert len(held) == 1
+    assert held[0]["source_type"] == "network"
+    assert held[0]["username"] == "someone"
+
+
+async def test_ingest_auto_release_does_not_dispatch_print_held(db, client, tmp_path, monkeypatch):
+    await _seed_upload_dir(db, tmp_path)
+    monkeypatch.setattr(jobs_router, "CupsService", _FakeCupsService)
+    events = _capture_held(monkeypatch)
+
+    printer = Printer(
+        display_name="Auto", cups_name="auto", uri="",
+        is_default=True, is_network_queue=False, auto_release=True,
+    )
+    db.add(printer)
+    await db.commit()
+
+    resp = await client.post("/api/jobs/internal/ingest", files=_pdf_file("auto.pdf"))
+    assert resp.status_code == 201
+    assert resp.json()["status"] == "completed"
+    # Auto-released jobs skip the hold queue -> no print.held.
+    assert [e for e, _ in events if e == "print.held"] == []
+
+
 # Regression test: _process_job used to broadcast serialize_print_job(job)
 # right after commit without db.refresh(job); the server-side updated_at was
 # expired by the UPDATE flush and the synchronous serialization raised

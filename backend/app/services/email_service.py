@@ -1,10 +1,14 @@
+from email.message import Message
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import aiosmtplib
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exceptions import ExternalServiceError
+from app.models import AppConfig
 from app.services.crypto import decrypt_value
 
 
@@ -40,6 +44,33 @@ class EmailService:
         config = self._get_config(db_config)
         return bool(config["host"] and config["from_addr"])
 
+    async def _load_db_config(self, db: AsyncSession) -> dict:
+        """Load the raw SMTP AppConfig rows (same shape ``send_scan`` expects).
+
+        Returns encrypted values verbatim — ``_get_config`` decrypts them.
+        """
+        result = await db.execute(select(AppConfig).where(AppConfig.key.like("smtp_%")))
+        return {row.key: row.value for row in result.scalars().all()}
+
+    async def _deliver(self, msg: Message, config: dict) -> None:
+        """Shared SMTP connect/send core for every outbound message.
+
+        Extracted so ``send_scan`` and ``send_alert`` share one implementation
+        of the connect/STARTTLS/auth logic and raise the same ``EmailError``.
+        """
+        try:
+            await aiosmtplib.send(
+                msg,
+                hostname=config["host"],
+                port=config["port"],
+                username=config["user"] or None,
+                password=config["password"] or None,
+                use_tls=config["port"] == 465,
+                start_tls=config["port"] == 587,
+            )
+        except Exception as e:
+            raise EmailError(f"Failed to send email: {e}")
+
     async def send_scan(
         self,
         to: str,
@@ -70,18 +101,27 @@ class EmailService:
             )
             msg.attach(attachment)
 
-        try:
-            await aiosmtplib.send(
-                msg,
-                hostname=config["host"],
-                port=config["port"],
-                username=config["user"] or None,
-                password=config["password"] or None,
-                use_tls=config["port"] == 465,
-                start_tls=config["port"] == 587,
-            )
-        except Exception as e:
-            raise EmailError(f"Failed to send email: {e}")
+        await self._deliver(msg, config)
+
+    async def send_alert(self, db: AsyncSession, to: str, subject: str, body: str) -> None:
+        """Send a plain-text alert email, reading SMTP config from the DB.
+
+        Reuses the same connect/send core as ``send_scan``. Raises
+        ``EmailError`` when SMTP is unconfigured or delivery fails — callers in
+        the alert path are expected to catch/log so a mail failure never breaks
+        the poller or suppresses the (already-dispatched) webhook.
+        """
+        config = self._get_config(await self._load_db_config(db))
+
+        if not config["host"]:
+            raise EmailError("SMTP not configured")
+
+        msg = MIMEText(body or "", "plain")
+        msg["From"] = config["from_addr"]
+        msg["To"] = to
+        msg["Subject"] = subject
+
+        await self._deliver(msg, config)
 
     async def test_connection(self, db_config: dict | None = None) -> bool:
         """Test SMTP connection."""

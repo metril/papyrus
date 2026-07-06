@@ -44,3 +44,22 @@ async def test_put_invalidates_settings_cache(db, admin_client):
 async def test_put_settings_as_non_admin_is_403(user_client):
     resp = await user_client.put("/api/settings", json={"ocr_language": "deu"})
     assert resp.status_code == 403
+
+
+async def test_put_accepts_new_alert_settings(db, admin_client):
+    """The alert keys registered in CONFIGURABLE/DEFAULTS round-trip through PUT
+    (a 400 here would mean they weren't registered and the poller couldn't be
+    configured from the UI)."""
+    resp = await admin_client.put("/api/settings", json={
+        "alerts_enabled": True,
+        "alert_toner_threshold": 15,
+        "alert_email": "ops@example.com",
+        "alert_poll_minutes": 10,
+    })
+    assert resp.status_code == 200
+
+    body = (await admin_client.get("/api/settings")).json()
+    assert body["alerts_enabled"] is True
+    assert body["alert_toner_threshold"] == 15
+    assert body["alert_email"] == "ops@example.com"
+    assert body["alert_poll_minutes"] == 10

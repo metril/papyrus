@@ -14,10 +14,12 @@ from app.exceptions import PapyrusError
 from app.models import Printer, User
 from app.schemas import serialize_print_job
 from app.services import cups_admin
+from app.services.audit_service import log_event
 from app.services.cups_service import CupsService
 from app.services.discovery_service import discover_printers
 from app.services.ipp_client import probe_ipp
 from app.services.test_page_service import print_test_page
+from app.services.webhook_service import dispatch_webhook
 
 router = APIRouter()
 
@@ -392,12 +394,33 @@ async def send_test_page(
             detail="A network hold queue has no physical device to print a test page to",
         )
 
+    # Capture scalars before print_test_page's internal commits expire the ORM
+    # objects (a lazy reload in this async context would raise MissingGreenlet).
+    printer_id_val = printer.id
+    display_name = printer.display_name
+    user_id = user.id
+
     # TestPageError is an ExternalServiceError (502); the PrintJob row is
     # already marked failed/broadcast by the service, so let it propagate to
     # the global handler.
     job = await print_test_page(db, printer, user)
+    # Serialize while the job row is still loaded (the log_event commit below
+    # expires it). Only reached on success — a failed test page raises above.
+    response = serialize_print_job(job)
+    job_id = job.id
 
-    return serialize_print_job(job)
+    await log_event(
+        db, "print.test_page", "printer", str(printer_id_val),
+        user_id=user_id, detail={"job_id": job_id},
+    )
+    await db.commit()
+    await dispatch_webhook(db, "print.test_page", {
+        "printer_id": printer_id_val,
+        "display_name": display_name,
+        "job_id": job_id,
+    })
+
+    return response
 
 
 @router.post("/{printer_id}/refresh-info")
