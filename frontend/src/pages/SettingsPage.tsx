@@ -8,6 +8,7 @@ import type { AppSettings, SaveControls } from '../components/settings/shared';
 import PrintersCard from '../components/settings/PrintersCard';
 import ScannersCard from '../components/settings/ScannersCard';
 import NetworkServicesCard from '../components/settings/NetworkServicesCard';
+import AlertsCard from '../components/settings/AlertsCard';
 import StorageCard from '../components/settings/StorageCard';
 import ApplicationCard from '../components/settings/ApplicationCard';
 import AuthenticationCard from '../components/settings/AuthenticationCard';
@@ -106,6 +107,7 @@ export default function SettingsPage() {
       <PrintersCard />
       <ScannersCard />
       <NetworkServicesCard appSettings={settingsForCards} set={set} save={save} />
+      <AlertsCard appSettings={settingsForCards} set={set} save={save} />
       <StorageCard appSettings={settingsForCards} set={set} save={save} />
       <ApplicationCard appSettings={settingsForCards} set={set} save={save} />
       <AuthenticationCard appSettings={settingsForCards} set={set} save={save} />
