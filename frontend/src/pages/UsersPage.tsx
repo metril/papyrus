@@ -18,7 +18,7 @@ function describeUsersLoadError(error: unknown): string {
 
 export default function UsersPage() {
   const toast = useToast();
-  const { user: currentUser } = useAuthStore();
+  const currentUser = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const { data: users = [], isLoading: loading, isError, error: queryError } = useUsers();
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useScans, queryKeys } from '../../api/queries';
 import { applyScanEvent } from '../../hooks/useRealtimeBridge';
@@ -11,45 +11,18 @@ import {
   ocrScan,
   collateScans,
 } from '../../api/scanner';
-import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
 import Toggle from '../common/Toggle';
 import FilePreviewModal from '../common/FilePreviewModal';
 import EmailScanDialog from './EmailScanDialog';
 import CloudSaveDialog from './CloudSaveDialog';
+import ScanRow from './ScanRow';
 import { useToast } from '../../hooks/useToast';
 import type { ScanJob } from '../../types';
-
-function formatSize(bytes: number | null): string {
-  if (!bytes) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 function scanMimeType(scan: ScanJob): string {
   if (scan.format === 'pdf') return 'application/pdf';
   return `image/${scan.format}`;
-}
-
-function ScanThumbnail({ scanId }: { scanId: string }) {
-  const [failed, setFailed] = useState(false);
-
-  if (failed) {
-    return (
-      <div className="w-12 h-12 rounded border border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 mr-3 shrink-0" />
-    );
-  }
-
-  return (
-    <img
-      src={getScanThumbnailUrl(scanId)}
-      alt=""
-      loading="lazy"
-      onError={() => setFailed(true)}
-      className="w-12 h-12 object-cover rounded border border-gray-200 dark:border-gray-700 mr-3 shrink-0 bg-gray-100 dark:bg-gray-800"
-    />
-  );
 }
 
 export default function ScanList() {
@@ -68,8 +41,10 @@ export default function ScanList() {
 
   const defaultEnhanceForm = { brightness: 1.0, contrast: 1.0, rotation: 0, auto_crop: false, deskew: false };
 
-  const invalidateScans = () =>
-    queryClient.invalidateQueries({ queryKey: queryKeys.scans.list() });
+  const invalidateScans = useCallback(
+    () => queryClient.invalidateQueries({ queryKey: queryKeys.scans.list() }),
+    [queryClient],
+  );
 
   const closeEnhanceDialog = () => {
     setEnhanceScanId(null);
@@ -146,14 +121,14 @@ export default function ScanList() {
     enhanceMutation.mutate({ scanId: enhanceScanId, form: enhanceForm });
   };
 
-  const toggleMergeSelect = (scanId: string) => {
+  const toggleMergeSelect = useCallback((scanId: string) => {
     setMergeSelection((prev) => {
       const next = new Set(prev);
       if (next.has(scanId)) next.delete(scanId);
       else next.add(scanId);
       return next;
     });
-  };
+  }, []);
 
   const handleMerge = () => {
     if (mergeSelection.size < 1 || mergeMutation.isPending) return;
@@ -162,6 +137,17 @@ export default function ScanList() {
       .map((s) => s.scan_id);
     mergeMutation.mutate(orderedIds);
   };
+
+  const handleToggleMenu = useCallback((scanId: string) => {
+    setOpenMenuId((prev) => (prev === scanId ? null : scanId));
+  }, []);
+
+  // These are passed straight through to ScanRow as single-purpose callback
+  // props: a `useState` setter or a mutation's `.mutate` are already stable
+  // references on their own (TanStack Query memoizes `.mutate` per mutation
+  // observer), so wrapping them in another `useCallback` here would add
+  // nothing. Closing the actions dropdown after firing is composed inside
+  // ScanRow itself (`runAndCloseMenu`), not baked in here.
 
   if (scansQuery.isLoading && scans.length === 0) {
     return <p className="text-gray-500 text-sm">Loading scans...</p>;
@@ -172,6 +158,7 @@ export default function ScanList() {
   }
 
   const completedScans = scans.filter((s) => s.status === 'completed');
+  const mergeColumnVisible = completedScans.length >= 1;
   const mergeLabel = mergeSelection.size === 1 ? 'Convert to PDF' : `Merge ${mergeSelection.size} to PDF`;
 
   return (
@@ -199,112 +186,24 @@ export default function ScanList() {
 
     <div className="space-y-3">
       {scans.map((scan) => (
-        <div
+        <ScanRow
           key={scan.scan_id}
-          className={`flex items-center justify-between p-4 bg-white dark:bg-gray-900 rounded-lg border ${mergeSelection.has(scan.scan_id) ? 'border-blue-400 dark:border-blue-500 ring-1 ring-blue-200 dark:ring-blue-800' : 'border-gray-200 dark:border-gray-700'}`}
-        >
-          {/* Merge checkbox */}
-          {scan.status === 'completed' && completedScans.length >= 1 && (
-            <input
-              type="checkbox"
-              checked={mergeSelection.has(scan.scan_id)}
-              onChange={() => toggleMergeSelect(scan.scan_id)}
-              className="mr-3 rounded border-gray-300 dark:border-gray-600"
-            />
-          )}
-
-          {scan.status === 'completed' && <ScanThumbnail scanId={scan.scan_id} />}
-
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => scan.status === 'completed' && setPreviewScan(scan)}
-                className={`text-sm font-medium truncate text-left ${scan.status === 'completed' ? 'text-blue-600 dark:text-blue-400 hover:underline cursor-pointer' : 'text-gray-900 dark:text-gray-100'}`}
-              >
-                {scan.format.toUpperCase()} &middot; {scan.resolution} DPI &middot; {scan.mode}
-              </button>
-              <StatusBadge status={scan.status} />
-            </div>
-            <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-              {scan.source}
-              {scan.page_count > 1 && ` \u00b7 ${scan.page_count} pages`}
-              {scan.file_size && ` \u00b7 ${formatSize(scan.file_size)}`}
-              {' \u00b7 '}{new Date(scan.created_at).toLocaleString()}
-            </div>
-          </div>
-
-          <div className="flex gap-2 ml-4 items-center">
-            {scan.status === 'completed' && (
-              <>
-                <Button size="sm" variant="secondary" onClick={() => setPreviewScan(scan)}>
-                  View
-                </Button>
-                <a href={getScanDownloadUrl(scan.scan_id)} download>
-                  <Button size="sm" variant="secondary">Download</Button>
-                </a>
-                {/* Actions dropdown */}
-                <div className="relative" ref={openMenuId === scan.scan_id ? menuRef : undefined}>
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    onClick={() => setOpenMenuId(openMenuId === scan.scan_id ? null : scan.scan_id)}
-                  >
-                    Actions &#9662;
-                  </Button>
-                  {openMenuId === scan.scan_id && (
-                    <div className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg z-20 py-1">
-                      <button
-                        className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        onClick={() => { setEmailScanId(scan.scan_id); setOpenMenuId(null); }}
-                      >
-                        Email
-                      </button>
-                      <button
-                        className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        onClick={() => { setCloudScanId(scan.scan_id); setOpenMenuId(null); }}
-                      >
-                        Save to Cloud
-                      </button>
-                      <button
-                        className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
-                        onClick={() => { paperlessMutation.mutate(scan.scan_id); setOpenMenuId(null); }}
-                      >
-                        Send to Paperless
-                      </button>
-                      {scan.format === 'pdf' && (
-                        <button
-                          className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
-                          onClick={() => { ocrMutation.mutate(scan.scan_id); setOpenMenuId(null); }}
-                        >
-                          OCR
-                        </button>
-                      )}
-                      {scan.format !== 'pdf' && (
-                        <>
-                          <button
-                            className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
-                            onClick={() => { setEnhanceScanId(scan.scan_id); setOpenMenuId(null); }}
-                          >
-                            Enhance
-                          </button>
-                          <button
-                            className="w-full text-left px-3 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700"
-                            onClick={() => { convertMutation.mutate(scan.scan_id); setOpenMenuId(null); }}
-                          >
-                            Convert to PDF
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-            <Button size="sm" variant="danger" onClick={() => deleteMutation.mutate(scan.scan_id)}>
-              Delete
-            </Button>
-          </div>
-        </div>
+          scan={scan}
+          merging={mergeSelection.has(scan.scan_id)}
+          mergeColumnVisible={mergeColumnVisible}
+          menuOpen={openMenuId === scan.scan_id}
+          menuRef={openMenuId === scan.scan_id ? menuRef : undefined}
+          onToggleMergeSelect={toggleMergeSelect}
+          onPreview={setPreviewScan}
+          onToggleMenu={handleToggleMenu}
+          onEmail={setEmailScanId}
+          onCloudSave={setCloudScanId}
+          onPaperless={paperlessMutation.mutate}
+          onOcr={ocrMutation.mutate}
+          onEnhance={setEnhanceScanId}
+          onConvert={convertMutation.mutate}
+          onDelete={deleteMutation.mutate}
+        />
       ))}
     </div>
 

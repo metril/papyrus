@@ -1,19 +1,19 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useJobs, useScans, queryKeys } from '../api/queries';
 import { deleteJob, bulkDeleteJobs } from '../api/printer';
 import { deleteScan, bulkDeleteScans, getScanDownloadUrl, getJobDownloadUrl, getJobPreviewUrl } from '../api/scanner';
 import Card from '../components/common/Card';
-import StatusBadge from '../components/common/StatusBadge';
 import Button from '../components/common/Button';
 import FilePreviewModal from '../components/common/FilePreviewModal';
+import HistoryRow from '../components/history/HistoryRow';
 import type { PrintJob, ScanJob } from '../types';
 
 type Tab = 'all' | 'print' | 'scan';
 type StatusFilter = 'all' | 'completed' | 'failed' | 'held' | 'scanning';
 type DateFilter = 'all' | 'today' | 'week' | 'month';
 
-interface HistoryItem {
+export interface HistoryItem {
   type: 'print' | 'scan';
   id: string;
   numericId: number;
@@ -163,14 +163,17 @@ export default function HistoryPage() {
   const allSelected = filtered.length > 0 && filtered.every((i) => selected.has(i.id));
   const someSelected = selected.size > 0;
 
-  const toggleSelect = (id: string) => {
+  // Stable identity + id-based signature: toggling one row's checkbox must
+  // not recreate a callback that would defeat HistoryRow's memoization for
+  // every other row.
+  const toggleSelect = useCallback((id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  };
+  }, []);
 
   const toggleAll = () => {
     if (allSelected) {
@@ -194,17 +197,6 @@ export default function HistoryPage() {
 
     bulkDeleteMutation.mutate({ printIds, scanIds });
   };
-
-  const handleDeleteSingle = (item: HistoryItem) => {
-    if (item.type === 'print') {
-      deleteJobMutation.mutate(item.numericId);
-    } else if (item.scanId) {
-      deleteScanMutation.mutate(item.scanId);
-    }
-  };
-
-  const canPreview = (item: HistoryItem) =>
-    item.status === 'completed' || item.status === 'held';
 
   return (
     <div className="space-y-6">
@@ -297,59 +289,15 @@ export default function HistoryPage() {
             </div>
 
             {filtered.map((item) => (
-              <div
+              <HistoryRow
                 key={item.id}
-                className="flex items-center gap-3 p-3 rounded-lg border border-gray-100 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50"
-              >
-                <input
-                  type="checkbox"
-                  checked={selected.has(item.id)}
-                  onChange={() => toggleSelect(item.id)}
-                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 flex-shrink-0"
-                />
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold uppercase text-gray-400 dark:text-gray-500">
-                      {item.type}
-                    </span>
-                    <button
-                      onClick={() => canPreview(item) && setPreviewItem(item)}
-                      className={`text-sm truncate text-left ${
-                        canPreview(item)
-                          ? 'text-blue-600 dark:text-blue-400 hover:underline cursor-pointer'
-                          : 'text-gray-900 dark:text-gray-100'
-                      }`}
-                    >
-                      {item.label}
-                    </button>
-                    <StatusBadge status={item.status} />
-                  </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                    {item.detail} &middot; {new Date(item.time).toLocaleString()}
-                  </div>
-                </div>
-
-                <div className="flex gap-2 ml-4 flex-shrink-0">
-                  {canPreview(item) && (
-                    <Button size="sm" variant="secondary" onClick={() => setPreviewItem(item)}>
-                      View
-                    </Button>
-                  )}
-                  {canPreview(item) && (
-                    <a href={item.downloadUrl} download>
-                      <Button size="sm" variant="secondary">Download</Button>
-                    </a>
-                  )}
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    onClick={() => handleDeleteSingle(item)}
-                  >
-                    Delete
-                  </Button>
-                </div>
-              </div>
+                item={item}
+                selected={selected.has(item.id)}
+                onToggleSelect={toggleSelect}
+                onPreview={setPreviewItem}
+                onDeleteJob={deleteJobMutation.mutate}
+                onDeleteScan={deleteScanMutation.mutate}
+              />
             ))}
           </div>
         )}

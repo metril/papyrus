@@ -28,7 +28,8 @@ export default function ScanForm() {
   const [profileName, setProfileName] = useState('');
   const [showSaveProfile, setShowSaveProfile] = useState(false);
 
-  const { progress, setProgress } = useScanStore();
+  const progress = useScanStore((s) => s.progress);
+  const setProgress = useScanStore((s) => s.setProgress);
   const queryClient = useQueryClient();
   const profilesQuery = useScanProfiles();
   const profiles = profilesQuery.data ?? [];

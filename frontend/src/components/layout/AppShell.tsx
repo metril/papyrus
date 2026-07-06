@@ -111,7 +111,7 @@ function LoginScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
-  const { fetchUser } = useAuthStore();
+  const fetchUser = useAuthStore((s) => s.fetchUser);
 
   useEffect(() => {
     api.get('/auth/providers').then(({ data }) => setProviders(data)).catch(() => setProviders({ local_enabled: true, oidc_enabled: false, admin_override: false }));
@@ -202,7 +202,12 @@ function LoginScreen() {
 }
 
 export default function AppShell() {
-  const { user, loading, logout, fetchUser } = useAuthStore();
+  // Granular selectors: this component doesn't read `error`, so an
+  // auth-fetch failure shouldn't force a re-render here.
+  const user = useAuthStore((s) => s.user);
+  const loading = useAuthStore((s) => s.loading);
+  const logout = useAuthStore((s) => s.logout);
+  const fetchUser = useAuthStore((s) => s.fetchUser);
   useEffect(() => { fetchUser(); }, [fetchUser]);
   const isAdmin = user?.role === 'admin';
   const visibleNavItems = navItems.filter((item) => !item.adminOnly || isAdmin);
