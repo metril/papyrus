@@ -1,9 +1,10 @@
 import { useState } from 'react';
+import { useMutation } from '@tanstack/react-query';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import Toggle from '../components/common/Toggle';
 import ProgressBar from '../components/common/ProgressBar';
-import api from '../api/client';
+import { startCopy } from '../api/copy';
 
 export default function CopyPage() {
   const [resolution, setResolution] = useState(300);
@@ -12,24 +13,21 @@ export default function CopyPage() {
   const [copies, setCopies] = useState(1);
   const [duplex, setDuplex] = useState(false);
   const [media, setMedia] = useState('A4');
-  const [copying, setCopying] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
 
-  const handleCopy = async () => {
-    setCopying(true);
-    setError(null);
-    setSuccess(false);
+  const copyMutation = useMutation({
+    mutationFn: () => startCopy({ resolution, mode, source, copies, duplex, media }),
+    meta: { suppressGlobalError: true },
+  });
+  const copying = copyMutation.isPending;
+  const error = copyMutation.isError
+    ? copyMutation.error instanceof Error
+      ? copyMutation.error.message
+      : 'Copy failed'
+    : null;
+  const success = copyMutation.isSuccess;
 
-    try {
-      await api.post('/copy', { resolution, mode, source, copies, duplex, media });
-      setSuccess(true);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Copy failed';
-      setError(message);
-    } finally {
-      setCopying(false);
-    }
+  const handleCopy = () => {
+    copyMutation.mutate();
   };
 
   return (

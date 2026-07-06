@@ -1,29 +1,8 @@
-import { useState, useEffect } from 'react';
 import Card from '../components/common/Card';
-import api from '../api/client';
-
-interface DailyCount {
-  day: string;
-  count: number;
-}
-
-interface Stats {
-  print_counts: Record<string, number>;
-  scan_counts: Record<string, number>;
-  daily_prints: DailyCount[];
-  daily_scans: DailyCount[];
-}
+import { useDashboardStats } from '../api/queries';
 
 export default function DashboardPage() {
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    api.get('/admin/stats')
-      .then(({ data }) => setStats(data))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+  const { data: stats, isLoading: loading, isError } = useDashboardStats();
 
   if (loading) {
     return (
@@ -34,7 +13,7 @@ export default function DashboardPage() {
     );
   }
 
-  if (!stats) {
+  if (isError || !stats) {
     return (
       <div className="space-y-6">
         <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Dashboard</h2>

@@ -1,46 +1,40 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import axios from 'axios';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
-import api from '../api/client';
+import { queryKeys } from '../api/queries';
+import { getAuditLog } from '../api/admin';
 
-interface AuditEntry {
-  id: number;
-  action: string;
-  entity_type: string | null;
-  entity_id: string | null;
-  user_id: string | null;
-  source: string;
-  ip_address: string | null;
-  detail: Record<string, unknown> | null;
-  created_at: string;
+/** Mirrors the pre-Query audit-log failure copy, distinguishing a 403 (no
+ * admin role) from any other failure. */
+function describeAuditLoadError(error: unknown): string {
+  if (axios.isAxiosError(error) && error.response?.status === 403) {
+    return 'Admin access required';
+  }
+  return 'Failed to load audit log';
 }
 
 export default function AuditPage() {
-  const [entries, setEntries] = useState<AuditEntry[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
   const [page, setPage] = useState(0);
   const [actionFilter, setActionFilter] = useState('');
   const pageSize = 50;
 
-  useEffect(() => {
-    const params: Record<string, string | number> = { limit: pageSize, offset: page * pageSize };
-    if (actionFilter) params.action = actionFilter;
+  const {
+    data,
+    isLoading: loading,
+    isError,
+    error: queryError,
+  } = useQuery({
+    queryKey: queryKeys.audit(page, actionFilter || undefined),
+    queryFn: () => getAuditLog({ limit: pageSize, offset: page * pageSize, action: actionFilter || undefined }),
+    placeholderData: keepPreviousData,
+    meta: { suppressGlobalError: true },
+  });
 
-    api.get('/admin/audit', { params })
-      .then(({ data }) => {
-        setEntries(data.entries);
-        setTotal(data.total);
-      })
-      .catch((err: unknown) => {
-        setEntries([]);
-        setTotal(0);
-        const status = (err as { response?: { status?: number } })?.response?.status;
-        setError(status === 403 ? 'Admin access required' : 'Failed to load audit log');
-      })
-      .finally(() => setLoading(false));
-  }, [page, actionFilter]);
+  const entries = isError ? [] : (data?.entries ?? []);
+  const total = isError ? 0 : (data?.total ?? 0);
+  const error = isError ? describeAuditLoadError(queryError) : '';
 
   const actions = [
     '', 'print.release', 'print.cancel', 'print.delete', 'print.upload',
@@ -57,7 +51,7 @@ export default function AuditPage() {
           <div className="flex items-center gap-3">
             <select
               value={actionFilter}
-              onChange={(e) => { setActionFilter(e.target.value); setPage(0); setLoading(true); setError(''); }}
+              onChange={(e) => { setActionFilter(e.target.value); setPage(0); }}
               className="rounded-lg border-gray-300 dark:border-gray-600 text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
             >
               <option value="">All actions</option>
@@ -121,7 +115,7 @@ export default function AuditPage() {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => { setPage((p) => Math.max(0, p - 1)); setLoading(true); setError(''); }}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={page === 0}
               >
                 Previous
@@ -132,7 +126,7 @@ export default function AuditPage() {
               <Button
                 size="sm"
                 variant="ghost"
-                onClick={() => { setPage((p) => p + 1); setLoading(true); setError(''); }}
+                onClick={() => setPage((p) => p + 1)}
                 disabled={(page + 1) * pageSize >= total}
               >
                 Next

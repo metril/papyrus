@@ -7,6 +7,7 @@ import { listScanners } from './scanners';
 import { listProviders } from './cloud';
 import { listWebhooks, listWebhookEvents } from './webhooks';
 import { listApiTokens } from './tokens';
+import { getDashboardStats, listUsers } from './admin';
 
 /**
  * Single source of truth for React Query cache keys. Every hook derives its key
@@ -124,5 +125,23 @@ export function useApiTokens() {
   return useQuery({
     queryKey: queryKeys.apiTokens,
     queryFn: () => listApiTokens(),
+  });
+}
+
+export function useDashboardStats() {
+  return useQuery({
+    queryKey: queryKeys.dashboardStats,
+    queryFn: () => getDashboardStats(),
+    meta: { suppressGlobalError: true },
+  });
+}
+
+/** Users list for admin management. Kept silent on the global toast — the
+ * page renders its own "Admin access required" / failure message. */
+export function useUsers() {
+  return useQuery({
+    queryKey: queryKeys.users,
+    queryFn: () => listUsers(),
+    meta: { suppressGlobalError: true },
   });
 }

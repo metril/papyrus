@@ -1,62 +1,50 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import axios from 'axios';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import { useToast } from '../hooks/useToast';
 import { useAuthStore } from '../store/authStore';
-import api from '../api/client';
+import { useUsers, queryKeys } from '../api/queries';
+import { updateUserRole, deleteUser } from '../api/admin';
 
-interface UserDetail {
-  id: string;
-  email: string;
-  display_name: string;
-  role: string;
-  created_at: string | null;
-  last_login: string | null;
+/** Mirrors the pre-Query users-list failure copy. */
+function describeUsersLoadError(error: unknown): string {
+  if (axios.isAxiosError(error) && error.response?.status === 403) {
+    return 'Admin access required';
+  }
+  return 'Failed to load users';
 }
 
 export default function UsersPage() {
   const toast = useToast();
   const { user: currentUser } = useAuthStore();
-  const [users, setUsers] = useState<UserDetail[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const queryClient = useQueryClient();
+  const { data: users = [], isLoading: loading, isError, error: queryError } = useUsers();
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  const fetchUsers = async () => {
-    try {
-      const { data } = await api.get('/admin/users');
-      setUsers(data);
-      setError('');
-    } catch (err) {
-      const status = (err as { response?: { status?: number } })?.response?.status;
-      setError(status === 403 ? 'Admin access required' : 'Failed to load users');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const error = isError ? describeUsersLoadError(queryError) : '';
 
-  useEffect(() => { fetchUsers(); }, []);
-
-  const updateRole = async (userId: string, newRole: string) => {
-    try {
-      await api.patch(`/admin/users/${userId}`, { role: newRole });
-      setUsers((prev) => prev.map((u) => u.id === userId ? { ...u, role: newRole } : u));
+  const updateRoleMutation = useMutation({
+    mutationFn: ({ userId, role }: { userId: string; role: string }) => updateUserRole(userId, role),
+    meta: { suppressGlobalError: true },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.users });
       toast.show('Role updated', 'success');
-    } catch {
-      toast.show('Failed to update role');
-    }
-  };
+    },
+    onError: () => toast.show('Failed to update role'),
+  });
 
-  const deleteUser = async (userId: string) => {
-    try {
-      await api.delete(`/admin/users/${userId}`);
-      setUsers((prev) => prev.filter((u) => u.id !== userId));
+  const deleteUserMutation = useMutation({
+    mutationFn: (userId: string) => deleteUser(userId),
+    meta: { suppressGlobalError: true },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.users });
       setConfirmDeleteId(null);
       toast.show('User deleted', 'success');
-    } catch {
-      toast.show('Failed to delete user');
-    }
-  };
+    },
+    onError: () => toast.show('Failed to delete user'),
+  });
 
   if (loading) return <p className="text-gray-500 text-sm p-4">Loading users...</p>;
   if (error) return <p className="text-red-600 dark:text-red-400 text-sm p-4">{error}</p>;
@@ -93,7 +81,7 @@ export default function UsersPage() {
                       <>
                         <select
                           value={u.role}
-                          onChange={(e) => updateRole(u.id, e.target.value)}
+                          onChange={(e) => updateRoleMutation.mutate({ userId: u.id, role: e.target.value })}
                           className="rounded-lg border border-gray-300 dark:border-gray-600 text-xs p-1.5 bg-white dark:bg-gray-800 dark:text-gray-100"
                         >
                           <option value="user">User</option>
@@ -102,7 +90,7 @@ export default function UsersPage() {
                         {confirmDeleteId === u.id ? (
                           <div className="flex items-center gap-1">
                             <span className="text-xs text-gray-500">Sure?</span>
-                            <Button size="sm" variant="danger" onClick={() => deleteUser(u.id)}>Yes</Button>
+                            <Button size="sm" variant="danger" onClick={() => deleteUserMutation.mutate(u.id)}>Yes</Button>
                             <Button size="sm" variant="ghost" onClick={() => setConfirmDeleteId(null)}>No</Button>
                           </div>
                         ) : (
