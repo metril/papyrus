@@ -1,13 +1,15 @@
-import { useEffect, useRef, useCallback, useState } from 'react';
-import { useJobStore } from '../../store/jobStore';
-import { useWebSocket } from '../../hooks/useWebSocket';
+import { useRef, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useJobs, usePrinters, queryKeys } from '../../api/queries';
+import { releaseJob, cancelJob, deleteJob, reprintJob } from '../../api/printer';
+import { assignJobPrinter } from '../../api/printers';
+import { applyJobEvent } from '../../hooks/useRealtimeBridge';
 import { getJobDownloadUrl, getJobPreviewUrl } from '../../api/scanner';
-import { listPrinters, assignJobPrinter } from '../../api/printers';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
 import FilePreviewModal from '../common/FilePreviewModal';
 import { useToast } from '../../hooks/useToast';
-import type { PrintJob, ManagedPrinter, WSMessage } from '../../types';
+import type { PrintJob, ManagedPrinter } from '../../types';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -36,26 +38,27 @@ const sourceColors: Record<string, string> = {
   test_page: 'bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-400',
 };
 
-function PrinterSelector({ job, printers, onAssigned }: { job: PrintJob; printers: ManagedPrinter[]; onAssigned: () => void }) {
+function PrinterSelector({ job, printers }: { job: PrintJob; printers: ManagedPrinter[] }) {
   const [selected, setSelected] = useState<number | ''>(job.printer_id ?? '');
-  const [saving, setSaving] = useState(false);
   const toast = useToast();
+  const queryClient = useQueryClient();
 
   const physicalPrinters = printers.filter((p) => !p.is_network_queue);
 
+  // assignJobPrinter returns void (no job payload), so invalidate the list
+  // rather than upsert.
+  const assignMutation = useMutation({
+    mutationFn: (printerId: number) => assignJobPrinter(job.id, printerId),
+    meta: { suppressGlobalError: true },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.jobs.list() }),
+    onError: () => toast.show('Failed to assign printer'),
+  });
+
   if (physicalPrinters.length <= 1) return null;
 
-  const handleAssign = async () => {
+  const handleAssign = () => {
     if (!selected) return;
-    setSaving(true);
-    try {
-      await assignJobPrinter(job.id, Number(selected));
-      onAssigned();
-    } catch {
-      toast.show('Failed to assign printer');
-    } finally {
-      setSaving(false);
-    }
+    assignMutation.mutate(Number(selected));
   };
 
   return (
@@ -72,8 +75,8 @@ function PrinterSelector({ job, printers, onAssigned }: { job: PrintJob; printer
         ))}
       </select>
       {selected !== (job.printer_id ?? '') && (
-        <Button size="sm" variant="ghost" onClick={handleAssign} disabled={saving}>
-          {saving ? '…' : 'Move'}
+        <Button size="sm" variant="ghost" onClick={handleAssign} disabled={assignMutation.isPending}>
+          {assignMutation.isPending ? '…' : 'Move'}
         </Button>
       )}
     </div>
@@ -81,10 +84,13 @@ function PrinterSelector({ job, printers, onAssigned }: { job: PrintJob; printer
 }
 
 export default function JobQueue() {
-  const { jobs, loading, fetchJobs, upsertJob, removeJob, releaseJob, cancelJob, deleteJob, reprintJob } = useJobStore();
+  const queryClient = useQueryClient();
+  const jobsQuery = useJobs();
+  const printersQuery = usePrinters();
+  const jobs = jobsQuery.data?.jobs ?? [];
+  const printers = printersQuery.data ?? [];
   const toast = useToast();
   const [previewJob, setPreviewJob] = useState<PrintJob | null>(null);
-  const [printers, setPrinters] = useState<ManagedPrinter[]>([]);
   const [pinJobId, setPinJobId] = useState<number | null>(null);
   const [pinValue, setPinValue] = useState('');
   const [pinError, setPinError] = useState('');
@@ -92,28 +98,36 @@ export default function JobQueue() {
   const [busyJobId, setBusyJobId] = useState<number | null>(null);
   const pinInputRef = useRef<HTMLInputElement>(null);
 
-  // Apply job WS events incrementally instead of refetching the whole list.
-  // JobQueue renders every job in the store (no per-status filter), so any
-  // job_created/job_updated payload applies directly.
-  const handleJobEvent = useCallback((msg: WSMessage) => {
-    if (msg.type === 'job_created' || msg.type === 'job_updated') {
-      upsertJob(msg.data as unknown as PrintJob);
-    } else if (msg.type === 'job_deleted') {
-      const id = (msg.data as { id?: number }).id;
-      if (typeof id === 'number') removeJob(id);
-    }
-    // Other event types (e.g. copy_progress) don't change the job list — ignore.
-  }, [upsertJob, removeJob]);
+  // Job actions return the updated job. Upsert it into the cache via the same
+  // guarded updater the WS bridge uses, so the broadcast that follows is an
+  // idempotent same-id replace (no total drift). NO blanket invalidation.
+  const upsertJobIntoCache = (job: PrintJob) =>
+    applyJobEvent(queryClient, {
+      type: 'job_updated',
+      data: job as unknown as Record<string, unknown>,
+    });
 
-  useWebSocket({
-    url: '/api/system/ws/jobs',
-    onMessage: handleJobEvent,
+  const releaseMutation = useMutation({
+    mutationFn: ({ id, pin }: { id: number; pin?: string }) => releaseJob(id, pin),
+    meta: { suppressGlobalError: true },
+    onSuccess: upsertJobIntoCache,
   });
-
-  useEffect(() => {
-    fetchJobs();
-    listPrinters().then(setPrinters).catch(() => {});
-  }, [fetchJobs]);
+  const cancelMutation = useMutation({
+    mutationFn: (id: number) => cancelJob(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: upsertJobIntoCache,
+  });
+  const reprintMutation = useMutation({
+    mutationFn: (id: number) => reprintJob(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: upsertJobIntoCache,
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => deleteJob(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: (_result, id) =>
+      applyJobEvent(queryClient, { type: 'job_deleted', data: { id } }),
+  });
 
   const handleRelease = async (job: PrintJob) => {
     if (job.has_pin) {
@@ -124,7 +138,7 @@ export default function JobQueue() {
     }
     setBusyJobId(job.id);
     try {
-      await releaseJob(job.id);
+      await releaseMutation.mutateAsync({ id: job.id });
     } catch {
       toast.show('Failed to release job');
     } finally {
@@ -136,7 +150,7 @@ export default function JobQueue() {
     if (!pinJobId || pinSubmitting) return;
     setPinSubmitting(true);
     try {
-      await releaseJob(pinJobId, pinValue);
+      await releaseMutation.mutateAsync({ id: pinJobId, pin: pinValue });
       setPinJobId(null);
     } catch {
       setPinError('Invalid PIN');
@@ -146,7 +160,7 @@ export default function JobQueue() {
     }
   };
 
-  const handleAction = async (action: () => Promise<void>, jobId: number) => {
+  const handleAction = async (action: () => Promise<unknown>, jobId: number) => {
     setBusyJobId(jobId);
     try {
       await action();
@@ -158,7 +172,7 @@ export default function JobQueue() {
     }
   };
 
-  if (loading && jobs.length === 0) {
+  if (jobsQuery.isLoading && jobs.length === 0) {
     return <p className="text-gray-500 text-sm">Loading jobs...</p>;
   }
 
@@ -196,13 +210,13 @@ export default function JobQueue() {
             </div>
             <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">
               {formatSize(job.file_size)} &middot; {job.copies} cop{job.copies > 1 ? 'ies' : 'y'}
-              {job.duplex && ' \u00b7 Duplex'}
-              {' \u00b7 '}{job.media}
-              {' \u00b7 '}{formatTime(job.created_at)}
+              {job.duplex && ' · Duplex'}
+              {' · '}{job.media}
+              {' · '}{formatTime(job.created_at)}
             </div>
             {job.status === 'held' && printers.length > 1 && (
               <div className="mt-1.5">
-                <PrinterSelector job={job} printers={printers} onAssigned={fetchJobs} />
+                <PrinterSelector job={job} printers={printers} />
               </div>
             )}
             {job.error_message && (
@@ -217,16 +231,16 @@ export default function JobQueue() {
               </Button>
             )}
             {['held', 'printing'].includes(job.status) && (
-              <Button size="sm" variant="secondary" onClick={() => handleAction(() => cancelJob(job.id), job.id)} disabled={busyJobId === job.id}>
+              <Button size="sm" variant="secondary" onClick={() => handleAction(() => cancelMutation.mutateAsync(job.id), job.id)} disabled={busyJobId === job.id}>
                 Cancel
               </Button>
             )}
             {['completed', 'failed', 'cancelled'].includes(job.status) && (
               <>
-                <Button size="sm" variant="secondary" onClick={() => handleAction(() => reprintJob(job.id), job.id)} disabled={busyJobId === job.id}>
+                <Button size="sm" variant="secondary" onClick={() => handleAction(() => reprintMutation.mutateAsync(job.id), job.id)} disabled={busyJobId === job.id}>
                   {busyJobId === job.id ? 'Reprinting...' : 'Reprint'}
                 </Button>
-                <Button size="sm" variant="danger" onClick={() => handleAction(() => deleteJob(job.id), job.id)} disabled={busyJobId === job.id}>
+                <Button size="sm" variant="danger" onClick={() => handleAction(() => deleteMutation.mutateAsync(job.id), job.id)} disabled={busyJobId === job.id}>
                   Delete
                 </Button>
               </>

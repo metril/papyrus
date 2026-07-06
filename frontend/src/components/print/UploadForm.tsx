@@ -1,9 +1,11 @@
 import { useState, useCallback } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDropzone, type FileRejection } from 'react-dropzone';
 import Button from '../common/Button';
 import Toggle from '../common/Toggle';
 import { uploadPrintJob } from '../../api/printer';
-import { useJobStore } from '../../store/jobStore';
+import { applyJobEvent } from '../../hooks/useRealtimeBridge';
+import type { PrintJob } from '../../types';
 
 const ACCEPTED_TYPES = {
   'application/pdf': ['.pdf'],
@@ -28,7 +30,19 @@ export default function UploadForm() {
   const [media, setMedia] = useState('A4');
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const fetchJobs = useJobStore((s) => s.fetchJobs);
+  const queryClient = useQueryClient();
+
+  // A fresh upload is a new job: prepend it into the cache (grow total). The
+  // WS `job_created` broadcast that follows is an idempotent same-id replace.
+  const uploadMutation = useMutation({
+    mutationFn: (file: File) => uploadPrintJob(file, { copies, duplex, media, hold: true }),
+    meta: { suppressGlobalError: true },
+    onSuccess: (job: PrintJob) =>
+      applyJobEvent(queryClient, {
+        type: 'job_created',
+        data: job as unknown as Record<string, unknown>,
+      }),
+  });
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     setFiles((prev) => {
@@ -61,10 +75,9 @@ export default function UploadForm() {
 
     try {
       for (const file of files) {
-        await uploadPrintJob(file, { copies, duplex, media, hold: true });
+        await uploadMutation.mutateAsync(file);
       }
       setFiles([]);
-      await fetchJobs();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Upload failed';
       setError(message);
