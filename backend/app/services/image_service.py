@@ -7,6 +7,8 @@ import os
 import numpy as np
 from PIL import Image, ImageEnhance
 
+from app.exceptions import PapyrusError
+
 logger = logging.getLogger(__name__)
 
 # Longest-side cap for the downsampled image used during skew detection.
@@ -15,8 +17,8 @@ logger = logging.getLogger(__name__)
 _DESKEW_MAX_DIM = 1000
 
 
-class ImageError(Exception):
-    pass
+class ImageError(PapyrusError):
+    status_code = 502
 
 
 def detect_skew_angle(img: Image.Image) -> float:

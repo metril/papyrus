@@ -1,11 +1,12 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
 
+from app.exceptions import ExternalServiceError
 from app.services.crypto import decrypt_value
 from app.services.http_client import get_http_client
 
 
-class CloudError(Exception):
+class CloudError(ExternalServiceError):
     pass
 
 

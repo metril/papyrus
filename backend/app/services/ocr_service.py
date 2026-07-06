@@ -4,8 +4,10 @@ import asyncio
 import os
 import shutil
 
+from app.exceptions import ExternalServiceError
 
-class OCRError(Exception):
+
+class OCRError(ExternalServiceError):
     pass
 
 

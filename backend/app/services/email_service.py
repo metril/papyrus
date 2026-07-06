@@ -4,10 +4,11 @@ from email.mime.text import MIMEText
 
 import aiosmtplib
 
+from app.exceptions import ExternalServiceError
 from app.services.crypto import decrypt_value
 
 
-class EmailError(Exception):
+class EmailError(ExternalServiceError):
     pass
 
 

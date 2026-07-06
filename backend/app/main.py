@@ -9,6 +9,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import FileResponse
 
 from app.config import settings
+from app.exceptions import register_exception_handlers
 from app.logging_config import setup_logging
 from app.middleware import RequestIDMiddleware
 from app.routers import (
@@ -309,6 +310,12 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Global exception handlers: domain PapyrusError -> its status_code + curated
+# detail, cups.IPPError -> 503, and a catch-all that logs the traceback and
+# returns a generic 500 so internal detail never leaks to clients. All include
+# the current request_id.
+register_exception_handlers(app)
 
 # Session middleware for OIDC (must be added before CORS)
 app.add_middleware(SessionMiddleware, secret_key=settings.session_secret)

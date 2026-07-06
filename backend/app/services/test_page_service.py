@@ -15,6 +15,7 @@ import img2pdf
 from PIL import Image, ImageDraw, ImageFont
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.exceptions import ExternalServiceError
 from app.models import Printer, PrintJob, User
 from app.schemas import serialize_print_job
 from app.services.cups_service import CupsService
@@ -27,11 +28,12 @@ _PAGE_HEIGHT = 1754
 _MARGIN = 100
 
 
-class TestPageError(Exception):
+class TestPageError(ExternalServiceError):
     """Raised when CUPS fails to print the rendered test page.
 
     The PrintJob row is already marked ``failed`` (and broadcast) by the time
-    this is raised; the router maps it to a 502.
+    this is raised; ``ExternalServiceError`` maps it to a 502 via the global
+    handler.
     """
 
 

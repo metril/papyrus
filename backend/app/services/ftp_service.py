@@ -5,12 +5,13 @@ import ftplib
 import logging
 import os
 
+from app.exceptions import ExternalServiceError
 from app.services.crypto import decrypt_value
 
 logger = logging.getLogger(__name__)
 
 
-class FTPError(Exception):
+class FTPError(ExternalServiceError):
     pass
 
 

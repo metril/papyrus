@@ -4,10 +4,11 @@ from datetime import datetime, timezone
 from smb.smb_structs import OperationFailure
 from smb.SMBConnection import SMBConnection
 
+from app.exceptions import ExternalServiceError
 from app.services.crypto import decrypt_value
 
 
-class SMBError(Exception):
+class SMBError(ExternalServiceError):
     pass
 
 

@@ -5,11 +5,11 @@ import uuid
 
 from starlette.datastructures import UploadFile
 
+# Re-exported for backward compatibility: the canonical definition now lives in
+# app.exceptions so it participates in the domain-exception hierarchy (413).
+from app.exceptions import UploadTooLargeError
+
 _STREAM_CHUNK_BYTES = 1024 * 1024  # 1 MiB
-
-
-class UploadTooLargeError(Exception):
-    """Raised by save_upload_streaming when an upload exceeds its size cap."""
 
 
 async def save_upload_streaming(upload_file: UploadFile, dest_path: str, max_bytes: int) -> int:

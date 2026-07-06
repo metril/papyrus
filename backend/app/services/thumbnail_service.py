@@ -24,6 +24,8 @@ import uuid
 
 from PIL import Image
 
+from app.exceptions import PapyrusError
+
 THUMBNAIL_MAX_DIM = 320
 THUMBNAIL_SUFFIX = ".thumb.jpg"
 THUMBNAIL_JPEG_QUALITY = 80
@@ -32,8 +34,8 @@ _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".gif"}
 _PDF_RENDER_DPI = 150
 
 
-class ThumbnailError(Exception):
-    pass
+class ThumbnailError(PapyrusError):
+    status_code = 502
 
 
 def _thumbnail_path(path: str) -> str:

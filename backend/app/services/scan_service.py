@@ -7,11 +7,13 @@ from typing import Awaitable, Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.exceptions import PapyrusError
+
 _DEFAULT_SCAN_DIR = "/app/data/scans"
 
 
-class ScanError(Exception):
-    pass
+class ScanError(PapyrusError):
+    status_code = 502
 
 
 class ScanService:

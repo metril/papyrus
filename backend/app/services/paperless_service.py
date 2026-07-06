@@ -1,10 +1,11 @@
 """Paperless-ngx integration service."""
 
+from app.exceptions import ExternalServiceError
 from app.services.crypto import decrypt_value
 from app.services.http_client import get_http_client
 
 
-class PaperlessError(Exception):
+class PaperlessError(ExternalServiceError):
     pass
 
 

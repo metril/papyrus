@@ -1,9 +1,10 @@
+from app.exceptions import PapyrusError
 from app.services.cups_service import cups_service
 from app.services.scan_service import ScanError, scan_service
 
 
-class CopyError(Exception):
-    pass
+class CopyError(PapyrusError):
+    status_code = 502
 
 
 class CopyService:
