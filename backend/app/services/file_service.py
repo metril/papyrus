@@ -75,17 +75,24 @@ def detect_mime_type(filename: str) -> str:
 
 
 def cleanup_file(filepath: str | None) -> None:
-    """Delete a file and its preview/thumbnail caches if they exist."""
+    """Delete a file and its preview/thumbnail caches if they exist.
+
+    Covers the office-doc chain too: `<file>.preview.pdf` (the cached
+    LibreOffice conversion) and `<file>.preview.pdf.thumb.jpg` (the thumbnail
+    generated *from* that preview PDF), not just `<file>.thumb.jpg`.
+    """
     if not filepath:
         return
-    try:
-        if os.path.exists(filepath):
-            os.unlink(filepath)
-        preview = filepath + ".preview.pdf"
-        if os.path.exists(preview):
-            os.unlink(preview)
-        thumbnail = filepath + ".thumb.jpg"
-        if os.path.exists(thumbnail):
-            os.unlink(thumbnail)
-    except OSError:
-        pass
+    preview = filepath + ".preview.pdf"
+    derivatives = (
+        filepath,
+        preview,
+        filepath + ".thumb.jpg",
+        preview + ".thumb.jpg",
+    )
+    for path in derivatives:
+        try:
+            if os.path.exists(path):
+                os.unlink(path)
+        except OSError:
+            pass

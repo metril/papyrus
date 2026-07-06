@@ -13,12 +13,26 @@ real AppConfig rows (committed via the ``db`` fixture, with
 — the same mechanism test_api_settings.py uses for settings reads/writes.
 """
 import io
+import os
+import shutil
 
-from app.models import AppConfig, Printer
+import pytest
+from PIL import Image
+
+from app.exceptions import ExternalServiceError
+from app.models import AppConfig, Printer, PrintJob
 from app.routers import jobs as jobs_router
 from app.services import settings_cache
 
 _MINIMAL_PDF = b"%PDF-1.4\n1 0 obj\n<< >>\nendobj\ntrailer\n<< >>\n%%EOF\n"
+
+
+def _real_pdf_bytes(size: tuple[int, int] = (850, 1100), color=(20, 120, 200)) -> bytes:
+    """A syntactically real single-page PDF that ghostscript can render — unlike
+    `_MINIMAL_PDF`, which is just enough bytes to pass upload/mime sniffing."""
+    buf = io.BytesIO()
+    Image.new("RGB", size, color=color).save(buf, format="PDF")
+    return buf.getvalue()
 
 
 async def _seed_setting(db, key: str, value: str) -> None:
@@ -250,3 +264,180 @@ async def test_ingest_network_job_with_auto_release_printer_completes(
     fake = _FakeCupsService.last_instance
     assert fake is not None
     assert fake.released == [777]
+
+
+# --------------------------------------------------------------------------- #
+# Thumbnail endpoint (GET /{job_id}/thumbnail)
+# --------------------------------------------------------------------------- #
+async def test_job_thumbnail_404_when_job_missing(user_client):
+    resp = await user_client.get("/api/jobs/999999/thumbnail")
+    assert resp.status_code == 404
+
+
+@pytest.mark.skipif(shutil.which("gs") is None, reason="ghostscript not installed")
+async def test_pdf_job_thumbnail_returns_jpeg_and_is_cached_on_repeat(
+    db, user_client, tmp_path
+):
+    await _seed_upload_dir(db, tmp_path)
+    upload_resp = await user_client.post(
+        "/api/jobs/upload", files=_pdf_file(data=_real_pdf_bytes())
+    )
+    job_id = upload_resp.json()["id"]
+
+    resp = await user_client.get(f"/api/jobs/{job_id}/thumbnail")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/jpeg"
+    assert resp.headers["cache-control"] == "private, max-age=86400"
+
+    thumb_file = next(f for f in tmp_path.iterdir() if f.name.endswith(".thumb.jpg"))
+    first_mtime = thumb_file.stat().st_mtime
+
+    # Repeat request must reuse the cached .thumb.jpg, not regenerate it —
+    # get_or_create_thumbnail's mtime check short-circuits regeneration.
+    resp2 = await user_client.get(f"/api/jobs/{job_id}/thumbnail")
+    assert resp2.status_code == 200
+    assert thumb_file.stat().st_mtime == first_mtime
+
+
+@pytest.mark.skipif(shutil.which("gs") is None, reason="ghostscript not installed")
+async def test_office_job_thumbnail_converts_and_caches_preview_pdf(
+    db, user_client, tmp_path, monkeypatch
+):
+    """The thumbnail endpoint shares `_ensure_preview_pdf` with `/preview`: an
+    office-doc job gets converted to PDF (cached as `.preview.pdf`) before
+    being thumbnailed. `convert_to_pdf` itself is faked here — exercising real
+    LibreOffice is `test_convert_service.py`'s job — but it writes a real
+    single-page PDF so the ghostscript thumbnail render underneath is real.
+    """
+    doc_path = tmp_path / "report.docx"
+    doc_path.write_bytes(b"not a real docx; convert_to_pdf is faked below")
+
+    job = PrintJob(
+        title="report.docx",
+        filename="report.docx",
+        filepath=str(doc_path),
+        file_size=doc_path.stat().st_size,
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        status="held",
+        source_type="upload",
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    converted_path = tmp_path / "converted_output.pdf"
+    converted_path.write_bytes(_real_pdf_bytes())
+
+    calls = []
+
+    async def _fake_convert_to_pdf(input_path, output_dir):
+        calls.append((input_path, output_dir))
+        return str(converted_path)
+
+    monkeypatch.setattr(jobs_router, "convert_to_pdf", _fake_convert_to_pdf)
+
+    resp = await user_client.get(f"/api/jobs/{job.id}/thumbnail")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/jpeg"
+    assert resp.headers["cache-control"] == "private, max-age=86400"
+    assert calls == [(str(doc_path), str(tmp_path))]
+
+    preview_path = str(doc_path) + ".preview.pdf"
+    assert os.path.exists(preview_path)  # cached for reuse by /preview too
+    assert os.path.exists(preview_path + ".thumb.jpg")
+    assert not os.path.exists(converted_path)  # renamed into the cache, not copied
+
+
+# --------------------------------------------------------------------------- #
+# _ensure_preview_pdf unit tests — plain job-like objects, no DB/HTTP needed
+# --------------------------------------------------------------------------- #
+class _JobStub:
+    def __init__(self, mime_type: str, filepath: str):
+        self.mime_type = mime_type
+        self.filepath = filepath
+
+
+async def _unreachable_convert_to_pdf(*args, **kwargs):
+    raise AssertionError("convert_to_pdf must not be called for this branch")
+
+
+async def test_ensure_preview_pdf_passes_through_pdf_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs_router, "convert_to_pdf", _unreachable_convert_to_pdf)
+    job = _JobStub(mime_type="application/pdf", filepath=str(tmp_path / "a.pdf"))
+
+    result = await jobs_router._ensure_preview_pdf(job)
+
+    assert result == job.filepath
+
+
+async def test_ensure_preview_pdf_passes_through_image_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setattr(jobs_router, "convert_to_pdf", _unreachable_convert_to_pdf)
+    job = _JobStub(mime_type="image/jpeg", filepath=str(tmp_path / "a.jpg"))
+
+    result = await jobs_router._ensure_preview_pdf(job)
+
+    assert result == job.filepath
+
+
+async def test_ensure_preview_pdf_converts_office_doc_and_caches_result(tmp_path, monkeypatch):
+    src = tmp_path / "doc.docx"
+    src.write_bytes(b"fake docx")
+    converted = tmp_path / "doc.pdf"
+    converted.write_bytes(b"%PDF-fake-converted%")
+
+    calls = []
+
+    async def _fake_convert(input_path, output_dir):
+        calls.append((input_path, output_dir))
+        return str(converted)
+
+    monkeypatch.setattr(jobs_router, "convert_to_pdf", _fake_convert)
+    job = _JobStub(
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filepath=str(src),
+    )
+
+    result = await jobs_router._ensure_preview_pdf(job)
+
+    expected_preview = str(src) + ".preview.pdf"
+    assert result == expected_preview
+    assert os.path.exists(expected_preview)
+    assert not os.path.exists(converted)  # renamed, not copied
+    assert calls == [(str(src), str(tmp_path))]
+
+
+async def test_ensure_preview_pdf_reuses_cached_preview_without_reconverting(
+    tmp_path, monkeypatch
+):
+    src = tmp_path / "doc.docx"
+    src.write_bytes(b"fake docx")
+    preview_path = str(src) + ".preview.pdf"
+    with open(preview_path, "wb") as f:
+        f.write(b"already-cached")
+
+    monkeypatch.setattr(jobs_router, "convert_to_pdf", _unreachable_convert_to_pdf)
+    job = _JobStub(
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filepath=str(src),
+    )
+
+    result = await jobs_router._ensure_preview_pdf(job)
+
+    assert result == preview_path
+
+
+async def test_ensure_preview_pdf_wraps_conversion_failure(tmp_path, monkeypatch):
+    src = tmp_path / "doc.docx"
+    src.write_bytes(b"fake docx")
+
+    async def _fail(*args, **kwargs):
+        raise RuntimeError("libreoffice exploded")
+
+    monkeypatch.setattr(jobs_router, "convert_to_pdf", _fail)
+    job = _JobStub(
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filepath=str(src),
+    )
+
+    with pytest.raises(ExternalServiceError):
+        await jobs_router._ensure_preview_pdf(job)

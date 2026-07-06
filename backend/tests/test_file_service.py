@@ -7,6 +7,7 @@ from starlette.datastructures import UploadFile
 
 from app.services.file_service import (
     UploadTooLargeError,
+    cleanup_file,
     detect_mime_type,
     sanitize_filename,
     save_upload_streaming,
@@ -113,3 +114,54 @@ async def test_save_upload_streaming_read_error_propagates_and_removes_partial(t
         await save_upload_streaming(_FailingUpload(b"x" * 100), str(dest), max_bytes=1000)
 
     assert not os.path.exists(dest)
+
+
+# --------------------------------------------------------------------------- #
+# cleanup_file
+# --------------------------------------------------------------------------- #
+def test_cleanup_file_removes_original_and_thumbnail(tmp_path):
+    original = tmp_path / "scan.png"
+    original.write_bytes(b"file")
+    thumb = tmp_path / "scan.png.thumb.jpg"
+    thumb.write_bytes(b"thumb")
+
+    cleanup_file(str(original))
+
+    assert not original.exists()
+    assert not thumb.exists()
+
+
+def test_cleanup_file_removes_office_preview_and_its_thumbnail(tmp_path):
+    """Office-doc jobs get a `.preview.pdf` cache (the LibreOffice conversion)
+    and, once thumbnailed, a `.preview.pdf.thumb.jpg` derived from *that* —
+    both must go, not just `<file>.thumb.jpg`."""
+    original = tmp_path / "report.docx"
+    original.write_bytes(b"file")
+    preview = tmp_path / "report.docx.preview.pdf"
+    preview.write_bytes(b"preview")
+    preview_thumb = tmp_path / "report.docx.preview.pdf.thumb.jpg"
+    preview_thumb.write_bytes(b"thumb")
+
+    cleanup_file(str(original))
+
+    assert not original.exists()
+    assert not preview.exists()
+    assert not preview_thumb.exists()
+
+
+def test_cleanup_file_is_noop_for_none():
+    cleanup_file(None)  # must not raise
+
+
+def test_cleanup_file_ignores_missing_derivatives(tmp_path):
+    original = tmp_path / "solo.pdf"
+    original.write_bytes(b"file")
+
+    cleanup_file(str(original))  # no .preview.pdf / .thumb.jpg present — must not raise
+
+    assert not original.exists()
+
+
+def test_cleanup_file_is_noop_when_nothing_exists(tmp_path):
+    missing = tmp_path / "never_existed.pdf"
+    cleanup_file(str(missing))  # must not raise

@@ -37,6 +37,7 @@ from app.services.scan_service import (
 )
 from app.services.smb_service import smb_service
 from app.services.thumbnail_service import (
+    THUMBNAIL_CACHE_CONTROL,
     get_or_create_thumbnail,
     invalidate_thumbnail,
 )
@@ -316,6 +317,7 @@ async def get_scan_thumbnail(
         thumb_path,
         media_type="image/jpeg",
         content_disposition_type="inline",
+        headers={"Cache-Control": THUMBNAIL_CACHE_CONTROL},
     )
 
 

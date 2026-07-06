@@ -30,6 +30,11 @@ THUMBNAIL_MAX_DIM = 320
 THUMBNAIL_SUFFIX = ".thumb.jpg"
 THUMBNAIL_JPEG_QUALITY = 80
 
+# Thumbnails are content-addressed by file path, and jobs/scans are immutable
+# once created (mutating endpoints call invalidate_thumbnail), so a 24h
+# private cache is safe for both the job and scan thumbnail endpoints.
+THUMBNAIL_CACHE_CONTROL = "private, max-age=86400"
+
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".tif", ".bmp", ".gif"}
 _PDF_RENDER_DPI = 150
 

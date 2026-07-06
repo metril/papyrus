@@ -35,6 +35,7 @@ from app.services.file_service import (
     sanitize_filename,
     save_upload_streaming,
 )
+from app.services.thumbnail_service import THUMBNAIL_CACHE_CONTROL, get_or_create_thumbnail
 from app.services.webhook_service import dispatch_webhook
 from app.services.ws_manager import ws_manager
 
@@ -325,6 +326,33 @@ async def download_job_file(
     )
 
 
+async def _ensure_preview_pdf(job: PrintJob) -> str:
+    """Return a PDF path to use as the preview/thumbnail source for `job`.
+
+    PDF and image jobs are returned unchanged (`job.filepath`). Office docs
+    are converted to PDF via LibreOffice and cached alongside the original as
+    `<filepath>.preview.pdf` so repeat callers (preview endpoint, thumbnail
+    endpoint) reuse the same converted file instead of reconverting.
+
+    Raises:
+        ExternalServiceError: if the LibreOffice conversion fails.
+    """
+    if job.mime_type not in CONVERTIBLE_MIMES:
+        return job.filepath
+
+    preview_path = job.filepath + ".preview.pdf"
+    if not os.path.exists(preview_path):
+        try:
+            output_dir = os.path.dirname(job.filepath)
+            converted = await convert_to_pdf(job.filepath, output_dir)
+            os.rename(converted, preview_path)
+        except RuntimeError as e:
+            raise ExternalServiceError(
+                "Converting the document for preview failed."
+            ) from e
+    return preview_path
+
+
 @router.get("/{job_id}/preview")
 async def preview_job_file(
     job_id: int,
@@ -349,16 +377,7 @@ async def preview_job_file(
         )
 
     # Office docs: convert to PDF, cache as .preview.pdf
-    preview_path = job.filepath + ".preview.pdf"
-    if not os.path.exists(preview_path):
-        try:
-            output_dir = os.path.dirname(job.filepath)
-            converted = await convert_to_pdf(job.filepath, output_dir)
-            os.rename(converted, preview_path)
-        except RuntimeError as e:
-            raise ExternalServiceError(
-                "Converting the document for preview failed."
-            ) from e
+    preview_path = await _ensure_preview_pdf(job)
 
     pdf_name = os.path.splitext(job.filename)[0] + ".pdf"
     return FileResponse(
@@ -366,6 +385,41 @@ async def preview_job_file(
         filename=pdf_name,
         media_type="application/pdf",
         content_disposition_type="inline",
+    )
+
+
+@router.get("/{job_id}/thumbnail")
+async def get_job_thumbnail(
+    job_id: int,
+    user: User = Depends(require_permission("print")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return a small cached preview (~320px) of a held job's file.
+
+    PDF and image jobs are thumbnailed directly from `job.filepath`. Office
+    docs are converted to PDF first (via `_ensure_preview_pdf`, sharing the
+    same `.preview.pdf` cache as `/preview`) before being thumbnailed.
+    Generated on first request and reused after.
+    """
+    result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not job.filepath or not os.path.exists(job.filepath):
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    source = await _ensure_preview_pdf(job)
+
+    try:
+        thumb_path = await get_or_create_thumbnail(source)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    return FileResponse(
+        thumb_path,
+        media_type="image/jpeg",
+        content_disposition_type="inline",
+        headers={"Cache-Control": THUMBNAIL_CACHE_CONTROL},
     )
 
 
