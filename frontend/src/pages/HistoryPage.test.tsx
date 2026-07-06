@@ -57,13 +57,15 @@ describe('HistoryPage', () => {
       http.get('/api/scanner/scans', () => HttpResponse.json({ scans: [scan], total: 1 })),
     );
 
-    render(<HistoryPage />, { wrapper: makeWrapper() });
+    const { container } = render(<HistoryPage />, { wrapper: makeWrapper() });
 
-    expect(screen.getByText('Loading history...')).toBeInTheDocument();
+    // Loading state is now a row-shaped Skeleton (no text) rather than a
+    // "Loading history..." string; assert on its shimmer marker instead.
+    expect(container.querySelector('.skeleton-shimmer')).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByText('doc.pdf')).toBeInTheDocument());
     expect(screen.getByText('PDF 300 DPI')).toBeInTheDocument();
-    expect(screen.queryByText('Loading history...')).not.toBeInTheDocument();
+    expect(container.querySelector('.skeleton-shimmer')).not.toBeInTheDocument();
   });
 
   it('bulk-deletes selected rows: fires both bulk-delete POSTs and refetches to empty', async () => {
@@ -105,13 +107,13 @@ describe('HistoryPage', () => {
     const checkboxes = screen.getAllByRole('checkbox');
     await user.click(checkboxes[0]);
 
-    await user.click(screen.getByRole('button', { name: 'Delete Selected (2)' }));
+    await user.click(screen.getByRole('button', { name: 'Delete selected (2)' }));
 
     await waitFor(() => expect(jobsPostBody).toEqual({ ids: [1] }));
     expect(scansPostBody).toEqual({ scan_ids: ['scan-abc'] });
 
     await waitFor(() =>
-      expect(screen.getByText('No items match your filters.')).toBeInTheDocument()
+      expect(screen.getByText('Nothing here yet')).toBeInTheDocument()
     );
     expect(screen.queryByText('doc.pdf')).not.toBeInTheDocument();
     expect(screen.queryByText('PDF 300 DPI')).not.toBeInTheDocument();

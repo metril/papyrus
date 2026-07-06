@@ -1,11 +1,15 @@
 import { useState, useMemo, useCallback } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { History, SearchX, Trash2 } from 'lucide-react';
 import { useJobs, useScans, queryKeys } from '../api/queries';
 import { deleteJob, bulkDeleteJobs } from '../api/printer';
 import { deleteScan, bulkDeleteScans, getScanDownloadUrl, getJobDownloadUrl, getJobPreviewUrl } from '../api/scanner';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import FilePreviewModal from '../components/common/FilePreviewModal';
+import Skeleton from '../components/common/Skeleton';
+import EmptyState from '../components/common/EmptyState';
+import ErrorState from '../components/common/ErrorState';
 import HistoryRow from '../components/history/HistoryRow';
 import type { PrintJob, ScanJob } from '../types';
 
@@ -74,7 +78,8 @@ export default function HistoryPage() {
   // Realtime updates arrive via the app-wide WS→Query bridge (mounted in
   // AppShell), which upserts into queryKeys.jobs.list() / queryKeys.scans.list()
   // as events come in — this page just renders whatever's in the cache.
-  const loading = jobsQuery.isLoading || scansQuery.isLoading;
+  const loading = jobsQuery.isPending || scansQuery.isPending;
+  const hasError = jobsQuery.isError || scansQuery.isError;
 
   const [tab, setTab] = useState<Tab>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -212,7 +217,7 @@ export default function HistoryPage() {
               onClick={() => setTab(t)}
               className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                 tab === t
-                  ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300'
+                  ? 'bg-ink-100 text-ink-700 dark:bg-ink-900/40 dark:text-ink-300'
                   : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
               }`}
             >
@@ -254,25 +259,49 @@ export default function HistoryPage() {
           onChange={(e) => setSearch(e.target.value)}
           className="px-3 py-1.5 rounded-lg text-sm border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-300 placeholder-gray-400 w-48"
         />
-
-        {/* Bulk actions */}
-        {someSelected && (
-          <Button
-            size="sm"
-            variant="danger"
-            onClick={handleBulkDelete}
-            disabled={bulkDeleteMutation.isPending}
-          >
-            {bulkDeleteMutation.isPending ? 'Deleting...' : `Delete Selected (${selected.size})`}
-          </Button>
-        )}
       </div>
+
+      {/* Bulk-action bar: a rule-perf top edge sets it apart from the filter
+          bar above, appearing only while a selection is active. */}
+      {someSelected && (
+        <div className="relative rounded-lg bg-gray-50 px-4 pb-3 pt-4 dark:bg-gray-800/40">
+          <hr className="rule-perf absolute inset-x-4 top-0 text-gray-300 dark:text-gray-700" />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="font-mono text-sm text-gray-600 dark:text-gray-400">
+              {selected.size} selected
+            </span>
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={handleBulkDelete}
+              disabled={bulkDeleteMutation.isPending}
+            >
+              <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+              {bulkDeleteMutation.isPending ? 'Deleting...' : `Delete selected (${selected.size})`}
+            </Button>
+          </div>
+        </div>
+      )}
 
       <Card>
         {loading ? (
-          <p className="text-gray-500 text-sm">Loading history...</p>
+          <Skeleton variant="row" count={4} />
+        ) : hasError ? (
+          <ErrorState onRetry={() => { jobsQuery.refetch(); scansQuery.refetch(); }} />
         ) : filtered.length === 0 ? (
-          <p className="text-gray-500 text-sm">No items match your filters.</p>
+          items.length === 0 ? (
+            <EmptyState
+              icon={History}
+              title="Nothing here yet"
+              hint="Print jobs and scans will show up here once you use Papyrus."
+            />
+          ) : (
+            <EmptyState
+              icon={SearchX}
+              title="No matching items"
+              hint="Try adjusting your filters or search."
+            />
+          )
         ) : (
           <div className="space-y-2">
             {/* Select all header */}
@@ -281,9 +310,9 @@ export default function HistoryPage() {
                 type="checkbox"
                 checked={allSelected}
                 onChange={toggleAll}
-                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                className="h-4 w-4 shrink-0"
               />
-              <span className="text-xs text-gray-500 dark:text-gray-400">
+              <span className="font-mono text-xs text-gray-500 dark:text-gray-400">
                 {filtered.length} item{filtered.length !== 1 ? 's' : ''}
               </span>
             </div>

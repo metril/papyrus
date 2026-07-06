@@ -1,8 +1,12 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { ChevronRight, Cloud, Eye, FileText, Folder, FolderOpen, Printer } from 'lucide-react';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import FilePreviewModal from '../components/common/FilePreviewModal';
+import Skeleton from '../components/common/Skeleton';
+import EmptyState from '../components/common/EmptyState';
+import ErrorState from '../components/common/ErrorState';
 import { queryKeys, useCloudProviders } from '../api/queries';
 import { listSmbShares, browseSmb, downloadSmbFile } from '../api/smb';
 import { uploadPrintJob } from '../api/printer';
@@ -17,14 +21,14 @@ export default function FilesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center gap-4">
         <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Files</h2>
         <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
           <button
             onClick={() => setActiveTab('network')}
             className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
               activeTab === 'network'
-                ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                ? 'bg-ink-600 text-white shadow-sm dark:bg-ink-500'
                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
             }`}
           >
@@ -34,7 +38,7 @@ export default function FilesPage() {
             onClick={() => setActiveTab('cloud')}
             className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
               activeTab === 'cloud'
-                ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                ? 'bg-ink-600 text-white shadow-sm dark:bg-ink-500'
                 : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
             }`}
           >
@@ -48,7 +52,46 @@ export default function FilesPage() {
   );
 }
 
+// --- Breadcrumb trail (shared by both browsers) ---
+
+interface Crumb {
+  label: string;
+  /** Omitted on the final (current-location) crumb — it renders as plain text. */
+  onClick?: () => void;
+}
+
+function Breadcrumb({ items }: { items: Crumb[] }) {
+  return (
+    <nav aria-label="Breadcrumb" className="flex flex-wrap items-center gap-1.5 font-mono text-xs">
+      {items.map((crumb, i) => (
+        <span key={i} className="flex items-center gap-1.5">
+          {i > 0 && (
+            <ChevronRight className="h-3 w-3 text-gray-400 dark:text-gray-600" strokeWidth={1.75} aria-hidden="true" />
+          )}
+          {crumb.onClick ? (
+            <button
+              onClick={crumb.onClick}
+              className="text-gray-500 hover:text-ink-600 dark:text-gray-400 dark:hover:text-ink-400"
+            >
+              {crumb.label}
+            </button>
+          ) : (
+            <span className="text-gray-900 dark:text-gray-100">{crumb.label}</span>
+          )}
+        </span>
+      ))}
+    </nav>
+  );
+}
+
 // --- Network (SMB) Browser ---
+
+function smbFileMeta(entry: SMBFileEntry): string {
+  const parts: string[] = [];
+  if (!entry.is_directory) parts.push(`${(entry.size / 1024).toFixed(1)} KB`);
+  if (entry.modified_at) parts.push(new Date(entry.modified_at).toLocaleDateString());
+  return parts.join(' · ');
+}
 
 function NetworkBrowser() {
   const toast = useToast();
@@ -56,7 +99,12 @@ function NetworkBrowser() {
   const [selectedShare, setSelectedShare] = useState<SMBShare | null>(null);
   const [currentPath, setCurrentPath] = useState('/');
 
-  const { data: shares = [] } = useQuery({
+  const {
+    data: shares = [],
+    isPending: sharesLoading,
+    isError: sharesError,
+    refetch: refetchShares,
+  } = useQuery({
     queryKey: queryKeys.smbShares,
     queryFn: listSmbShares,
   });
@@ -66,9 +114,10 @@ function NetworkBrowser() {
   // re-fetching.
   const {
     data: files = [],
-    isLoading: loading,
+    isPending: filesLoading,
     isError,
     error: browseError,
+    refetch: refetchBrowse,
   } = useQuery({
     queryKey: queryKeys.smbBrowse(selectedShare?.id ?? 0, currentPath),
     queryFn: () => browseSmb(selectedShare!.id, currentPath),
@@ -109,19 +158,19 @@ function NetworkBrowser() {
     }
   };
 
-  const goUp = () => {
-    if (!selectedShare || currentPath === '/') return;
-    const parent = currentPath.split('/').slice(0, -1).join('/') || '/';
-    browse(selectedShare, parent);
-  };
-
   if (!selectedShare) {
     return (
       <Card title="SMB Shares">
-        {shares.length === 0 ? (
-          <p className="text-gray-500 text-sm">
-            No shares configured. Add them in Settings.
-          </p>
+        {sharesLoading ? (
+          <Skeleton variant="row" count={3} />
+        ) : sharesError ? (
+          <ErrorState onRetry={() => refetchShares()} />
+        ) : shares.length === 0 ? (
+          <EmptyState
+            icon={FolderOpen}
+            title="No shares configured"
+            hint="Add a network share in Settings to browse it here."
+          />
         ) : (
           <div className="space-y-2">
             {shares.map((share) => (
@@ -130,10 +179,10 @@ function NetworkBrowser() {
                 onClick={() => browse(share, '/')}
                 className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-700 text-left"
               >
-                <span className="text-lg">&#128193;</span>
-                <div>
+                <Folder className="h-5 w-5 shrink-0 text-gray-400 dark:text-gray-500" strokeWidth={1.75} aria-hidden="true" />
+                <div className="min-w-0">
                   <div className="font-medium text-gray-900 dark:text-gray-100">{share.name}</div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">
+                  <div className="font-mono text-xs text-gray-500 dark:text-gray-400">
                     \\{share.server}\{share.share_name}
                   </div>
                 </div>
@@ -145,53 +194,67 @@ function NetworkBrowser() {
     );
   }
 
+  const pathSegments = currentPath.split('/').filter(Boolean);
+  const crumbs: Crumb[] = [
+    { label: 'All Shares', onClick: () => setSelectedShare(null) },
+    {
+      label: selectedShare.name,
+      onClick: pathSegments.length > 0 ? () => browse(selectedShare, '/') : undefined,
+    },
+    ...pathSegments.map((segment, i) => ({
+      label: segment,
+      onClick:
+        i < pathSegments.length - 1
+          ? () => browse(selectedShare, '/' + pathSegments.slice(0, i + 1).join('/'))
+          : undefined,
+    })),
+  ];
+
   return (
-    <Card title={`${selectedShare.name} - ${currentPath}`}>
-      <div className="space-y-2">
-        <div className="flex gap-2 mb-4">
-          <Button size="sm" variant="secondary" onClick={() => setSelectedShare(null)}>
-            All Shares
-          </Button>
-          {currentPath !== '/' && (
-            <Button size="sm" variant="ghost" onClick={goUp}>
-              Up
-            </Button>
-          )}
-        </div>
+    <Card>
+      <Breadcrumb items={crumbs} />
+      <hr className="rule-perf my-4 text-gray-300 dark:text-gray-700" />
 
-        {loading && <p className="text-gray-500 text-sm">Loading...</p>}
-        {error && <p className="text-red-600 text-sm">{error}</p>}
-
-        {files.map((entry) => (
-          <div
-            key={entry.name}
-            className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-700"
-          >
-            <button
-              onClick={() => navigateTo(entry)}
-              className="flex items-center gap-2 text-left flex-1 min-w-0"
-              disabled={!entry.is_directory}
+      {filesLoading ? (
+        <Skeleton variant="row" count={3} />
+      ) : error ? (
+        <ErrorState detail={error} onRetry={() => refetchBrowse()} />
+      ) : files.length === 0 ? (
+        <EmptyState icon={Folder} title="Empty directory" />
+      ) : (
+        <div className="space-y-2">
+          {files.map((entry) => (
+            <div
+              key={entry.name}
+              className="flex flex-col gap-3 rounded-lg border border-gray-200 p-3 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800/50 sm:flex-row sm:items-center sm:justify-between"
             >
-              <span>{entry.is_directory ? '\u{1F4C1}' : '\u{1F4C4}'}</span>
-              <span className="text-sm text-gray-900 dark:text-gray-100 truncate">{entry.name}</span>
+              <button
+                onClick={() => navigateTo(entry)}
+                className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                disabled={!entry.is_directory}
+              >
+                {entry.is_directory ? (
+                  <Folder className="h-5 w-5 shrink-0 text-gray-400 dark:text-gray-500" strokeWidth={1.75} aria-hidden="true" />
+                ) : (
+                  <FileText className="h-5 w-5 shrink-0 text-gray-400 dark:text-gray-500" strokeWidth={1.75} aria-hidden="true" />
+                )}
+                <div className="min-w-0">
+                  <div className="truncate text-sm text-gray-900 dark:text-gray-100">{entry.name}</div>
+                  {smbFileMeta(entry) && (
+                    <div className="font-mono text-xs text-gray-500 dark:text-gray-400">{smbFileMeta(entry)}</div>
+                  )}
+                </div>
+              </button>
               {!entry.is_directory && (
-                <span className="text-xs text-gray-500">
-                  {(entry.size / 1024).toFixed(1)} KB
-                </span>
+                <Button size="sm" variant="ghost" onClick={() => printMutation.mutate(entry)} className="sm:ml-4 sm:shrink-0">
+                  <Printer className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+                  Print
+                </Button>
               )}
-            </button>
-            {!entry.is_directory && (
-              <Button size="sm" variant="secondary" onClick={() => printMutation.mutate(entry)}>
-                Print
-              </Button>
-            )}
-          </div>
-        ))}
-
-        {!loading && files.length === 0 && !error && (
-          <p className="text-gray-500 text-sm">Empty directory.</p>
-        )}
-      </div>
+            </div>
+          ))}
+        </div>
+      )}
     </Card>
   );
 }
@@ -204,10 +267,62 @@ const providerLabels: Record<string, string> = {
   onedrive: 'OneDrive',
 };
 
+function formatCloudSize(bytes: number | null): string {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function cloudFileMeta(entry: CloudFileEntry): string {
+  const parts: string[] = [];
+  if (!entry.is_directory && entry.size) parts.push(formatCloudSize(entry.size));
+  if (entry.modified_at) parts.push(new Date(entry.modified_at).toLocaleDateString());
+  return parts.join(' · ');
+}
+
+interface ProviderCardProps {
+  provider: CloudProvider;
+  onSelect: (provider: CloudProvider) => void;
+}
+
+// A connected-provider tile on the shared Card anatomy (rounded-xl, border,
+// shadow) rather than the plain bordered rows used for SMB shares/files —
+// wrapped in a <button> so the whole tile is a single click target.
+function ProviderCard({ provider, onSelect }: ProviderCardProps) {
+  return (
+    <button
+      onClick={() => onSelect(provider)}
+      className="rounded-xl text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-900"
+    >
+      <Card className="transition-colors hover:border-ink-300 dark:hover:border-ink-700">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800">
+            <Cloud className="h-5 w-5 text-gray-500 dark:text-gray-400" strokeWidth={1.75} aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
+              {providerLabels[provider.provider] || provider.provider}
+            </div>
+            <div className="font-mono text-xs text-gray-500 dark:text-gray-400">
+              Connected {new Date(provider.connected_at).toLocaleDateString()}
+            </div>
+          </div>
+        </div>
+      </Card>
+    </button>
+  );
+}
+
 function CloudBrowser() {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const { data: providers = [], isLoading: loadingProviders } = useCloudProviders();
+  const {
+    data: providers = [],
+    isPending: loadingProviders,
+    isError: providersError,
+    refetch: refetchProviders,
+  } = useCloudProviders();
   const [selectedProvider, setSelectedProvider] = useState<CloudProvider | null>(null);
   const [folderStack, setFolderStack] = useState<{ id: string; name: string }[]>([]);
   const [previewFile, setPreviewFile] = useState<CloudFileEntry | null>(null);
@@ -239,8 +354,9 @@ function CloudBrowser() {
   // cache instead of re-fetching.
   const {
     data: files = [],
-    isLoading: loading,
+    isPending: filesLoading,
     isError,
+    refetch: refetchFiles,
   } = useQuery({
     queryKey: queryKeys.cloudFiles(selectedProvider?.id ?? 0, folderKey),
     queryFn: () => {
@@ -285,114 +401,113 @@ function CloudBrowser() {
     setFolderStack((prev) => [...prev, { id: entry.id, name: entry.name }]);
   };
 
-  const goUp = () => {
-    if (!selectedProvider || folderStack.length === 0) return;
-    setFolderStack((prev) => prev.slice(0, -1));
-  };
-
   const goToRoot = () => {
     setSelectedProvider(null);
     setFolderStack([]);
   };
 
-  const formatSize = (bytes: number | null): string => {
-    if (!bytes) return '';
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  };
-
   if (!selectedProvider) {
     return (
-      <Card title="Cloud Storage">
+      <div className="space-y-4">
+        <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Cloud Storage</h3>
         {loadingProviders ? (
-          <p className="text-gray-500 text-sm">Loading...</p>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {Array.from({ length: 2 }, (_, i) => (
+              <Skeleton key={i} variant="card" />
+            ))}
+          </div>
+        ) : providersError ? (
+          <ErrorState onRetry={() => refetchProviders()} />
         ) : providers.length === 0 ? (
-          <p className="text-gray-500 text-sm">
-            No cloud storage connected. Go to Settings to connect Google Drive, Dropbox, or OneDrive.
-          </p>
+          <EmptyState
+            icon={Cloud}
+            title="No cloud storage connected"
+            hint="Connect Google Drive, Dropbox, or OneDrive in Settings."
+          />
         ) : (
-          <div className="space-y-2">
+          <div className="grid gap-3 sm:grid-cols-2">
             {providers.map((p) => (
-              <button
+              <ProviderCard
                 key={p.id}
-                onClick={() => {
+                provider={p}
+                onSelect={(provider) => {
                   setFolderStack([]);
-                  setSelectedProvider(p);
+                  setSelectedProvider(provider);
                 }}
-                className="w-full flex items-center gap-3 p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-700 text-left"
-              >
-                <span className="text-lg">{p.provider === 'gdrive' ? '\u{2601}' : '\u{1F4E6}'}</span>
-                <div>
-                  <div className="font-medium text-gray-900 dark:text-gray-100">
-                    {providerLabels[p.provider] || p.provider}
-                  </div>
-                  <div className="text-xs text-gray-500 dark:text-gray-400">
-                    Connected {new Date(p.connected_at).toLocaleDateString()}
-                  </div>
-                </div>
-              </button>
+              />
             ))}
           </div>
         )}
-      </Card>
+      </div>
     );
   }
 
-  const currentFolder = folderStack.length > 0
-    ? folderStack[folderStack.length - 1].name
-    : 'Root';
+  const crumbs: Crumb[] = [
+    { label: 'All Providers', onClick: goToRoot },
+    {
+      label: providerLabels[selectedProvider.provider] || selectedProvider.provider,
+      onClick: folderStack.length > 0 ? () => setFolderStack([]) : undefined,
+    },
+    ...folderStack.map((folder, i) => ({
+      label: folder.name,
+      onClick:
+        i < folderStack.length - 1
+          ? () => setFolderStack((prev) => prev.slice(0, i + 1))
+          : undefined,
+    })),
+  ];
 
   return (
-    <Card title={`${providerLabels[selectedProvider.provider]} - ${currentFolder}`}>
-      <div className="space-y-2">
-        <div className="flex gap-2 mb-4">
-          <Button size="sm" variant="secondary" onClick={goToRoot}>
-            All Providers
-          </Button>
-          {folderStack.length > 0 && (
-            <Button size="sm" variant="ghost" onClick={goUp}>
-              Up
-            </Button>
-          )}
-        </div>
+    <Card>
+      <Breadcrumb items={crumbs} />
+      <hr className="rule-perf my-4 text-gray-300 dark:text-gray-700" />
 
-        {loading && <p className="text-gray-500 text-sm">Loading...</p>}
-        {error && <p className="text-red-600 text-sm">{error}</p>}
-
-        {files.map((entry) => (
-          <div
-            key={entry.id}
-            className="flex items-center justify-between p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-800 border border-gray-200 dark:border-gray-700"
-          >
-            <button
-              onClick={() => openFolder(entry)}
-              className="flex items-center gap-2 text-left flex-1 min-w-0"
-              disabled={!entry.is_directory}
+      {filesLoading ? (
+        <Skeleton variant="row" count={3} />
+      ) : error ? (
+        <ErrorState detail={error} onRetry={() => refetchFiles()} />
+      ) : files.length === 0 ? (
+        <EmptyState icon={Folder} title="Empty folder" />
+      ) : (
+        <div className="space-y-2">
+          {files.map((entry) => (
+            <div
+              key={entry.id}
+              className="flex flex-col gap-3 rounded-lg border border-gray-200 p-3 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800/50 sm:flex-row sm:items-center sm:justify-between"
             >
-              <span>{entry.is_directory ? '\u{1F4C1}' : '\u{1F4C4}'}</span>
-              <span className="text-sm text-gray-900 dark:text-gray-100 truncate">{entry.name}</span>
-              {!entry.is_directory && entry.size && (
-                <span className="text-xs text-gray-500">{formatSize(entry.size)}</span>
+              <button
+                onClick={() => openFolder(entry)}
+                className="flex min-w-0 flex-1 items-center gap-3 text-left"
+                disabled={!entry.is_directory}
+              >
+                {entry.is_directory ? (
+                  <Folder className="h-5 w-5 shrink-0 text-gray-400 dark:text-gray-500" strokeWidth={1.75} aria-hidden="true" />
+                ) : (
+                  <FileText className="h-5 w-5 shrink-0 text-gray-400 dark:text-gray-500" strokeWidth={1.75} aria-hidden="true" />
+                )}
+                <div className="min-w-0">
+                  <div className="truncate text-sm text-gray-900 dark:text-gray-100">{entry.name}</div>
+                  {cloudFileMeta(entry) && (
+                    <div className="font-mono text-xs text-gray-500 dark:text-gray-400">{cloudFileMeta(entry)}</div>
+                  )}
+                </div>
+              </button>
+              {!entry.is_directory && (
+                <div className="flex flex-wrap gap-2 sm:ml-4 sm:shrink-0">
+                  <Button size="sm" variant="ghost" onClick={() => setPreviewFile(entry)}>
+                    <Eye className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+                    View
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => printMutation.mutate(entry)}>
+                    <Printer className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+                    Print
+                  </Button>
+                </div>
               )}
-            </button>
-            {!entry.is_directory && (
-              <div className="flex gap-2">
-                <Button size="sm" variant="ghost" onClick={() => setPreviewFile(entry)}>
-                  View
-                </Button>
-                <Button size="sm" variant="secondary" onClick={() => printMutation.mutate(entry)}>
-                  Print
-                </Button>
-              </div>
-            )}
-          </div>
-        ))}
-
-        {!loading && files.length === 0 && !error && (
-          <p className="text-gray-500 text-sm">Empty folder.</p>
-        )}
-      </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {previewFile && selectedProvider && (
         <FilePreviewModal
