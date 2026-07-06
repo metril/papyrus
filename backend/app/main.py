@@ -273,6 +273,32 @@ async def _printer_status_loop() -> None:
             logger.warning("Printer status poll failed: %s", exc)
 
 
+async def _alert_loop() -> None:
+    """Background task that polls printers for supply/error alerts.
+
+    The interval (``alert_poll_minutes``) is re-read every cycle so a change
+    made in the Settings UI applies without a restart. ``check_alerts`` is
+    itself never-raise, but the loop still guards with except-log-continue so a
+    DB hiccup while reading the interval or running the sweep can never kill it.
+    """
+    from app.database import async_session
+    from app.routers.settings import get_setting, safe_int_setting
+    from app.services.alert_service import check_alerts
+
+    while True:
+        try:
+            async with async_session() as db:
+                minutes = safe_int_setting(await get_setting(db, "alert_poll_minutes"), 5)
+        except Exception:
+            minutes = 5
+        await asyncio.sleep(max(minutes, 1) * 60)
+        try:
+            async with async_session() as db:
+                await check_alerts(db)
+        except Exception as exc:
+            logger.warning("Alert check failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: seed defaults, create dirs, reconcile hardware
@@ -295,10 +321,12 @@ async def lifespan(app: FastAPI):
     await _reconcile_on_startup()
     retention_task = asyncio.create_task(_retention_loop())
     printer_status_task = asyncio.create_task(_printer_status_loop())
+    alert_task = asyncio.create_task(_alert_loop())
     yield
     # Shutdown
     retention_task.cancel()
     printer_status_task.cancel()
+    alert_task.cancel()
     from app.services.http_client import close_http_client
 
     await close_http_client()
