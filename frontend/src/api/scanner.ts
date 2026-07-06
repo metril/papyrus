@@ -55,6 +55,10 @@ export function getJobPreviewUrl(jobId: number): string {
   return `/api/jobs/${jobId}/preview`;
 }
 
+export function getJobThumbnailUrl(jobId: number): string {
+  return `/api/jobs/${jobId}/thumbnail`;
+}
+
 export async function emailScan(
   scanId: string,
   to: string,

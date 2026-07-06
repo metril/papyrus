@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { memo, useState } from 'react';
 import { JobRowComponent } from './JobRow';
@@ -82,5 +82,51 @@ describe('JobRow memoization', () => {
     // stuck at 1.
     rerender(<Harness job={{ ...heldJob, status: 'printing' }} />);
     expect(renderSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('JobRow thumbnail', () => {
+  it('renders a thumbnail image whose src is derived from the job id, for a held job', () => {
+    const { container } = render(<JobRowComponent {...makeProps()} />);
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img).toHaveAttribute('src', '/api/jobs/1/thumbnail');
+    expect(img).toHaveAttribute('loading', 'lazy');
+  });
+
+  it('renders a thumbnail for a completed job too', () => {
+    const { container } = render(
+      <JobRowComponent {...makeProps({ job: { ...heldJob, id: 5, status: 'completed' } })} />
+    );
+    const img = container.querySelector('img');
+    expect(img).toHaveAttribute('src', '/api/jobs/5/thumbnail');
+  });
+
+  it('does not render a thumbnail for jobs that are neither held nor completed', () => {
+    const { container } = render(
+      <JobRowComponent {...makeProps({ job: { ...heldJob, status: 'printing' } })} />
+    );
+    expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('falls back to the Printer type glyph when the thumbnail image fails to load', () => {
+    const { container } = render(<JobRowComponent {...makeProps()} />);
+    const img = container.querySelector('img');
+    expect(img).not.toBeNull();
+
+    fireEvent.error(img!);
+
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('svg.lucide-printer')).not.toBeNull();
+  });
+
+  it('opens the preview when the thumbnail is clicked', async () => {
+    const onPreview = vi.fn();
+    const user = userEvent.setup();
+    const { container } = render(<JobRowComponent {...makeProps({ onPreview })} />);
+
+    await user.click(container.querySelector('img')!);
+
+    expect(onPreview).toHaveBeenCalledWith(heldJob);
   });
 });

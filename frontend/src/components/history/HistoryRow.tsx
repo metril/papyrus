@@ -1,5 +1,6 @@
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import { Download, Eye, Printer, ScanLine, Trash2 } from 'lucide-react';
+import { getJobThumbnailUrl, getScanThumbnailUrl } from '../../api/scanner';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
 import type { HistoryItem } from '../../pages/HistoryPage';
@@ -7,6 +8,51 @@ import type { HistoryItem } from '../../pages/HistoryPage';
 function canPreview(item: HistoryItem): boolean {
   return item.status === 'completed' || item.status === 'held';
 }
+
+interface HistoryThumbnailProps {
+  item: HistoryItem;
+  onPreview: (item: HistoryItem) => void;
+}
+
+// Same paper-frame idiom as ScanRow/JobRow (bordered, lightly shadowed
+// mount). Falls back to the row's own type glyph (Printer/ScanLine) on
+// image error — never a broken-image icon. Only rendered for previewable
+// items, so the id needed is always present (numericId for jobs, scanId
+// for scans).
+function HistoryThumbnailComponent({ item, onPreview }: HistoryThumbnailProps) {
+  const [failed, setFailed] = useState(false);
+  const TypeIcon = item.type === 'print' ? Printer : ScanLine;
+  const src =
+    item.type === 'scan' && item.scanId
+      ? getScanThumbnailUrl(item.scanId)
+      : getJobThumbnailUrl(item.numericId);
+
+  return (
+    <button
+      onClick={() => onPreview(item)}
+      aria-label={`Preview ${item.filename}`}
+      className="h-10 w-10 shrink-0 overflow-hidden rounded border border-gray-200 bg-gray-50 shadow-sm dark:border-gray-700 dark:bg-gray-800"
+    >
+      {failed ? (
+        <div className="flex h-full w-full items-center justify-center">
+          <TypeIcon className="h-4 w-4 text-gray-300 dark:text-gray-600" strokeWidth={1.75} aria-hidden="true" />
+        </div>
+      ) : (
+        <img
+          src={src}
+          alt=""
+          loading="lazy"
+          onError={() => setFailed(true)}
+          className="h-full w-full object-cover"
+        />
+      )}
+    </button>
+  );
+}
+
+// Pure props (an item + the stable onPreview callback) — memoize so a
+// sibling row's re-render never re-triggers this row's own thumbnail <img>.
+const HistoryThumbnail = memo(HistoryThumbnailComponent);
 
 export interface HistoryRowProps {
   item: HistoryItem;
@@ -46,7 +92,11 @@ export function HistoryRowComponent({ item, selected, onToggleSelect, onPreview,
           onChange={() => onToggleSelect(item.id)}
           className="h-4 w-4 shrink-0"
         />
-        <TypeIcon className="h-5 w-5 shrink-0 text-gray-400 dark:text-gray-500" strokeWidth={1.75} aria-hidden="true" />
+        {previewable ? (
+          <HistoryThumbnail item={item} onPreview={onPreview} />
+        ) : (
+          <TypeIcon className="h-5 w-5 shrink-0 text-gray-400 dark:text-gray-500" strokeWidth={1.75} aria-hidden="true" />
+        )}
 
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">

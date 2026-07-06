@@ -1,4 +1,6 @@
 import { memo, useState } from 'react';
+import { Printer } from 'lucide-react';
+import { getJobThumbnailUrl } from '../../api/scanner';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
 import type { PrintJob, ManagedPrinter } from '../../types';
@@ -70,6 +72,40 @@ function PrinterSelector({ job, printers, assigning, onAssign }: PrinterSelector
   );
 }
 
+interface JobThumbnailProps {
+  jobId: number;
+}
+
+// Paper-framed thumbnail matching ScanRow's idiom (bordered, lightly
+// shadowed mount around the preview image); falls back to the Printer
+// glyph — the same icon HistoryRow uses for print-type rows — on error,
+// never a bare <img> or broken-image icon.
+function JobThumbnailComponent({ jobId }: JobThumbnailProps) {
+  const [failed, setFailed] = useState(false);
+
+  return (
+    <div className="h-12 w-12 shrink-0 overflow-hidden rounded border border-gray-200 bg-gray-50 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+      {failed ? (
+        <div className="flex h-full w-full items-center justify-center">
+          <Printer className="h-4 w-4 text-gray-300 dark:text-gray-600" strokeWidth={1.75} aria-hidden="true" />
+        </div>
+      ) : (
+        <img
+          src={getJobThumbnailUrl(jobId)}
+          alt=""
+          loading="lazy"
+          onError={() => setFailed(true)}
+          className="h-full w-full object-cover"
+        />
+      )}
+    </div>
+  );
+}
+
+// Pure props (just an id) — memoize so a sibling row's re-render never
+// re-triggers this row's own thumbnail <img>.
+export const JobThumbnail = memo(JobThumbnailComponent);
+
 export interface JobRowProps {
   job: PrintJob;
   printers: ManagedPrinter[];
@@ -104,40 +140,51 @@ export function JobRowComponent({
 }: JobRowProps) {
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
+      <div className="flex min-w-0 flex-1 items-center gap-3">
+        {(job.status === 'held' || job.status === 'completed') && (
           <button
             onClick={() => onPreview(job)}
-            className="truncate text-left text-sm font-medium text-ink-600 hover:underline dark:text-ink-400"
+            aria-label={`Preview ${job.filename}`}
+            className="shrink-0"
           >
-            {job.filename}
+            <JobThumbnail jobId={job.id} />
           </button>
-          <StatusBadge status={job.status} />
-          {job.source_type && job.source_type !== 'upload' && (
-            <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${sourceColors[job.source_type] || 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}>
-              {sourceLabels[job.source_type] || job.source_type}
-            </span>
-          )}
-          {job.has_pin && job.status === 'held' && (
-            <span className="text-xs px-1.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
-              PIN
-            </span>
-          )}
-        </div>
-        <div className="mt-1 font-mono text-xs text-gray-500 dark:text-gray-400">
-          {formatSize(job.file_size)} &middot; {job.copies} cop{job.copies > 1 ? 'ies' : 'y'}
-          {job.duplex && ' · Duplex'}
-          {' · '}{job.media}
-          {' · '}{formatTime(job.created_at)}
-        </div>
-        {job.status === 'held' && printers.length > 1 && (
-          <div className="mt-1.5">
-            <PrinterSelector job={job} printers={printers} assigning={assigning} onAssign={onAssign} />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => onPreview(job)}
+              className="truncate text-left text-sm font-medium text-ink-600 hover:underline dark:text-ink-400"
+            >
+              {job.filename}
+            </button>
+            <StatusBadge status={job.status} />
+            {job.source_type && job.source_type !== 'upload' && (
+              <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${sourceColors[job.source_type] || 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}>
+                {sourceLabels[job.source_type] || job.source_type}
+              </span>
+            )}
+            {job.has_pin && job.status === 'held' && (
+              <span className="text-xs px-1.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                PIN
+              </span>
+            )}
           </div>
-        )}
-        {job.error_message && (
-          <p className="mt-1 text-xs text-red-600 dark:text-red-400">{job.error_message}</p>
-        )}
+          <div className="mt-1 font-mono text-xs text-gray-500 dark:text-gray-400">
+            {formatSize(job.file_size)} &middot; {job.copies} cop{job.copies > 1 ? 'ies' : 'y'}
+            {job.duplex && ' · Duplex'}
+            {' · '}{job.media}
+            {' · '}{formatTime(job.created_at)}
+          </div>
+          {job.status === 'held' && printers.length > 1 && (
+            <div className="mt-1.5">
+              <PrinterSelector job={job} printers={printers} assigning={assigning} onAssign={onAssign} />
+            </div>
+          )}
+          {job.error_message && (
+            <p className="mt-1 text-xs text-red-600 dark:text-red-400">{job.error_message}</p>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-2 sm:ml-4 sm:shrink-0">
