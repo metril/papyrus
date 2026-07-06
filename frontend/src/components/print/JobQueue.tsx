@@ -17,7 +17,10 @@ export default function JobQueue() {
   const printersQuery = usePrinters();
   const jobs = jobsQuery.data?.jobs ?? [];
   const printers = printersQuery.data ?? [];
-  const toast = useToast();
+  // Destructured because `useToast()` returns a fresh object each render while
+  // `show` itself is a stable zustand action — depending on `show` keeps the
+  // useCallbacks below stable without omitting deps.
+  const { show } = useToast();
   const [previewJob, setPreviewJob] = useState<PrintJob | null>(null);
   const [pinJobId, setPinJobId] = useState<number | null>(null);
   const [pinValue, setPinValue] = useState('');
@@ -39,22 +42,27 @@ export default function JobQueue() {
     [queryClient],
   );
 
-  const releaseMutation = useMutation({
+  // `mutate`/`mutateAsync` are destructured into named locals because TanStack
+  // Query v5 guarantees they are stable function identities (memoized per
+  // mutation observer), while the surrounding `useMutation()` result object is
+  // rebuilt every render. Depending on the locals keeps the useCallbacks below
+  // stable — and their JobRow props memo-friendly — with fully-listed deps.
+  const { mutateAsync: releaseAsync } = useMutation({
     mutationFn: ({ id, pin }: { id: number; pin?: string }) => releaseJob(id, pin),
     meta: { suppressGlobalError: true },
     onSuccess: upsertJobIntoCache,
   });
-  const cancelMutation = useMutation({
+  const { mutateAsync: cancelAsync } = useMutation({
     mutationFn: (id: number) => cancelJob(id),
     meta: { suppressGlobalError: true },
     onSuccess: upsertJobIntoCache,
   });
-  const reprintMutation = useMutation({
+  const { mutateAsync: reprintAsync } = useMutation({
     mutationFn: (id: number) => reprintJob(id),
     meta: { suppressGlobalError: true },
     onSuccess: upsertJobIntoCache,
   });
-  const deleteMutation = useMutation({
+  const { mutateAsync: deleteAsync } = useMutation({
     mutationFn: (id: number) => deleteJob(id),
     meta: { suppressGlobalError: true },
     onSuccess: (_result, id) =>
@@ -63,25 +71,15 @@ export default function JobQueue() {
   // Shared across rows (mirrors the busyJobId pattern below): only one
   // printer-assign is expected in flight at a time, tracked by job id so the
   // "…" pending label only shows on the row that triggered it.
-  const assignMutation = useMutation({
+  const { mutate: assignMutate } = useMutation({
     mutationFn: ({ jobId, printerId }: { jobId: number; printerId: number }) =>
       assignJobPrinter(jobId, printerId),
     meta: { suppressGlobalError: true },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.jobs.list() }),
-    onError: () => toast.show('Failed to assign printer'),
+    onError: () => show('Failed to assign printer'),
     onSettled: () => setAssigningJobId(null),
   });
 
-  // The callbacks below intentionally depend on `mutation.mutateAsync` /
-  // `toast.show` rather than the whole `releaseMutation` / `toast` objects:
-  // `useMutation()` and `useToast()` both return a fresh object every render,
-  // so depending on the object itself would recreate the callback (and thus
-  // the JobRow prop) every render, defeating this row's memoization. The
-  // narrower properties ARE stable (React Query memoizes `.mutate(Async)` per
-  // mutation observer; `toast.show` is a stable zustand action). This trips
-  // eslint-plugin-react-hooks' exhaustive-deps / compiler-preservation checks,
-  // which don't recognize that narrower stability guarantee — expected,
-  // low-severity warnings, not a bug.
   const handleRelease = useCallback(
     async (job: PrintJob) => {
       if (job.has_pin) {
@@ -92,21 +90,21 @@ export default function JobQueue() {
       }
       setBusyJobId(job.id);
       try {
-        await releaseMutation.mutateAsync({ id: job.id });
+        await releaseAsync({ id: job.id });
       } catch {
-        toast.show('Failed to release job');
+        show('Failed to release job');
       } finally {
         setBusyJobId(null);
       }
     },
-    [releaseMutation.mutateAsync, toast.show],
+    [releaseAsync, show],
   );
 
   const handlePinSubmit = async () => {
     if (!pinJobId || pinSubmitting) return;
     setPinSubmitting(true);
     try {
-      await releaseMutation.mutateAsync({ id: pinJobId, pin: pinValue });
+      await releaseAsync({ id: pinJobId, pin: pinValue });
       setPinJobId(null);
     } catch {
       setPinError('Invalid PIN');
@@ -123,41 +121,41 @@ export default function JobQueue() {
         await action();
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : 'Unknown error';
-        toast.show(`Action failed: ${msg}`);
+        show(`Action failed: ${msg}`);
       } finally {
         setBusyJobId(null);
       }
     },
-    [toast.show],
+    [show],
   );
 
   const handleCancel = useCallback(
     (jobId: number) => {
-      handleAction(() => cancelMutation.mutateAsync(jobId), jobId);
+      handleAction(() => cancelAsync(jobId), jobId);
     },
-    [handleAction, cancelMutation.mutateAsync],
+    [handleAction, cancelAsync],
   );
 
   const handleReprint = useCallback(
     (jobId: number) => {
-      handleAction(() => reprintMutation.mutateAsync(jobId), jobId);
+      handleAction(() => reprintAsync(jobId), jobId);
     },
-    [handleAction, reprintMutation.mutateAsync],
+    [handleAction, reprintAsync],
   );
 
   const handleDelete = useCallback(
     (jobId: number) => {
-      handleAction(() => deleteMutation.mutateAsync(jobId), jobId);
+      handleAction(() => deleteAsync(jobId), jobId);
     },
-    [handleAction, deleteMutation.mutateAsync],
+    [handleAction, deleteAsync],
   );
 
   const handleAssign = useCallback(
     (jobId: number, printerId: number) => {
       setAssigningJobId(jobId);
-      assignMutation.mutate({ jobId, printerId });
+      assignMutate({ jobId, printerId });
     },
-    [assignMutation.mutate],
+    [assignMutate],
   );
 
   if (jobsQuery.isLoading && jobs.length === 0) {
