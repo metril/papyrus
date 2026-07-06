@@ -180,3 +180,28 @@ input[type="checkbox"]:focus-visible {
     animation: none;
   }
 }
+
+/* Skeleton shimmer: a soft highlight band that sweeps across a paper-toned
+   placeholder block (see Skeleton.tsx). Reduces to a static block — no
+   sweep — under reduced motion. */
+@keyframes skeleton-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+@utility skeleton-shimmer {
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in oklab, white 30%, transparent),
+    transparent
+  );
+  animation: skeleton-shimmer 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-shimmer {
+    animation: none;
+    background-image: none;
+  }
+}
