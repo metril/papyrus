@@ -232,6 +232,77 @@ async def test_discover_skips_malformed_configured_uris(monkeypatch):
     assert printers[1]["already_configured"] is False
 
 
+async def test_discover_excludes_device_at_local_ip(monkeypatch):
+    # Papyrus advertises itself over mDNS on the same host it browses on
+    # (docker/avahi/airprint.service). A discovered device whose ip is one of
+    # the host's own interface addresses must never reach the response --
+    # adding it would create a CUPS queue that feeds back into Papyrus's own
+    # hold queue.
+    devices = [
+        _device("Papyrus @ host", "192.168.1.5", "ipp://192.168.1.5:6310/printers/Papyrus"),
+        _device("Real Printer", "192.168.1.99", "ipp://192.168.1.99:631/ipp/print"),
+    ]
+
+    async def fake_discover(timeout: float = 4.0):
+        return devices
+
+    monkeypatch.setattr(printers_router, "discover_printers", fake_discover)
+    monkeypatch.setattr(
+        printers_router, "_local_ipv4_addresses", lambda: {"192.168.1.5", "127.0.0.1"}
+    )
+
+    db = _FakeDB(printers=[])
+
+    result = await printers_router.discover_network_printers(db=db, _user=None)
+
+    names = [p["name"] for p in result["printers"]]
+    assert names == ["Real Printer"]
+
+
+async def test_discover_local_ip_enumeration_failure_retains_devices(monkeypatch):
+    # If enumerating local interfaces blows up (unexpected in a sandboxed or
+    # unusual container network setup), discover must not crash -- and devices
+    # that don't match the self-advertisement fingerprint must be retained.
+    devices = [
+        _device("Real Printer", "192.168.1.99", "ipp://192.168.1.99:631/ipp/print"),
+    ]
+
+    async def fake_discover(timeout: float = 4.0):
+        return devices
+
+    monkeypatch.setattr(printers_router, "discover_printers", fake_discover)
+    monkeypatch.setattr(printers_router, "_local_ipv4_addresses", lambda: None)
+
+    db = _FakeDB(printers=[])
+
+    result = await printers_router.discover_network_printers(db=db, _user=None)
+
+    names = [p["name"] for p in result["printers"]]
+    assert names == ["Real Printer"]
+
+
+async def test_discover_self_advertisement_fallback_filter_when_enumeration_fails(monkeypatch):
+    # When local-ip enumeration fails, fall back to fingerprinting Papyrus's
+    # own static advertisement by resource path / port.
+    devices = [
+        _device("Papyrus @ host", "192.168.1.5", "ipp://192.168.1.5:6310/printers/Papyrus"),
+        _device("Real Printer", "192.168.1.99", "ipp://192.168.1.99:631/ipp/print"),
+    ]
+
+    async def fake_discover(timeout: float = 4.0):
+        return devices
+
+    monkeypatch.setattr(printers_router, "discover_printers", fake_discover)
+    monkeypatch.setattr(printers_router, "_local_ipv4_addresses", lambda: None)
+
+    db = _FakeDB(printers=[])
+
+    result = await printers_router.discover_network_printers(db=db, _user=None)
+
+    names = [p["name"] for p in result["printers"]]
+    assert names == ["Real Printer"]
+
+
 async def test_discover_marks_already_configured_by_uri_equality(monkeypatch):
     # The device's own ip is *not* a substring of the configured uri (which
     # uses a hostname), so this can only match via exact uri equality.
@@ -376,6 +447,41 @@ async def test_refresh_info_updates_fields_on_success(monkeypatch):
     assert db.committed == 1
     assert result["make_and_model"] == "Brother DCP-L2540DW"
     assert result["location"] == "Office"
+
+
+async def test_refresh_info_preserves_stored_location_when_probe_omits_it(monkeypatch):
+    # A successful probe that returns make_and_model but no location (the
+    # device just doesn't expose printer-location) must not wipe a location
+    # that was already stored from a previous, more complete probe.
+    monkeypatch.setattr(printers_router, "_cups_status", _fake_cups_status)
+
+    async def fake_probe_ipp(host: str, port: int = 631, timeout: float = 5.0):
+        return {
+            "make_and_model": "Brother DCP-L2540DW Mk2",
+            "location": None,
+            "resource": "/ipp/print",
+        }
+
+    monkeypatch.setattr(printers_router, "probe_ipp", fake_probe_ipp)
+
+    printer = Printer(
+        id=7,
+        display_name="Brother",
+        cups_name="brother",
+        uri="ipp://192.168.1.50:631/ipp/print",
+        make_and_model="Brother DCP-L2540DW",
+        location="Existing Location",
+        created_at=datetime(2026, 7, 5, tzinfo=timezone.utc),
+    )
+    db = _FakeDB(get_return=printer)
+
+    result = await printers_router.refresh_printer_info(printer_id=7, db=db, _user=None)
+
+    assert printer.make_and_model == "Brother DCP-L2540DW Mk2"
+    assert printer.location == "Existing Location"
+    assert db.committed == 1
+    assert result["make_and_model"] == "Brother DCP-L2540DW Mk2"
+    assert result["location"] == "Existing Location"
 
 
 async def test_refresh_info_leaves_fields_untouched_on_probe_failure(monkeypatch):

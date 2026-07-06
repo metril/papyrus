@@ -2,6 +2,7 @@ import asyncio
 import re
 from urllib.parse import urlparse
 
+import ifaddr
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, update
@@ -107,8 +108,15 @@ async def _enrich_printer_info(printer: Printer, uri: str) -> bool:
         return False
     if result is None:
         return False
-    printer.make_and_model = result.get("make_and_model")
-    printer.location = result.get("location")
+    # Only overwrite a field when the probe actually returned a value for it:
+    # a printer that answers IPP but omits e.g. printer-location must not have
+    # a previously stored value wiped out just because this probe didn't see it.
+    make_and_model = result.get("make_and_model")
+    if make_and_model is not None:
+        printer.make_and_model = make_and_model
+    location = result.get("location")
+    if location is not None:
+        printer.location = location
     return True
 
 
@@ -122,13 +130,62 @@ async def list_printers(
     return list(await asyncio.gather(*(_printer_response(p) for p in result.scalars())))
 
 
+# Papyrus advertises itself over mDNS on the same host it browses on
+# (``docker/avahi/airprint.service``: ``_ipp._tcp`` on port 6310, resource
+# path ``printers/Papyrus``). Left unfiltered, the add-printer flow would
+# list the server as an addable device; configuring it creates a CUPS queue
+# that feeds jobs straight back into the papyrus hold queue -- an unbounded
+# print loop once auto-release is on.
+_SELF_ADVERTISEMENT_PORT = 6310
+_SELF_ADVERTISEMENT_RESOURCE_MARKER = "printers/Papyrus"
+
+
+def _local_ipv4_addresses() -> set[str] | None:
+    """Every IPv4 address bound to a local network interface, or ``None`` if
+    enumeration failed for any reason.
+
+    Never raises: interface enumeration is best-effort and must not break
+    discovery just because it isn't available in some environment.
+    """
+    try:
+        addresses: set[str] = set()
+        for adapter in ifaddr.get_adapters():
+            for ip in adapter.ips:
+                if ip.is_IPv4:
+                    addresses.add(ip.ip)
+        return addresses
+    except Exception:
+        return None
+
+
+def _is_self_advertisement(device: dict) -> bool:
+    """Fingerprint of Papyrus's own static mDNS advertisement, used only as a
+    fallback when local-interface enumeration fails and IP-based filtering
+    isn't possible."""
+    uri = device.get("uri") or ""
+    return (
+        _SELF_ADVERTISEMENT_RESOURCE_MARKER in uri
+        or device.get("port") == _SELF_ADVERTISEMENT_PORT
+    )
+
+
+def _filter_self_advertisement(devices: list[dict]) -> list[dict]:
+    """Drop Papyrus's own mDNS advertisement from a discovery result."""
+    local_ips = _local_ipv4_addresses()
+    if local_ips is not None:
+        return [d for d in devices if (d.get("ip") or "") not in local_ips]
+    return [d for d in devices if not _is_self_advertisement(d)]
+
+
 @router.get("/discover")
 async def discover_network_printers(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ) -> dict:
-    """Browse the LAN via mDNS and flag devices already configured."""
+    """Browse the LAN via mDNS, drop Papyrus's own advertisement, and flag
+    devices already configured."""
     devices = await discover_printers()
+    devices = _filter_self_advertisement(devices)
     result = await db.execute(select(Printer))
     configured_uris = [p.uri for p in result.scalars() if p.uri]
 
