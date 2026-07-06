@@ -35,26 +35,15 @@ conftest's ``admin_client`` (which merely depends on a fixture named
 ``client``) transparently picks up this module's version for every test
 here.
 
-KNOWN BUG surfaced by this suite (not fixed here — tests only per task
-scope): ``ServerErrorMiddleware`` (which handles the bare ``Exception``
-catch-all) is *outside* ``RequestIDMiddleware`` in the real middleware
-stack. When a bare exception unwinds out of ``RequestIDMiddleware``'s
-``await self.app(...)``, its ``finally`` block resets ``request_id_var``
-to ``None`` *before* ``ServerErrorMiddleware`` calls
-``_handle_unexpected_error``, and it sends the response on the raw
-ASGI ``send`` that predates ``RequestIDMiddleware``'s header-injecting
-``send_wrapper``. Net effect: for this one path only, ``response.json()["request_id"]``
-comes back ``None`` and the ``X-Request-ID`` response header is missing
-entirely — exactly the case where request-ID correlation matters most.
-Domain ``PapyrusError``/``cups.IPPError`` responses are unaffected (they're
-handled by the inner ``ExceptionMiddleware``, still inside
-``RequestIDMiddleware``'s scope) — see
-``test_domain_exception_keeps_curated_detail_at_500`` below, which passes.
-The two facts this bug implies are pinned as ``xfail(strict=True)`` so the
-suite stays green today and turns red (forcing someone to notice) the day
-the middleware ordering is fixed and these start passing for real.
+Regression context: ``ServerErrorMiddleware`` (which handles the bare
+``Exception`` catch-all) is *outside* ``RequestIDMiddleware``, so the
+contextvar is already reset and the header-injecting ``send_wrapper`` is
+bypassed by the time the catch-all responds. The fix: ``RequestIDMiddleware``
+stashes the id on the ASGI scope (``papyrus_request_id``), the handlers fall
+back to it via ``exceptions._request_id``, and the catch-all sets its own
+``X-Request-ID`` header. The request-id tests below are the regression tests
+for that path.
 """
-import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
@@ -99,23 +88,14 @@ async def test_deep_runtime_error_is_sanitized_500(admin_client, monkeypatch):
     resp = await admin_client.get("/api/printers/discover")
 
     assert resp.status_code == 500
-    # Exact body — not a substring check: exactly these two keys, curated
-    # generic detail, no leaked exception text riding along.
-    assert resp.json() == {"detail": "Internal server error", "request_id": None}
+    body = resp.json()
+    # Exactly these two keys: curated generic detail plus the correlation id,
+    # no leaked exception text riding along.
+    assert set(body) == {"detail", "request_id"}
+    assert body["detail"] == "Internal server error"
     assert "boom" not in resp.text
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Known bug: ServerErrorMiddleware (bare-Exception handler) sits "
-        "outside RequestIDMiddleware, so by the time it responds the "
-        "request-ID contextvar has already been reset and the "
-        "header-injecting send wrapper has already been bypassed. See the "
-        "module docstring. Remove this xfail once the middleware ordering "
-        "is fixed."
-    ),
-)
 async def test_deep_runtime_error_response_should_carry_request_id(admin_client, monkeypatch):
     _patch_discover_to_raise(monkeypatch)
 
@@ -127,15 +107,6 @@ async def test_deep_runtime_error_response_should_carry_request_id(admin_client,
     assert resp.headers["x-request-id"] == body["request_id"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Same known bug as test_deep_runtime_error_response_should_carry_request_id: "
-        "a custom incoming X-Request-ID is lost for the bare-Exception path "
-        "specifically, since RequestIDMiddleware's context/send-wrapper "
-        "never reach ServerErrorMiddleware."
-    ),
-)
 async def test_custom_request_id_is_echoed_into_error_body(admin_client, monkeypatch):
     _patch_discover_to_raise(monkeypatch)
 

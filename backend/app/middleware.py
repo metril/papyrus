@@ -48,6 +48,11 @@ class RequestIDMiddleware:
             return
 
         request_id = _resolve_request_id(scope.get("headers") or [])
+        # Also stash the id on the scope: Starlette routes Exception handlers
+        # through ServerErrorMiddleware, which sits OUTSIDE this middleware —
+        # by the time the catch-all handler runs, the contextvar below has
+        # already been reset, but the scope survives.
+        scope["papyrus_request_id"] = request_id
         token = request_id_var.set(request_id)
 
         async def send_wrapper(message: Message) -> None:

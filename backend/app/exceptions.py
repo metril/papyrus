@@ -53,6 +53,16 @@ class UploadTooLargeError(PapyrusError):
     status_code = 413
 
 
+def _request_id(request: Request) -> str | None:
+    """Request id from the contextvar, falling back to the scope stash.
+
+    The fallback matters for the ``Exception`` catch-all: Starlette runs it in
+    ``ServerErrorMiddleware``, outside ``RequestIDMiddleware``, after the
+    contextvar has been reset.
+    """
+    return get_request_id() or request.scope.get("papyrus_request_id")
+
+
 def register_exception_handlers(app) -> None:
     """Register the global exception handlers on ``app``.
 
@@ -64,7 +74,7 @@ def register_exception_handlers(app) -> None:
     async def _handle_papyrus_error(request: Request, exc: PapyrusError) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
-            content={"detail": exc.detail, "request_id": get_request_id()},
+            content={"detail": exc.detail, "request_id": _request_id(request)},
         )
 
     @app.exception_handler(Exception)
@@ -72,9 +82,13 @@ def register_exception_handlers(app) -> None:
         # logger.exception records the traceback; the Task 1 RequestIdFilter
         # stamps the request_id onto the log record.
         logger.exception("Unhandled exception processing request")
+        request_id = _request_id(request)
+        # This response bypasses RequestIDMiddleware's send wrapper (it is
+        # produced outside it), so the header must be set here.
         return JSONResponse(
             status_code=500,
-            content={"detail": "Internal server error", "request_id": get_request_id()},
+            content={"detail": "Internal server error", "request_id": request_id},
+            headers={"X-Request-ID": request_id} if request_id else None,
         )
 
     # cups.IPPError → 503. Register only when `cups` is a real module exposing a
