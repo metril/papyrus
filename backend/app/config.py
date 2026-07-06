@@ -29,7 +29,17 @@ class Settings(BaseSettings):
     # Development
     dev_mode: bool = False
 
+    # CORS: comma-separated list of allowed origins. Empty (default) means
+    # same-origin only — CORSMiddleware is not added at all, since the app
+    # is served from behind a reverse proxy on the same origin.
+    cors_origins: str = ""
+
     model_config = {"env_prefix": "PAPYRUS_"}
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        """Parsed, whitespace-trimmed list of allowed CORS origins."""
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 
 settings = Settings()

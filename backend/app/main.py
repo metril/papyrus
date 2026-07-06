@@ -9,6 +9,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import FileResponse
 
 from app.config import settings
+from app.logging_config import setup_logging
+from app.middleware import RequestIDMiddleware
 from app.routers import (
     admin,
     auth,
@@ -27,6 +29,8 @@ from app.routers import (
     webhooks,
 )
 from app.routers import settings as settings_router
+
+setup_logging(json_logs=not settings.dev_mode)
 
 logger = logging.getLogger(__name__)
 
@@ -309,13 +313,22 @@ app = FastAPI(
 # Session middleware for OIDC (must be added before CORS)
 app.add_middleware(SessionMiddleware, secret_key=settings.session_secret)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Tightened in production via reverse proxy
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Only add CORS if explicit origins are configured — the app is same-origin
+# behind Traefik by default, and allow_origins=["*"] is spec-invalid together
+# with allow_credentials=True.
+if settings.cors_origins_list:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins_list,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+# Request-ID middleware, added last so it runs outermost (Starlette runs
+# middleware in reverse-add order) — every request/response, including
+# session/CORS handling, gets a request ID.
+app.add_middleware(RequestIDMiddleware)
 
 # API routes
 app.include_router(system.router, prefix="/api/system", tags=["system"])
