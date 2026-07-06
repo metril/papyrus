@@ -1,28 +1,27 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import { useToast } from '../../hooks/useToast';
-import api from '../../api/client';
+import { useEmailWebhookQuery, queryKeys } from '../../api/queries';
+import { generateEmailWebhookSecret } from '../../api/settings';
 import { SettingField, SaveButton, type SettingsSectionProps } from './shared';
 
 export default function EmailWebhookCard({ appSettings, set, save }: SettingsSectionProps) {
   const toast = useToast();
-  const [webhookInfo, setWebhookInfo] = useState<{ webhook_url: string; configured: boolean } | null>(null);
   const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
+  const { data: webhookInfo } = useEmailWebhookQuery();
+  const queryClient = useQueryClient();
 
-  useEffect(() => {
-    api.get('/email/webhook-info').then(({ data }) => setWebhookInfo(data)).catch(() => {});
-  }, []);
-
-  const generateWebhookSecret = async () => {
-    try {
-      const { data } = await api.post('/email/webhook-secret');
+  const generateSecretMutation = useMutation({
+    mutationFn: generateEmailWebhookSecret,
+    meta: { suppressGlobalError: true },
+    onSuccess: (data) => {
       setWebhookSecret(data.secret);
-      setWebhookInfo({ webhook_url: data.webhook_url, configured: true });
-    } catch {
-      toast.show('Failed to generate webhook secret');
-    }
-  };
+      queryClient.setQueryData(queryKeys.emailWebhook, { webhook_url: data.webhook_url, configured: true });
+    },
+    onError: () => toast.show('Failed to generate webhook secret'),
+  });
 
   return (
     <Card title="Email Webhook" collapsible>
@@ -57,7 +56,7 @@ export default function EmailWebhookCard({ appSettings, set, save }: SettingsSec
           </div>
         )}
         <div className="flex justify-end">
-          <Button size="sm" onClick={generateWebhookSecret}>
+          <Button size="sm" onClick={() => generateSecretMutation.mutate()}>
             {webhookInfo?.configured ? 'Regenerate Secret' : 'Generate Secret'}
           </Button>
         </div>

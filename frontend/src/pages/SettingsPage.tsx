@@ -1,5 +1,8 @@
-import { useState, useEffect } from 'react';
-import api from '../api/client';
+import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import axios from 'axios';
+import { useSettingsQuery, queryKeys } from '../api/queries';
+import { updateSettings } from '../api/settings';
 import type { AppSettings, SaveControls } from '../components/settings/shared';
 import PrintersCard from '../components/settings/PrintersCard';
 import ScannersCard from '../components/settings/ScannersCard';
@@ -19,40 +22,58 @@ import WebhooksCard from '../components/settings/WebhooksCard';
 import BackupRestoreCard from '../components/settings/BackupRestoreCard';
 import ApiTokensCard from '../components/settings/ApiTokensCard';
 
-export default function SettingsPage() {
-  const [appSettings, setAppSettings] = useState<AppSettings>({});
-  const [saveStatus, setSaveStatus] = useState<Record<string, 'saving' | 'saved' | 'error'>>({});
-  const [settingsLoading, setSettingsLoading] = useState(true);
-  const [settingsError, setSettingsError] = useState<string | null>(null);
+interface ApiErrorResponse {
+  detail?: string;
+}
 
-  useEffect(() => {
-    api.get('/settings')
-      .then(({ data }) => {
-        setAppSettings(data);
-        setSettingsLoading(false);
-      })
-      .catch((err) => {
-        if (err.response?.status !== 401) {
-          setSettingsError(
-            `Failed to load settings: ${err.response?.data?.detail || err.message}`
-          );
-        }
-        setSettingsLoading(false);
-      });
-  }, []);
+/** Mirrors the pre-Query GET failure copy, staying silent on 401 (interceptor redirects). */
+function describeSettingsLoadError(error: unknown): string | null {
+  if (axios.isAxiosError<ApiErrorResponse>(error)) {
+    if (error.response?.status === 401) return null;
+    return `Failed to load settings: ${error.response?.data?.detail || error.message}`;
+  }
+  return `Failed to load settings: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+export default function SettingsPage() {
+  const { data, isLoading, isError, error } = useSettingsQuery();
+  const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
+  const [saveStatus, setSaveStatus] = useState<Record<string, 'saving' | 'saved' | 'error'>>({});
+  const queryClient = useQueryClient();
+
+  // Seed the local draft from the query once data first arrives. Adjusting
+  // state during render (rather than in an effect) avoids an extra
+  // render-then-effect round trip; the null guard makes it fire exactly once
+  // (StrictMode-safe) and skips re-seeding on a later background refetch —
+  // in-progress edits and the post-save re-seed (below) own the draft after that.
+  if (data && appSettings === null) {
+    setAppSettings(data);
+  }
+
+  const settingsError = isError ? describeSettingsLoadError(error) : null;
+
+  const saveMutation = useMutation({
+    mutationFn: (payload: Record<string, string>) => updateSettings(payload),
+    // The page renders its own per-section 'error' badge on failure, so don't
+    // also fire the global error toast.
+    meta: { suppressGlobalError: true },
+  });
 
   const set = (key: string) => (value: string) => {
-    setAppSettings((prev) => ({ ...prev, [key]: value }));
+    setAppSettings((prev) => (prev ? { ...prev, [key]: value } : prev));
   };
 
   const saveSection = async (section: string, keys: string[]) => {
     setSaveStatus((s) => ({ ...s, [section]: 'saving' }));
     try {
-      const payload = Object.fromEntries(keys.map((k) => [k, appSettings[k]]));
-      await api.put('/settings', payload);
-      // Refresh settings from backend to reflect actual stored values
-      const { data } = await api.get('/settings');
-      setAppSettings(data);
+      const payload: Record<string, string> = Object.fromEntries(
+        keys.map((k) => [k, String(appSettings?.[k] ?? '')])
+      );
+      await saveMutation.mutateAsync(payload);
+      // Refresh settings from backend to reflect actual stored values.
+      await queryClient.invalidateQueries({ queryKey: queryKeys.settings });
+      const fresh = queryClient.getQueryData<Record<string, string>>(queryKeys.settings);
+      if (fresh) setAppSettings(fresh);
       setSaveStatus((s) => ({ ...s, [section]: 'saved' }));
       setTimeout(() => setSaveStatus((s) => ({ ...s, [section]: undefined as unknown as 'saved' })), 2000);
     } catch {
@@ -61,12 +82,13 @@ export default function SettingsPage() {
   };
 
   const save: SaveControls = { status: saveStatus, onSave: saveSection, disabled: !!settingsError };
+  const settingsForCards = appSettings ?? {};
 
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Settings</h2>
 
-      {settingsLoading && (
+      {isLoading && (
         <div className="bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300 px-4 py-3 rounded">
           Loading settings...
         </div>
@@ -85,18 +107,18 @@ export default function SettingsPage() {
 
       <PrintersCard />
       <ScannersCard />
-      <NetworkServicesCard appSettings={appSettings} set={set} save={save} />
-      <StorageCard appSettings={appSettings} set={set} save={save} />
-      <ApplicationCard appSettings={appSettings} set={set} save={save} />
-      <AuthenticationCard appSettings={appSettings} set={set} save={save} />
-      <EmailSmtpCard appSettings={appSettings} set={set} save={save} />
-      <EmailWebhookCard appSettings={appSettings} set={set} save={save} />
-      <CloudCredentialsCard appSettings={appSettings} set={set} save={save} />
+      <NetworkServicesCard appSettings={settingsForCards} set={set} save={save} />
+      <StorageCard appSettings={settingsForCards} set={set} save={save} />
+      <ApplicationCard appSettings={settingsForCards} set={set} save={save} />
+      <AuthenticationCard appSettings={settingsForCards} set={set} save={save} />
+      <EmailSmtpCard appSettings={settingsForCards} set={set} save={save} />
+      <EmailWebhookCard appSettings={settingsForCards} set={set} save={save} />
+      <CloudCredentialsCard appSettings={settingsForCards} set={set} save={save} />
       <CloudStorageCard />
-      <OcrCard appSettings={appSettings} set={set} save={save} />
-      <ScanTemplateCard appSettings={appSettings} set={set} save={save} />
-      <PaperlessCard appSettings={appSettings} set={set} save={save} />
-      <FtpCard appSettings={appSettings} set={set} save={save} />
+      <OcrCard appSettings={settingsForCards} set={set} save={save} />
+      <ScanTemplateCard appSettings={settingsForCards} set={set} save={save} />
+      <PaperlessCard appSettings={settingsForCards} set={set} save={save} />
+      <FtpCard appSettings={settingsForCards} set={set} save={save} />
       <WebhooksCard />
       <BackupRestoreCard />
       <ApiTokensCard />

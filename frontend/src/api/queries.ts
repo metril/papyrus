@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { listJobs, getPrinterStatus } from './printer';
 import { listScans } from './scanner';
 import { listPrinters } from './printers';
-import { getSettings } from './settings';
+import { getSettings, getEmailWebhookInfo } from './settings';
 
 /**
  * Single source of truth for React Query cache keys. Every hook derives its key
@@ -24,6 +24,7 @@ export const queryKeys = {
     list: () => ['scanners', 'list'] as const,
   },
   settings: ['settings'] as const,
+  emailWebhook: ['emailWebhook'] as const,
   dashboardStats: ['dashboardStats'] as const,
   audit: (page: number, action?: string) => ['audit', page, action ?? null] as const,
   users: ['users'] as const,
@@ -75,5 +76,12 @@ export function useSettingsQuery() {
   return useQuery({
     queryKey: queryKeys.settings,
     queryFn: () => getSettings(),
+  });
+}
+
+export function useEmailWebhookQuery() {
+  return useQuery({
+    queryKey: queryKeys.emailWebhook,
+    queryFn: () => getEmailWebhookInfo(),
   });
 }

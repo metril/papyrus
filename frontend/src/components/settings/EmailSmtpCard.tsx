@@ -1,20 +1,19 @@
+import { useMutation } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import { useToast } from '../../hooks/useToast';
-import api from '../../api/client';
+import { sendTestEmail } from '../../api/settings';
 import { SettingField, SaveButton, type SettingsSectionProps } from './shared';
 
 export default function EmailSmtpCard({ appSettings, set, save }: SettingsSectionProps) {
   const toast = useToast();
 
-  const testSmtp = async () => {
-    try {
-      await api.post('/email/test');
-      toast.show('SMTP connection successful', 'success');
-    } catch {
-      toast.show('SMTP connection failed');
-    }
-  };
+  const testSmtpMutation = useMutation({
+    mutationFn: sendTestEmail,
+    meta: { suppressGlobalError: true },
+    onSuccess: () => toast.show('SMTP connection successful', 'success'),
+    onError: () => toast.show('SMTP connection failed'),
+  });
 
   return (
     <Card title="Email (SMTP)" collapsible>
@@ -27,7 +26,7 @@ export default function EmailSmtpCard({ appSettings, set, save }: SettingsSectio
         </div>
         <SettingField label="From Address" value={appSettings['smtp_from'] ?? ''} onChange={set('smtp_from')} placeholder="papyrus@example.com" />
         <div className="flex gap-2 justify-end">
-          <Button variant="secondary" onClick={testSmtp}>Test Connection</Button>
+          <Button variant="secondary" onClick={() => testSmtpMutation.mutate()}>Test Connection</Button>
           <SaveButton section="smtp" keys={['smtp_host', 'smtp_port', 'smtp_user', 'smtp_password', 'smtp_from']} save={save} />
         </div>
       </div>
