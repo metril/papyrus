@@ -47,7 +47,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 ## Tech Stack
 
 - **Backend**: Python 3.12, FastAPI, SQLAlchemy (async), PostgreSQL
-- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS
+- **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, TanStack Query (server state), Zustand (client state), lazy-loaded routes, vitest/Testing Library (unit tests)
 - **Printing**: CUPS (driverless/IPP Everywhere), AirPrint via Avahi mDNS, printer discovery via python-zeroconf
 - **Scanning**: SANE via scanimage (sane-airscan for WSD), eSCL server for network scanning
 - **Deployment**: Docker with multi-stage build (`network_mode: host` for mDNS), behind Traefik
@@ -90,7 +90,7 @@ npm run dev
 
 ### Continuous Integration
 
-`.github/workflows/ci.yml` runs on every push/PR: backend (`ruff check` + `pytest`) and frontend (`eslint` + `npm run build`).
+`.github/workflows/ci.yml` runs on every push/PR: backend (`ruff check` + `pytest`) and frontend (`eslint` + `npm test` (vitest/Testing Library) + `npm run build`).
 
 ## Configuration
 

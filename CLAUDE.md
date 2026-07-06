@@ -5,7 +5,7 @@ Papyrus is a web-based print and scan server for network-connected Brother DCP-L
 
 ## Tech Stack
 - **Backend**: Python 3.12, FastAPI, Uvicorn, SQLAlchemy async (asyncpg), Alembic
-- **Frontend**: React 18, Vite, TypeScript, Tailwind CSS, Zustand, React Router v6
+- **Frontend**: React 19, Vite, TypeScript (strict, `verbatimModuleSyntax`), Tailwind CSS, TanStack Query v5 (server state), Zustand (client state), React Router v6, vitest + Testing Library + msw (unit tests)
 - **Database**: PostgreSQL 16
 - **Printing**: CUPS (driverless/IPP Everywhere), AirPrint via Avahi mDNS, pycups
 - **Scanning**: `scanimage` subprocess (SANE/sane-airscan), eSCL server for network scanning
@@ -31,11 +31,11 @@ Papyrus is a web-based print and scan server for network-connected Brother DCP-L
   - `schemas.py` — Pydantic request/response models
   - `database.py` — Async engine (asyncpg)
 - `frontend/src/` — React application
-  - `api/` — Typed API client + WebSocket hook
-  - `components/` — UI components organized by feature
-  - `hooks/` — Custom React hooks
-  - `pages/` — Route pages
-  - `store/` — Zustand state stores
+  - `api/` — Typed API client + WebSocket hook; `queries.ts` holds the `queryKeys` cache-key factory and every TanStack Query hook (single source of truth for query keys — never inline one at a call site); `queryClient.ts` builds the shared `QueryClient` and wires global error-toast handling for failed queries/mutations
+  - `components/` — UI components organized by feature; row-rendering list components (`print/JobRow.tsx`, `scan/ScanRow.tsx`, `history/HistoryRow.tsx`) are `React.memo`'d with stable `useCallback` handlers from their parent list
+  - `hooks/` — Custom React hooks, incl. `useRealtimeBridge.ts` — the WebSocket→Query-cache bridge, the sole realtime path (mounted once in AppShell; applies events via `queryClient.setQueryData`, never a refetch)
+  - `pages/` — Route pages, lazy-loaded (`React.lazy` + `Suspense`, see `AppShell`) and code-split per route
+  - `store/` — Zustand stores, client state only (server state lives in the Query cache): `authStore.ts`, `themeStore.ts`, `toastStore.ts` (also usable from non-React code via `showToast`), `connectionStore.ts` (per-channel WS connected flags the bridge writes and `usePrinterStatus`'s poll fallback reads), and a slimmed `scanStore.ts` (transient scan-progress UI state only)
 - `docker/` — Dockerfile, compose.yaml, entrypoint, CUPS/SANE/Avahi configs
   - `cups/papyrus-backend` — Custom CUPS backend script for network print → hold queue
   - `avahi/` — Avahi mDNS daemon config + eSCL service advertisement
@@ -61,9 +61,12 @@ docker compose -f docker/compose.yaml down
 # Tests
 cd backend && pytest
 cd frontend && npm test
+
+# React Compiler experiment (default OFF; see vite.config.ts)
+cd frontend && REACT_COMPILER=1 npm run build
 ```
 
-The local backend venv doesn't have pycups (host lacks CUPS headers); `pip install -e ".[dev]"` still works and `backend/tests/conftest.py` stubs `sys.modules["cups"]` so tests import cleanly without it. Docker/CI images have real pycups. CI (`.github/workflows/ci.yml`) runs backend ruff+pytest and frontend eslint+build on every push/PR.
+The local backend venv doesn't have pycups (host lacks CUPS headers); `pip install -e ".[dev]"` still works and `backend/tests/conftest.py` stubs `sys.modules["cups"]` so tests import cleanly without it. Docker/CI images have real pycups. CI (`.github/workflows/ci.yml`) runs backend ruff+pytest and frontend eslint+`npm test` (vitest)+build on every push/PR.
 
 ## Environment Variables
 Only infrastructure settings use env vars (`PAPYRUS_` prefix). All other settings are managed via the Settings UI and stored in the AppConfig database table.
@@ -89,6 +92,6 @@ SMTP, cloud OAuth, scanner/printer config, OCR, FTP/SFTP, Paperless-ngx, retenti
 - **Security**: Never use `shell=True` in subprocess calls. Always use argument lists. Validate file uploads server-side. Encrypt sensitive data at rest (Fernet).
 - **Subprocess scanning**: Use `scanimage` with explicit argument lists, never string interpolation.
 - **Database**: Use async SQLAlchemy with asyncpg. All migrations via Alembic.
-- **Frontend**: TypeScript strict mode. Tailwind for styling. Zustand for state.
+- **Frontend**: TypeScript strict mode. Tailwind for styling. Server state lives in the TanStack Query cache, always keyed via the `queryKeys` factory in `api/queries.ts` (never an inline key array). Zustand is for client-only UI state (auth, theme, toasts, WS connection flags) — never server data. Realtime WebSocket events are applied to the Query cache exclusively through `useRealtimeBridge`'s `setQueryData` calls; components never open their own sockets for list data or refetch in response to an event.
 - **Uploads**: Stream to disk (`save_upload_streaming`) rather than buffering whole files in memory; enforce `max_upload_size_mb` with an early 413 while streaming.
 - **WebSocket events**: The `jobs`/`scans`/`printers` channels (`/ws/jobs`, `/ws/scans`, `/ws/printers`) always broadcast the full serialized object (`job_created`/`job_updated`/`job_deleted`, `scan_completed`/`scan_deleted`, `printer_status`), never a partial payload — the frontend applies events incrementally instead of refetching. If a row is gone by the time a background task finishes, skip the broadcast rather than send a partial object.
