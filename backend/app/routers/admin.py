@@ -68,6 +68,9 @@ async def get_audit_log(
 PRINT_JOB_STATUSES = ["held", "completed", "failed", "cancelled", "printing"]
 SCAN_JOB_STATUSES = ["completed", "failed", "scanning"]
 
+TREND_DAYS = 30
+PER_USER_TOP_N = 10
+
 
 def _zero_filled_status_counts(
     rows: Any, statuses: list[str]
@@ -83,6 +86,78 @@ def _zero_filled_status_counts(
         if status in counts:
             counts[status] = count
     return counts
+
+
+def _zero_filled_trend(
+    print_rows: Any, scan_rows: Any, days: list[str]
+) -> list[dict[str, Any]]:
+    """Merge `(day, count)` GROUP BY rows from PrintJob/ScanJob onto a fixed
+    list of UTC calendar day strings (`days`, oldest first).
+
+    `day` is a `datetime.date` (already converted to a UTC calendar day by
+    the caller's query). Any day in `days` with no rows in either query is
+    zero-filled, so a trend chart never has to skip a day.
+    """
+    print_counts = {day.isoformat(): count for day, count in print_rows}
+    scan_counts = {day.isoformat(): count for day, count in scan_rows}
+    return [
+        {"date": day, "prints": print_counts.get(day, 0), "scans": scan_counts.get(day, 0)}
+        for day in days
+    ]
+
+
+def _user_label(user_id: Any, username: str | None, email: str | None) -> str:
+    """Display label for a per-user stats bucket.
+
+    A NULL `user_id` (network print, or eSCL network scan — neither has an
+    authenticated user) buckets as `"Network"`. Otherwise prefer `username`,
+    falling back to `email` for accounts that never set one (e.g. OIDC-only
+    logins never populate the local-auth `username` column).
+    """
+    if user_id is None:
+        return "Network"
+    return username or email or str(user_id)
+
+
+def _ranked_per_user(
+    print_rows: Any, scan_rows: Any, *, top_n: int
+) -> list[dict[str, Any]]:
+    """Merge per-user `(user_id, username, email, count)` GROUP BY rows from
+    both tables, sort by total (prints + scans) descending, and roll every
+    row past `top_n` into a trailing `"Other"` row.
+
+    Ties break on username so the ordering is deterministic.
+    """
+    by_user: dict[Any, dict[str, Any]] = {}
+
+    def _bucket(user_id: Any, username: str | None, email: str | None) -> dict[str, Any]:
+        return by_user.setdefault(
+            user_id,
+            {"username": _user_label(user_id, username, email), "prints": 0, "scans": 0},
+        )
+
+    for user_id, username, email, count in print_rows:
+        _bucket(user_id, username, email)["prints"] += count
+    for user_id, username, email, count in scan_rows:
+        _bucket(user_id, username, email)["scans"] += count
+
+    ranked = sorted(
+        by_user.values(),
+        key=lambda row: (-(row["prints"] + row["scans"]), row["username"]),
+    )
+
+    if len(ranked) <= top_n:
+        return ranked
+
+    head, tail = ranked[:top_n], ranked[top_n:]
+    head.append(
+        {
+            "username": "Other",
+            "prints": sum(row["prints"] for row in tail),
+            "scans": sum(row["scans"] for row in tail),
+        }
+    )
+    return head
 
 
 @router.get("/stats")
@@ -126,6 +201,55 @@ async def get_usage_stats(
         .order_by("day")
     )
 
+    # 30-day trend: one row per UTC calendar day, zero-filled so a trend
+    # chart never has to skip a day. `created_at` is stored as an instant
+    # (timestamptz); `timezone("UTC", ...)` reinterprets it as a naive UTC
+    # wall-clock timestamp before casting to Date, so day boundaries are UTC
+    # midnight regardless of the DB session's TimeZone setting.
+    today_utc = datetime.now(timezone.utc).date()
+    oldest_trend_day = today_utc - timedelta(days=TREND_DAYS - 1)
+    trend_cutoff = datetime(
+        oldest_trend_day.year, oldest_trend_day.month, oldest_trend_day.day, tzinfo=timezone.utc
+    )
+    trend_days = [
+        (oldest_trend_day + timedelta(days=offset)).isoformat() for offset in range(TREND_DAYS)
+    ]
+
+    print_trend_rows = await db.execute(
+        select(
+            cast(func.timezone("UTC", PrintJob.created_at), Date).label("day"),
+            func.count().label("count"),
+        )
+        .where(PrintJob.created_at >= trend_cutoff)
+        .group_by("day")
+    )
+    scan_trend_rows = await db.execute(
+        select(
+            cast(func.timezone("UTC", ScanJob.created_at), Date).label("day"),
+            func.count().label("count"),
+        )
+        .where(ScanJob.created_at >= trend_cutoff)
+        .group_by("day")
+    )
+    trend_30d = _zero_filled_trend(print_trend_rows.all(), scan_trend_rows.all(), trend_days)
+
+    # Per-user totals: outer join to User for the username label so jobs with
+    # no matching/authenticated user (NULL user_id) still group into a single
+    # "Network" bucket instead of being dropped.
+    print_user_rows = await db.execute(
+        select(PrintJob.user_id, User.username, User.email, func.count().label("count"))
+        .select_from(PrintJob)
+        .outerjoin(User, PrintJob.user_id == User.id)
+        .group_by(PrintJob.user_id, User.username, User.email)
+    )
+    scan_user_rows = await db.execute(
+        select(ScanJob.user_id, User.username, User.email, func.count().label("count"))
+        .select_from(ScanJob)
+        .outerjoin(User, ScanJob.user_id == User.id)
+        .group_by(ScanJob.user_id, User.username, User.email)
+    )
+    per_user = _ranked_per_user(print_user_rows.all(), scan_user_rows.all(), top_n=PER_USER_TOP_N)
+
     return {
         "print_counts": print_counts,
         "scan_counts": scan_counts,
@@ -135,6 +259,8 @@ async def get_usage_stats(
         "daily_scans": [
             {"day": str(row.day), "count": row.count} for row in daily_scans
         ],
+        "trend_30d": trend_30d,
+        "per_user": per_user,
     }
 
 
