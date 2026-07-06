@@ -1,14 +1,40 @@
 import Card from '../components/common/Card';
+import Skeleton from '../components/common/Skeleton';
+import ErrorState from '../components/common/ErrorState';
 import { useDashboardStats } from '../api/queries';
 
-export default function DashboardPage() {
-  const { data: stats, isLoading: loading, isError } = useDashboardStats();
+interface StatTileProps {
+  label: string;
+  value: number;
+  valueClassName: string;
+}
 
-  if (loading) {
+function StatTile({ label, value, valueClassName }: StatTileProps) {
+  return (
+    <Card>
+      <div className="text-center">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+          {label}
+        </div>
+        <div className={`mt-1.5 font-mono text-3xl font-semibold ${valueClassName}`}>{value}</div>
+      </div>
+    </Card>
+  );
+}
+
+export default function DashboardPage() {
+  const { data: stats, isPending, isError, refetch } = useDashboardStats();
+
+  if (isPending) {
     return (
       <div className="space-y-6">
         <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Dashboard</h2>
-        <p className="text-gray-500 text-sm">Loading...</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }, (_, i) => (
+            <Skeleton key={i} variant="card" />
+          ))}
+        </div>
+        <Skeleton variant="card" count={3} />
       </div>
     );
   }
@@ -17,7 +43,7 @@ export default function DashboardPage() {
     return (
       <div className="space-y-6">
         <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Dashboard</h2>
-        <p className="text-gray-500 text-sm">Failed to load stats. Admin access required.</p>
+        <ErrorState title="Failed to load stats" detail="Admin access required." onRetry={() => refetch()} />
       </div>
     );
   }
@@ -38,30 +64,10 @@ export default function DashboardPage() {
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <Card>
-          <div className="text-center">
-            <div className="text-3xl font-bold text-blue-600 dark:text-blue-400">{totalPrints}</div>
-            <div className="text-sm text-gray-500 dark:text-gray-400">Total Prints</div>
-          </div>
-        </Card>
-        <Card>
-          <div className="text-center">
-            <div className="text-3xl font-bold text-green-600 dark:text-green-400">{totalScans}</div>
-            <div className="text-sm text-gray-500 dark:text-gray-400">Total Scans</div>
-          </div>
-        </Card>
-        <Card>
-          <div className="text-center">
-            <div className="text-3xl font-bold text-yellow-600 dark:text-yellow-400">{stats.print_counts.held || 0}</div>
-            <div className="text-sm text-gray-500 dark:text-gray-400">Held Jobs</div>
-          </div>
-        </Card>
-        <Card>
-          <div className="text-center">
-            <div className="text-3xl font-bold text-red-600 dark:text-red-400">{stats.print_counts.failed || 0}</div>
-            <div className="text-sm text-gray-500 dark:text-gray-400">Failed</div>
-          </div>
-        </Card>
+        <StatTile label="Total Prints" value={totalPrints} valueClassName="text-ink-600 dark:text-ink-400" />
+        <StatTile label="Total Scans" value={totalScans} valueClassName="text-green-600 dark:text-green-400" />
+        <StatTile label="Held Jobs" value={stats.print_counts.held || 0} valueClassName="text-amber-600 dark:text-amber-400" />
+        <StatTile label="Failed" value={stats.print_counts.failed || 0} valueClassName="text-red-600 dark:text-red-400" />
       </div>
 
       {/* Print status breakdown */}
@@ -69,8 +75,8 @@ export default function DashboardPage() {
         <div className="flex flex-wrap gap-4">
           {Object.entries(stats.print_counts).map(([status, count]) => (
             <div key={status} className="flex items-center gap-2">
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300 capitalize">{status}:</span>
-              <span className="text-sm text-gray-900 dark:text-gray-100">{count}</span>
+              <span className="text-sm font-medium text-gray-500 dark:text-gray-400 capitalize">{status}:</span>
+              <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{count}</span>
             </div>
           ))}
         </div>
@@ -81,8 +87,8 @@ export default function DashboardPage() {
         <div className="flex flex-wrap gap-4">
           {Object.entries(stats.scan_counts).map(([status, count]) => (
             <div key={status} className="flex items-center gap-2">
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300 capitalize">{status}:</span>
-              <span className="text-sm text-gray-900 dark:text-gray-100">{count}</span>
+              <span className="text-sm font-medium text-gray-500 dark:text-gray-400 capitalize">{status}:</span>
+              <span className="font-mono text-sm text-gray-900 dark:text-gray-100">{count}</span>
             </div>
           ))}
         </div>
@@ -92,16 +98,20 @@ export default function DashboardPage() {
       <Card title="Daily Activity (Last 30 Days)">
         <div className="space-y-4">
           {stats.daily_prints.length === 0 && stats.daily_scans.length === 0 ? (
-            <p className="text-gray-500 text-sm">No activity in the last 30 days.</p>
+            <p className="text-gray-500 dark:text-gray-400 text-sm">No activity in the last 30 days.</p>
           ) : (
             <>
               <div>
-                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Prints</h4>
+                <h4 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Prints</h4>
                 <div className="flex items-end gap-1 h-24">
                   {stats.daily_prints.map((d) => (
-                    <div key={d.day} className="flex-1 flex flex-col items-center" title={`${d.day}: ${d.count}`}>
+                    <div
+                      key={d.day}
+                      className="flex h-full flex-1 flex-col justify-end overflow-hidden rounded-t bg-gray-100 dark:bg-gray-800"
+                      title={`${d.day}: ${d.count}`}
+                    >
                       <div
-                        className="w-full bg-blue-500 dark:bg-blue-400 rounded-t"
+                        className="w-full bg-ink-600 dark:bg-ink-400 rounded-t"
                         style={{ height: `${(d.count / maxDaily) * 100}%`, minHeight: d.count > 0 ? '4px' : '0' }}
                       />
                     </div>
@@ -109,12 +119,16 @@ export default function DashboardPage() {
                 </div>
               </div>
               <div>
-                <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Scans</h4>
+                <h4 className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Scans</h4>
                 <div className="flex items-end gap-1 h-24">
                   {stats.daily_scans.map((d) => (
-                    <div key={d.day} className="flex-1 flex flex-col items-center" title={`${d.day}: ${d.count}`}>
+                    <div
+                      key={d.day}
+                      className="flex h-full flex-1 flex-col justify-end overflow-hidden rounded-t bg-gray-100 dark:bg-gray-800"
+                      title={`${d.day}: ${d.count}`}
+                    >
                       <div
-                        className="w-full bg-green-500 dark:bg-green-400 rounded-t"
+                        className="w-full bg-ink-600 dark:bg-ink-400 rounded-t"
                         style={{ height: `${(d.count / maxDaily) * 100}%`, minHeight: d.count > 0 ? '4px' : '0' }}
                       />
                     </div>

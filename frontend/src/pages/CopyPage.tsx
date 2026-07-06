@@ -109,13 +109,13 @@ export default function CopyPage() {
           </div>
 
           {copying && <ProgressBar progress={50} label="Scanning & printing..." />}
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
           {success && (
-            <p className="text-sm text-green-600 font-medium">Copy sent to printer!</p>
+            <p className="text-sm text-green-600 dark:text-green-400 font-medium">Copy sent to printer!</p>
           )}
 
           <Button onClick={handleCopy} disabled={copying} className="w-full" size="lg">
-            {copying ? 'Copying...' : 'Start Copy'}
+            {copying ? 'Copying...' : 'Start copying'}
           </Button>
         </div>
       </Card>

@@ -43,9 +43,9 @@ describe('AuditPage', () => {
       }),
     );
 
-    render(<AuditPage />, { wrapper: makeWrapper() });
+    const { container } = render(<AuditPage />, { wrapper: makeWrapper() });
 
-    expect(screen.getByText('Loading...')).toBeInTheDocument();
+    expect(container.querySelector('.skeleton-shimmer')).toBeInTheDocument();
 
     // Match on the entity id, not the action name — the action filter
     // dropdown always renders an option with the same text as the action
