@@ -25,8 +25,8 @@ from app.schemas import (
     serialize_scan_job,
 )
 from app.services.audit_service import log_event
-from app.services.cloud_service import CloudError, cloud_service
-from app.services.email_service import EmailError, email_service
+from app.services.cloud_service import cloud_service
+from app.services.email_service import email_service
 from app.services.file_service import cleanup_file
 from app.services.scan_service import (
     ScanError,
@@ -35,9 +35,8 @@ from app.services.scan_service import (
     run_post_scan_actions,
     scan_service,
 )
-from app.services.smb_service import SMBError, smb_service
+from app.services.smb_service import smb_service
 from app.services.thumbnail_service import (
-    ThumbnailError,
     get_or_create_thumbnail,
     invalidate_thumbnail,
 )
@@ -142,7 +141,8 @@ async def initiate_scan(
             await db.commit()
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail=str(e))
+        # ScanError is a PapyrusError (502) — let the global handler render it.
+        raise
     except Exception as e:
         job.status = "failed"
         job.error_message = f"{type(e).__name__}: {e}"
@@ -150,7 +150,9 @@ async def initiate_scan(
             await db.commit()
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+        # Never leak the raw exception text: the catch-all handler logs the
+        # traceback and returns a generic 500.
+        raise
 
     return job
 
@@ -227,7 +229,8 @@ async def initiate_batch_scan(
             await db.commit()
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail=str(e))
+        # ScanError is a PapyrusError (502) — let the global handler render it.
+        raise
     except Exception as e:
         job.status = "failed"
         job.error_message = f"{type(e).__name__}: {e}"
@@ -235,7 +238,9 @@ async def initiate_batch_scan(
             await db.commit()
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}")
+        # Never leak the raw exception text: the catch-all handler logs the
+        # traceback and returns a generic 500.
+        raise
 
     return job
 
@@ -306,8 +311,6 @@ async def get_scan_thumbnail(
         thumb_path = await get_or_create_thumbnail(job.filepath)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Scan file not found on disk")
-    except ThumbnailError as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
     return FileResponse(
         thumb_path,
@@ -335,17 +338,14 @@ async def email_scan(
     from app.routers.email import _get_smtp_config
     db_config = await _get_smtp_config(db)
 
-    try:
-        await email_service.send_scan(
-            to=data.to,
-            subject=data.subject,
-            body=data.body,
-            filepath=job.filepath,
-            filename=f"scan_{scan_id}.{job.format}",
-            db_config=db_config,
-        )
-    except EmailError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    await email_service.send_scan(
+        to=data.to,
+        subject=data.subject,
+        body=data.body,
+        filepath=job.filepath,
+        filename=f"scan_{scan_id}.{job.format}",
+        db_config=db_config,
+    )
 
     return {"message": f"Scan emailed to {data.to}"}
 
@@ -378,32 +378,29 @@ async def upload_scan_to_cloud(
 
     filename = f"scan_{scan_id}.{job.format}"
 
-    try:
-        if provider.provider == "gdrive":
-            file_id = await cloud_service.upload_to_gdrive(
-                filepath=job.filepath,
-                filename=filename,
-                access_token_encrypted=provider.access_token_encrypted,
-            )
-            return {"message": "Uploaded to Google Drive", "file_id": file_id}
-        elif provider.provider == "dropbox":
-            path = await cloud_service.upload_to_dropbox(
-                filepath=job.filepath,
-                filename=filename,
-                access_token_encrypted=provider.access_token_encrypted,
-            )
-            return {"message": "Uploaded to Dropbox", "path": path}
-        elif provider.provider == "onedrive":
-            file_id = await cloud_service.upload_to_onedrive(
-                filepath=job.filepath,
-                filename=filename,
-                access_token_encrypted=provider.access_token_encrypted,
-            )
-            return {"message": "Uploaded to OneDrive", "file_id": file_id}
-        else:
-            raise HTTPException(status_code=400, detail=f"Unknown provider: {provider.provider}")
-    except CloudError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    if provider.provider == "gdrive":
+        file_id = await cloud_service.upload_to_gdrive(
+            filepath=job.filepath,
+            filename=filename,
+            access_token_encrypted=provider.access_token_encrypted,
+        )
+        return {"message": "Uploaded to Google Drive", "file_id": file_id}
+    elif provider.provider == "dropbox":
+        path = await cloud_service.upload_to_dropbox(
+            filepath=job.filepath,
+            filename=filename,
+            access_token_encrypted=provider.access_token_encrypted,
+        )
+        return {"message": "Uploaded to Dropbox", "path": path}
+    elif provider.provider == "onedrive":
+        file_id = await cloud_service.upload_to_onedrive(
+            filepath=job.filepath,
+            filename=filename,
+            access_token_encrypted=provider.access_token_encrypted,
+        )
+        return {"message": "Uploaded to OneDrive", "file_id": file_id}
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider.provider}")
 
 
 @router.post("/scans/{scan_id}/paperless")
@@ -422,7 +419,7 @@ async def send_scan_to_paperless(
 
     from app.routers.settings import get_setting
     from app.services.crypto import encrypt_value
-    from app.services.paperless_service import PaperlessError, paperless_service
+    from app.services.paperless_service import paperless_service
     paperless_url = await get_setting(db, "paperless_url") or ""
     api_token = await get_setting(db, "paperless_api_token") or ""
     api_token_encrypted = encrypt_value(api_token) if api_token else ""
@@ -432,17 +429,14 @@ async def send_scan_to_paperless(
 
     filename = f"scan_{scan_id}.{job.format}"
 
-    try:
-        task_id = await paperless_service.push_document(
-            filepath=job.filepath,
-            filename=filename,
-            paperless_url=paperless_url,
-            api_token_encrypted=api_token_encrypted,
-            title=filename,
-        )
-        return {"message": "Sent to Paperless-ngx", "task_id": task_id}
-    except PaperlessError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    task_id = await paperless_service.push_document(
+        filepath=job.filepath,
+        filename=filename,
+        paperless_url=paperless_url,
+        api_token_encrypted=api_token_encrypted,
+        title=filename,
+    )
+    return {"message": "Sent to Paperless-ngx", "task_id": task_id}
 
 
 @router.post("/scans/{scan_id}/ocr")
@@ -462,20 +456,17 @@ async def apply_ocr_to_scan(
         raise HTTPException(status_code=400, detail="OCR is only supported for PDF scans")
 
     from app.routers.settings import get_setting
-    from app.services.ocr_service import OCRError, ocr_service
+    from app.services.ocr_service import ocr_service
     language = await get_setting(db, "ocr_language") or "eng"
 
-    try:
-        await ocr_service.apply_ocr(job.filepath, language=language)
-        # Update file size after OCR
-        job.file_size = os.path.getsize(job.filepath)
-        await db.commit()
-        # The file was rewritten in place; drop any cached thumbnail so the
-        # next request regenerates it instead of serving a stale preview.
-        invalidate_thumbnail(job.filepath)
-        return {"message": "OCR applied successfully"}
-    except OCRError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    await ocr_service.apply_ocr(job.filepath, language=language)
+    # Update file size after OCR
+    job.file_size = os.path.getsize(job.filepath)
+    await db.commit()
+    # The file was rewritten in place; drop any cached thumbnail so the
+    # next request regenerates it instead of serving a stale preview.
+    invalidate_thumbnail(job.filepath)
+    return {"message": "OCR applied successfully"}
 
 
 class EnhanceRequest(BaseModel):
@@ -506,24 +497,21 @@ async def enhance_scan(
             detail="Image enhancement is for image scans (png/jpeg/tiff), not PDFs",
         )
 
-    from app.services.image_service import ImageError, image_service
-    try:
-        await image_service.enhance(
-            job.filepath,
-            brightness=body.brightness,
-            contrast=body.contrast,
-            rotation=body.rotation,
-            auto_crop=body.auto_crop,
-            deskew=body.deskew,
-        )
-        job.file_size = os.path.getsize(job.filepath)
-        await db.commit()
-        # The file was rewritten in place; drop any cached thumbnail so the
-        # next request regenerates it instead of serving a stale preview.
-        invalidate_thumbnail(job.filepath)
-        return {"message": "Enhancement applied"}
-    except ImageError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    from app.services.image_service import image_service
+    await image_service.enhance(
+        job.filepath,
+        brightness=body.brightness,
+        contrast=body.contrast,
+        rotation=body.rotation,
+        auto_crop=body.auto_crop,
+        deskew=body.deskew,
+    )
+    job.file_size = os.path.getsize(job.filepath)
+    await db.commit()
+    # The file was rewritten in place; drop any cached thumbnail so the
+    # next request regenerates it instead of serving a stale preview.
+    invalidate_thumbnail(job.filepath)
+    return {"message": "Enhancement applied"}
 
 
 @router.post("/scans/{scan_id}/smb")
@@ -550,18 +538,15 @@ async def save_scan_to_smb(
     filename = f"scan_{scan_id}.{job.format}"
     dest_path = f"{remote_path.rstrip('/')}/{filename}"
 
-    try:
-        await smb_service.upload(
-            server=share.server,
-            share_name=share.share_name,
-            remote_path=dest_path,
-            local_path=job.filepath,
-            username=share.username,
-            password_encrypted=share.password_encrypted,
-            domain=share.domain,
-        )
-    except SMBError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    await smb_service.upload(
+        server=share.server,
+        share_name=share.share_name,
+        remote_path=dest_path,
+        local_path=job.filepath,
+        username=share.username,
+        password_encrypted=share.password_encrypted,
+        domain=share.domain,
+    )
 
     return {"message": f"Scan saved to {share.name}:{dest_path}"}
 

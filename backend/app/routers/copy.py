@@ -1,13 +1,13 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import require_permission
 from app.database import get_db
 from app.models import PrintJob, ScanJob, User
 from app.schemas import CopyRequest, serialize_print_job, serialize_scan_job
-from app.services.copy_service import CopyError, copy_service
+from app.services.copy_service import copy_service
 from app.services.ws_manager import ws_manager
 
 router = APIRouter()
@@ -26,18 +26,15 @@ async def create_copy(
             "data": {"scan_id": scan_id, "progress": percent},
         })
 
-    try:
-        result = await copy_service.copy(
-            resolution=request.resolution,
-            mode=request.mode,
-            source=request.source,
-            copies=request.copies,
-            duplex=request.duplex,
-            media=request.media,
-            progress_callback=progress_callback,
-        )
-    except CopyError as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    result = await copy_service.copy(
+        resolution=request.resolution,
+        mode=request.mode,
+        source=request.source,
+        copies=request.copies,
+        duplex=request.duplex,
+        media=request.media,
+        progress_callback=progress_callback,
+    )
 
     # Record both the scan and print jobs
     scan_job = ScanJob(

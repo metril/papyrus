@@ -11,6 +11,7 @@ from starlette.responses import FileResponse
 
 from app.auth.dependencies import get_current_user, require_permission
 from app.database import get_db
+from app.exceptions import ExternalServiceError
 from app.models import Printer, PrintJob, User
 from app.schemas import (
     BulkDeleteJobsRequest,
@@ -28,7 +29,6 @@ from app.services.convert_service import (
 )
 from app.services.cups_service import CupsService, get_default_printer_name
 from app.services.file_service import (
-    UploadTooLargeError,
     cleanup_file,
     detect_mime_type,
     get_upload_path,
@@ -70,12 +70,10 @@ async def upload_and_create_job(
     max_bytes = _max_mb * 1024 * 1024
 
     os.makedirs(os.path.dirname(upload_path), exist_ok=True)
-    try:
-        file_size = await save_upload_streaming(file, upload_path, max_bytes)
-    except UploadTooLargeError:
-        raise HTTPException(status_code=413, detail="File too large")
-    except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
+    # UploadTooLargeError (a PapyrusError, 413) propagates to the global handler
+    # and keeps its 413; any unexpected OSError falls through to the catch-all
+    # handler as a generic 500 (no raw error text leaked to the client).
+    file_size = await save_upload_streaming(file, upload_path, max_bytes)
 
     # Assign to default printer
     default_printer = await get_default_printer(db)
@@ -352,7 +350,9 @@ async def preview_job_file(
             converted = await convert_to_pdf(job.filepath, output_dir)
             os.rename(converted, preview_path)
         except RuntimeError as e:
-            raise HTTPException(status_code=500, detail=f"Preview conversion failed: {e}")
+            raise ExternalServiceError(
+                "Converting the document for preview failed."
+            ) from e
 
     pdf_name = os.path.splitext(job.filename)[0] + ".pdf"
     return FileResponse(
@@ -488,7 +488,11 @@ async def release_job(
             })
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail=str(e))
+        # The rollback/mark-failed/broadcast side effects above are preserved;
+        # the client gets a curated 502 instead of the raw exception text.
+        raise ExternalServiceError(
+            "Releasing the job failed. Check the printer connection."
+        ) from e
 
     return job
 

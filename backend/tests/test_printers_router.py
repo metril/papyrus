@@ -15,6 +15,7 @@ from fastapi import HTTPException
 
 from app.models import Printer, PrintJob, User
 from app.routers import printers as printers_router
+from app.services import test_page_service
 
 
 class _FakeScalars:
@@ -688,15 +689,18 @@ async def test_test_page_cups_failure_returns_502(monkeypatch):
     db = _FakeDB(get_return=printer)
 
     async def fake_print_test_page(_db, _printer, _user):
-        raise printers_router.TestPageError("printer offline")
+        raise test_page_service.TestPageError("printer offline")
 
     monkeypatch.setattr(printers_router, "print_test_page", fake_print_test_page)
 
-    with pytest.raises(HTTPException) as exc_info:
+    # The router no longer maps TestPageError to HTTPException; it now propagates
+    # to the global handler as an ExternalServiceError (502). Assert on the
+    # domain exception's own status_code/detail instead.
+    with pytest.raises(test_page_service.TestPageError) as exc_info:
         await printers_router.send_test_page(printer_id=5, db=db, user=_admin_user())
 
     assert exc_info.value.status_code == 502
-    assert "printer offline" in exc_info.value.detail
+    assert exc_info.value.detail == "printer offline"
 
 
 async def test_add_network_queue_printer_skips_enrichment(monkeypatch):

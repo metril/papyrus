@@ -11,7 +11,7 @@ from app.database import get_db
 from app.models import SMBShare, User
 from app.schemas import SMBFileEntry, SMBShareCreate, SMBShareResponse
 from app.services.crypto import encrypt_value
-from app.services.smb_service import SMBError, smb_service
+from app.services.smb_service import smb_service
 
 router = APIRouter()
 
@@ -80,18 +80,14 @@ async def browse_share(
     if share is None:
         raise HTTPException(status_code=404, detail="Share not found")
 
-    try:
-        entries = await smb_service.browse(
-            server=share.server,
-            share_name=share.share_name,
-            path=path,
-            username=share.username,
-            password_encrypted=share.password_encrypted,
-            domain=share.domain,
-        )
-        return entries
-    except SMBError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    return await smb_service.browse(
+        server=share.server,
+        share_name=share.share_name,
+        path=path,
+        username=share.username,
+        password_encrypted=share.password_encrypted,
+        domain=share.domain,
+    )
 
 
 @router.get("/download/{share_id}")
@@ -111,17 +107,14 @@ async def download_from_share(
     filename = os.path.basename(path)
     temp_path = os.path.join(tempfile.gettempdir(), f"papyrus_smb_{filename}")
 
-    try:
-        await smb_service.download(
-            server=share.server,
-            share_name=share.share_name,
-            remote_path=path,
-            local_path=temp_path,
-            username=share.username,
-            password_encrypted=share.password_encrypted,
-            domain=share.domain,
-        )
-    except SMBError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    await smb_service.download(
+        server=share.server,
+        share_name=share.share_name,
+        remote_path=path,
+        local_path=temp_path,
+        username=share.username,
+        password_encrypted=share.password_encrypted,
+        domain=share.domain,
+    )
 
     return FileResponse(temp_path, filename=filename)

@@ -16,7 +16,7 @@ from app.database import get_db
 from app.models import CloudProvider, User
 from app.routers.settings import get_setting
 from app.schemas import CloudFileEntry
-from app.services.cloud_service import CloudError, cloud_service
+from app.services.cloud_service import cloud_service
 from app.services.crypto import decrypt_value, encrypt_value
 
 router = APIRouter()
@@ -307,17 +307,14 @@ async def list_files(
 
     access_token = await _get_access_token(provider, db)
 
-    try:
-        if provider.provider == "gdrive":
-            files = await cloud_service.list_gdrive_files(access_token, folder_id)
-        elif provider.provider == "dropbox":
-            files = await cloud_service.list_dropbox_files(access_token, path)
-        elif provider.provider == "onedrive":
-            files = await cloud_service.list_onedrive_files(access_token, folder_id)
-        else:
-            raise HTTPException(status_code=400, detail="Unknown provider")
-    except CloudError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    if provider.provider == "gdrive":
+        files = await cloud_service.list_gdrive_files(access_token, folder_id)
+    elif provider.provider == "dropbox":
+        files = await cloud_service.list_dropbox_files(access_token, path)
+    elif provider.provider == "onedrive":
+        files = await cloud_service.list_onedrive_files(access_token, folder_id)
+    else:
+        raise HTTPException(status_code=400, detail="Unknown provider")
 
     return files
 
@@ -358,23 +355,20 @@ async def download_file(
     tmp_name = f"papyrus_cloud_{secrets.token_hex(8)}"
     local_path = os.path.join(tmp_dir, tmp_name)
 
-    try:
-        if provider.provider == "gdrive":
-            if not file_id:
-                raise HTTPException(status_code=400, detail="file_id is required for Google Drive")
-            await cloud_service.download_gdrive_file(access_token, file_id, local_path)
-        elif provider.provider == "dropbox":
-            if not path:
-                raise HTTPException(status_code=400, detail="path is required for Dropbox")
-            await cloud_service.download_dropbox_file(access_token, path, local_path)
-        elif provider.provider == "onedrive":
-            if not file_id:
-                raise HTTPException(status_code=400, detail="file_id is required for OneDrive")
-            await cloud_service.download_onedrive_file(access_token, file_id, local_path)
-        else:
-            raise HTTPException(status_code=400, detail="Unknown provider")
-    except CloudError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    if provider.provider == "gdrive":
+        if not file_id:
+            raise HTTPException(status_code=400, detail="file_id is required for Google Drive")
+        await cloud_service.download_gdrive_file(access_token, file_id, local_path)
+    elif provider.provider == "dropbox":
+        if not path:
+            raise HTTPException(status_code=400, detail="path is required for Dropbox")
+        await cloud_service.download_dropbox_file(access_token, path, local_path)
+    elif provider.provider == "onedrive":
+        if not file_id:
+            raise HTTPException(status_code=400, detail="file_id is required for OneDrive")
+        await cloud_service.download_onedrive_file(access_token, file_id, local_path)
+    else:
+        raise HTTPException(status_code=400, detail="Unknown provider")
 
     background_tasks.add_task(_cleanup_temp_file, local_path)
 

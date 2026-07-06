@@ -8,7 +8,7 @@ from app.auth.dependencies import get_current_user, require_permission
 from app.database import get_db
 from app.models import CloudProvider, User
 from app.services.crypto import encrypt_value
-from app.services.webdav_service import WebDAVError, webdav_service
+from app.services.webdav_service import webdav_service
 
 router = APIRouter()
 
@@ -90,12 +90,7 @@ async def list_webdav_files(
         raise HTTPException(status_code=404, detail="WebDAV connection not found")
 
     url, username, password_enc = _parse_webdav_creds(provider)
-    try:
-        entries = await webdav_service.list_files(url, username, password_enc, path)
-    except WebDAVError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-
-    return entries
+    return await webdav_service.list_files(url, username, password_enc, path)
 
 
 @router.post("/{provider_id}/upload")
@@ -135,11 +130,8 @@ async def upload_to_webdav(
     url, username, password_enc = _parse_webdav_creds(provider)
     filename = f"scan_{scan.scan_id}.{scan.format}"
 
-    try:
-        await webdav_service.upload_file(
-            url, username, password_enc, scan.filepath, filename, destination
-        )
-    except WebDAVError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+    await webdav_service.upload_file(
+        url, username, password_enc, scan.filepath, filename, destination
+    )
 
     return {"message": f"Uploaded {filename} to WebDAV"}
