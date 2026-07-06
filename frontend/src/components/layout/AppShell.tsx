@@ -3,45 +3,25 @@ import { Outlet, NavLink } from 'react-router-dom';
 import api from '../../api/client';
 import { useThemeStore } from '../../store/themeStore';
 import { useAuthStore } from '../../store/authStore';
-
-const UsersIcon = ({ className }: { className?: string }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
-  </svg>
-);
-
-const LogoutIcon = ({ className }: { className?: string }) => (
-  <svg xmlns="http://www.w3.org/2000/svg" className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-  </svg>
-);
-
-const SunIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364-6.364l-.707.707M6.343 17.657l-.707.707M17.657 17.657l-.707-.707M6.343 6.343l-.707-.707M12 8a4 4 0 100 8 4 4 0 000-8z" />
-  </svg>
-);
-const MoonIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-  </svg>
-);
-const SystemIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-  </svg>
-);
 import { useRealtimeBridge } from '../../hooks/useRealtimeBridge';
 import {
-  PrinterIcon,
-  DocumentScannerIcon,
-  CopyIcon,
-  FolderIcon,
-  ClockIcon,
-  ChartIcon,
-  ShieldIcon,
-  SettingsIcon,
-} from '../common/Icons';
+  Printer,
+  ScanLine,
+  Copy,
+  FolderOpen,
+  History,
+  ChartColumn,
+  Users,
+  ShieldCheck,
+  Settings,
+  LogOut,
+  Sun,
+  Moon,
+  Monitor,
+} from 'lucide-react';
+
+// Shared default so every icon in this file gets the same visual weight.
+const ICON_STROKE_WIDTH = 1.75;
 
 // Full-viewport centered spinner, shared by the auth-loading state, the
 // LoginScreen providers fetch, and the Suspense fallback for lazy routes.
@@ -52,15 +32,15 @@ const CenteredSpinner = () => (
 );
 
 const navItems = [
-  { to: '/print', label: 'Print', icon: PrinterIcon },
-  { to: '/scan', label: 'Scan', icon: DocumentScannerIcon },
-  { to: '/copy', label: 'Copy', icon: CopyIcon },
-  { to: '/files', label: 'Files', icon: FolderIcon },
-  { to: '/history', label: 'History', icon: ClockIcon },
-  { to: '/dashboard', label: 'Dashboard', icon: ChartIcon, adminOnly: true },
-  { to: '/users', label: 'Users', icon: UsersIcon, adminOnly: true },
-  { to: '/audit', label: 'Audit', icon: ShieldIcon, adminOnly: true },
-  { to: '/settings', label: 'Settings', icon: SettingsIcon },
+  { to: '/print', label: 'Print', icon: Printer },
+  { to: '/scan', label: 'Scan', icon: ScanLine },
+  { to: '/copy', label: 'Copy', icon: Copy },
+  { to: '/files', label: 'Files', icon: FolderOpen },
+  { to: '/history', label: 'History', icon: History },
+  { to: '/dashboard', label: 'Dashboard', icon: ChartColumn, adminOnly: true },
+  { to: '/users', label: 'Users', icon: Users, adminOnly: true },
+  { to: '/audit', label: 'Audit', icon: ShieldCheck, adminOnly: true },
+  { to: '/settings', label: 'Settings', icon: Settings },
 ];
 
 function ThemeToggle({ compact = false }: { compact?: boolean }) {
@@ -69,9 +49,9 @@ function ThemeToggle({ compact = false }: { compact?: boolean }) {
   const labels: Record<string, string> = { light: 'Light', dark: 'Dark', system: 'System' };
 
   const icons: Record<string, React.ReactNode> = {
-    light: <SunIcon />,
-    dark: <MoonIcon />,
-    system: <SystemIcon />,
+    light: <Sun className="w-4 h-4" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />,
+    dark: <Moon className="w-4 h-4" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />,
+    system: <Monitor className="w-4 h-4" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />,
   };
 
   if (compact) {
@@ -140,7 +120,7 @@ function LoginScreen() {
       <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-xl shadow-gray-300/30 dark:shadow-black/30 border border-gray-100 dark:border-gray-800 p-8 w-full max-w-sm space-y-6">
         <div className="text-center">
           <div className="mx-auto w-12 h-12 bg-blue-50 dark:bg-blue-950/50 rounded-xl flex items-center justify-center mb-3">
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0110.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0l.229 2.523a1.125 1.125 0 01-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0021 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 00-1.913-.247M6.34 18H5.25A2.25 2.25 0 013 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 011.913-.247m10.5 0a48.536 48.536 0 00-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18 10.5h.008v.008H18V10.5zm-3 0h.008v.008H15V10.5z" /></svg>
+            <Printer className="w-6 h-6 text-blue-600 dark:text-blue-400" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />
           </div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 tracking-tight">Papyrus</h1>
           <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">Print & Scan Server</p>
@@ -242,7 +222,7 @@ export default function AppShell() {
                 }`
               }
             >
-              <Icon className="w-5 h-5" />
+              <Icon className="w-5 h-5" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />
               {label}
             </NavLink>
           ))}
@@ -263,7 +243,7 @@ export default function AppShell() {
                 title="Sign out"
                 className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
               >
-                <LogoutIcon className="w-4 h-4" />
+                <LogOut className="w-4 h-4" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />
               </button>
             </div>
           )}
@@ -292,7 +272,7 @@ export default function AppShell() {
               }`
             }
           >
-            <Icon className="w-5 h-5" />
+            <Icon className="w-5 h-5" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />
             {label}
           </NavLink>
         ))}
@@ -304,7 +284,7 @@ export default function AppShell() {
             }`
           }
         >
-          <SettingsIcon className="w-5 h-5" />
+          <Settings className="w-5 h-5" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />
           Settings
         </NavLink>
         <ThemeToggle compact />

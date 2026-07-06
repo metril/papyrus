@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { ChevronDown } from 'lucide-react';
 
 interface CardProps {
   title?: string;
@@ -21,15 +22,11 @@ export default function Card({ title, children, className = '', collapsible = fa
           <div className="flex items-center justify-between">
             <h3 className="text-base font-semibold text-gray-900 dark:text-gray-100">{title}</h3>
             {collapsible && (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
+              <ChevronDown
                 className={`w-5 h-5 text-gray-400 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-              >
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
             )}
           </div>
         </div>
