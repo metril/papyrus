@@ -20,6 +20,7 @@ export const queryKeys = {
     list: () => ['printers', 'list'] as const,
   },
   printerStatus: ['printerStatus'] as const,
+  printerDiscovery: ['printerDiscovery'] as const,
   scanners: {
     list: () => ['scanners', 'list'] as const,
   },

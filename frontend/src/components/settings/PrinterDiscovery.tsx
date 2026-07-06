@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import Button from '../common/Button';
 import { discoverPrinters } from '../../api/printers';
+import { queryKeys } from '../../api/queries';
 import type { DiscoveredPrinter } from '../../types';
 
 const protocolColors: Record<string, string> = {
@@ -14,73 +15,42 @@ interface PrinterDiscoveryProps {
 }
 
 export default function PrinterDiscovery({ onSelect }: PrinterDiscoveryProps) {
-  const [devices, setDevices] = useState<DiscoveredPrinter[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [scanned, setScanned] = useState(false);
-  const [error, setError] = useState(false);
-  // Guards every setState in scan()'s promise callbacks: the discover call
-  // takes ~4s server-side, and the user can close the Add panel (unmounting
-  // this component) before it resolves. Set true on unmount cleanup; reset
-  // false when the effect re-runs (StrictMode remount).
-  const unmountedRef = useRef(false);
-
-  // Does not itself call setState synchronously — only inside the promise
-  // callbacks below — so it's safe to invoke directly from the mount effect.
-  // `loading` starts `true` for the initial scan; `handleRescan` flips it
-  // back to `true` before calling this again. On failure the previous device
-  // list is kept (a transient rescan error must not wipe good results).
-  const scan = useCallback(() => {
-    discoverPrinters()
-      .then((found) => {
-        if (unmountedRef.current) return;
-        setDevices(found);
-        setError(false);
-      })
-      .catch(() => {
-        if (unmountedRef.current) return;
-        setError(true);
-      })
-      .finally(() => {
-        if (unmountedRef.current) return;
-        setLoading(false);
-        setScanned(true);
-      });
-  }, []);
-
-  useEffect(() => {
-    unmountedRef.current = false;
-    scan();
-    return () => {
-      unmountedRef.current = true;
-    };
-  }, [scan]);
-
-  const handleRescan = () => {
-    setLoading(true);
-    setError(false);
-    scan();
-  };
+  // staleTime/gcTime 0 + no window-focus refetch: every mount is a fresh scan
+  // (mirrors the old mount-effect), and StrictMode's double-invoke of the
+  // effect now dedupes into a single in-flight request instead of firing the
+  // ~4s discover call twice. `error` keeps its previous data (the last good
+  // device list) so a transient rescan failure doesn't wipe good results.
+  const { data, isFetching, isError, refetch } = useQuery({
+    queryKey: queryKeys.printerDiscovery,
+    queryFn: discoverPrinters,
+    staleTime: 0,
+    gcTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
+    meta: { suppressGlobalError: true },
+  });
+  const devices = data ?? [];
 
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-xs text-gray-500 dark:text-gray-400">
-          {loading
+          {isFetching
             ? 'Scanning network…'
             : `${devices.length} device${devices.length === 1 ? '' : 's'} found`}
         </span>
-        <Button size="sm" variant="ghost" onClick={handleRescan} disabled={loading}>
-          {loading ? 'Scanning…' : 'Rescan'}
+        <Button size="sm" variant="ghost" onClick={() => refetch()} disabled={isFetching}>
+          {isFetching ? 'Scanning…' : 'Rescan'}
         </Button>
       </div>
 
-      {!loading && error && (
+      {!isFetching && isError && (
         <p className="text-sm text-red-600 dark:text-red-400">
           Scan failed — try again.
         </p>
       )}
 
-      {!loading && !error && scanned && devices.length === 0 && (
+      {!isFetching && !isError && devices.length === 0 && (
         <p className="text-sm text-gray-500 dark:text-gray-400">
           No printers found — your network may block mDNS; use the IP Address tab.
         </p>

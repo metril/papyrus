@@ -1,10 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Toggle from '../common/Toggle';
 import { useToast } from '../../hooks/useToast';
 import {
-  listPrinters,
   addPrinter,
   updatePrinter,
   deletePrinter,
@@ -15,7 +15,8 @@ import {
   refreshPrinterInfo,
   type PrinterProbeResult,
 } from '../../api/printers';
-import type { DiscoveredPrinter, ManagedPrinter } from '../../types';
+import { usePrinters, queryKeys } from '../../api/queries';
+import type { DiscoveredPrinter, ManagedPrinter, ManagedPrinterCreate, ManagedPrinterUpdate } from '../../types';
 import { SettingField } from './shared';
 import PrinterDiscovery from './PrinterDiscovery';
 
@@ -30,7 +31,8 @@ function probeStateBadgeColor(state: number): string {
 
 export default function PrintersCard() {
   const toast = useToast();
-  const [printers, setPrinters] = useState<ManagedPrinter[]>([]);
+  const queryClient = useQueryClient();
+  const { data: printers = [] } = usePrinters();
   const [showAdd, setShowAdd] = useState(false);
   const [addMode, setAddMode] = useState<'discover' | 'ip' | 'manual'>('discover');
   const [selectedDevice, setSelectedDevice] = useState<DiscoveredPrinter | null>(null);
@@ -43,9 +45,64 @@ export default function PrintersCard() {
   const [probeStatus, setProbeStatus] = useState<'idle' | 'probing' | 'reachable' | 'unreachable'>('idle');
   const [probeResult, setProbeResult] = useState<PrinterProbeResult | null>(null);
 
-  const load = () => listPrinters().then(setPrinters).catch(() => {});
+  const invalidatePrinters = () => queryClient.invalidateQueries({ queryKey: queryKeys.printers.list() });
 
-  useEffect(() => { load(); }, []);
+  const addMutation = useMutation({
+    mutationFn: (body: ManagedPrinterCreate) => addPrinter(body),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidatePrinters,
+    onError: () => toast.show('Failed to add printer'),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, body }: { id: number; body: ManagedPrinterUpdate }) => updatePrinter(id, body),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidatePrinters,
+    onError: () => toast.show('Failed to update printer'),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => deletePrinter(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidatePrinters,
+    onError: () => toast.show('Failed to delete printer'),
+  });
+
+  const defaultMutation = useMutation({
+    mutationFn: (id: number) => setDefaultPrinter(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidatePrinters,
+    onError: () => toast.show('Failed to set default'),
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: (id: number) => resumePrinter(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidatePrinters,
+    onError: () => toast.show('Failed to resume printer'),
+  });
+
+  const testPageMutation = useMutation({
+    mutationFn: (id: number) => printTestPage(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidatePrinters,
+    onError: () => toast.show('Test page failed'),
+  });
+
+  const refreshInfoMutation = useMutation({
+    mutationFn: (id: number) => refreshPrinterInfo(id),
+    meta: { suppressGlobalError: true },
+    onSuccess: invalidatePrinters,
+    onError: () => toast.show('Failed to refresh printer info'),
+  });
+
+  // Imperative like the old handler — the probe result feeds the shared
+  // `probeStatus`/`probeResult` state that the IP-tab UI renders directly,
+  // rather than a query the UI reads via isPending/data.
+  const probeMutation = useMutation({
+    mutationFn: (ip: string) => probePrinter(ip),
+    meta: { suppressGlobalError: true },
+  });
 
   const ipUri = ipAddress ? `ipp://${ipAddress}/ipp` : '';
   const canAddPrinter = form.display_name.trim() !== '' &&
@@ -58,7 +115,7 @@ export default function PrintersCard() {
     setProbeStatus('probing');
     setProbeResult(null);
     try {
-      const result = await probePrinter(ipAddress);
+      const result = await probeMutation.mutateAsync(ipAddress);
       setProbeResult(result);
       setProbeStatus(result.reachable ? 'reachable' : 'unreachable');
       const suggested = result.suggested_display_name;
@@ -80,47 +137,39 @@ export default function PrintersCard() {
     }));
   };
 
-  const handleAdd = async () => {
+  const handleAdd = () => {
     const uri = addMode === 'ip' ? (probeResult?.uri || ipUri) : form.uri;
     if (!form.display_name) return;
-    try {
-      await addPrinter({ ...form, uri: uri || undefined });
-      resetAdd();
-      load();
-    } catch { toast.show('Failed to add printer'); }
+    addMutation.mutate({ ...form, uri: uri || undefined }, { onSuccess: resetAdd });
   };
 
-  const handleUpdate = async (id: number) => {
-    try {
-      await updatePrinter(id, { ...editForm, uri: editForm.uri || undefined });
-      setEditId(null);
-      load();
-    } catch { toast.show('Failed to update printer'); }
+  const handleUpdate = (id: number) => {
+    updateMutation.mutate(
+      { id, body: { ...editForm, uri: editForm.uri || undefined } },
+      { onSuccess: () => setEditId(null) },
+    );
   };
 
-  const handleDelete = async (id: number) => {
-    try { await deletePrinter(id); setConfirmDeleteId(null); load(); } catch { toast.show('Failed to delete printer'); }
+  const handleDelete = (id: number) => {
+    deleteMutation.mutate(id, { onSuccess: () => setConfirmDeleteId(null) });
   };
 
-  const handleDefault = async (id: number) => {
-    try { await setDefaultPrinter(id); load(); } catch { toast.show('Failed to set default'); }
+  const handleDefault = (id: number) => {
+    defaultMutation.mutate(id);
   };
 
-  const handleResume = async (id: number) => {
-    try { await resumePrinter(id); load(); } catch { toast.show('Failed to resume printer'); }
+  const handleResume = (id: number) => {
+    resumeMutation.mutate(id);
   };
 
-  const handleTestPage = async (p: ManagedPrinter) => {
-    try {
-      await printTestPage(p.id);
-      toast.show(`Test page sent to ${p.display_name}`, 'success');
-    } catch {
-      toast.show('Test page failed');
-    }
+  const handleTestPage = (p: ManagedPrinter) => {
+    testPageMutation.mutate(p.id, {
+      onSuccess: () => toast.show(`Test page sent to ${p.display_name}`, 'success'),
+    });
   };
 
-  const handleRefreshInfo = async (id: number) => {
-    try { await refreshPrinterInfo(id); load(); } catch { toast.show('Failed to refresh printer info'); }
+  const handleRefreshInfo = (id: number) => {
+    refreshInfoMutation.mutate(id);
   };
 
   const startEdit = (p: ManagedPrinter) => {
