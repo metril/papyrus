@@ -32,6 +32,7 @@ const SystemIcon = () => (
   </svg>
 );
 import { useWebSocket } from '../../hooks/useWebSocket';
+import { useRealtimeBridge } from '../../hooks/useRealtimeBridge';
 import { useToast } from '../../hooks/useToast';
 import {
   PrinterIcon,
@@ -89,6 +90,13 @@ function ThemeToggle({ compact = false }: { compact?: boolean }) {
       <span>{labels[theme]}</span>
     </button>
   );
+}
+
+// Opens the realtime WS→cache bridge only once the user is authenticated, so
+// the login screen never spins up sockets. Renders nothing.
+function RealtimeBridge() {
+  useRealtimeBridge();
+  return null;
 }
 
 function LoginScreen() {
@@ -221,6 +229,7 @@ export default function AppShell() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex">
+      <RealtimeBridge />
       {/* Desktop sidebar */}
       <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800">
         <div className="flex flex-col justify-center h-16 px-6 border-b border-gray-100 dark:border-gray-800">
