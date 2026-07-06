@@ -11,6 +11,20 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: papyrus
+          POSTGRES_PASSWORD: papyrus
+          POSTGRES_DB: papyrus_test
+        ports:
+          - "5433:5432"
+        options: >-
+          --health-cmd "pg_isready -U papyrus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -35,7 +49,28 @@ jobs:
 
       - name: Pytest
         working-directory: backend
-        run: pytest -q
+        env:
+          PAPYRUS_TEST_DB_URL: postgresql+asyncpg://papyrus:papyrus@localhost:5433/papyrus_test
+        run: pytest -q --junitxml=pytest.xml
+
+      - name: Fail if any tests were skipped
+        working-directory: backend
+        run: |
+          python - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("pytest.xml").getroot()
+          skipped = sum(int(suite.get("skipped", 0)) for suite in root.iter("testsuite"))
+          print(f"skipped tests: {skipped}")
+          if skipped:
+              print(
+                  "::error::Integration tests were skipped in CI — the test "
+                  "Postgres service must be reachable here. Check the "
+                  "postgres service health check and PAPYRUS_TEST_DB_URL."
+              )
+              sys.exit(1)
+          PY
 
   frontend:
     runs-on: ubuntu-latest

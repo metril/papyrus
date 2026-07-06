@@ -62,11 +62,15 @@ docker compose -f docker/compose.yaml down
 cd backend && pytest
 cd frontend && npm test
 
+# Backend integration tests need a local test Postgres; they auto-skip
+# (reason "test Postgres unreachable…") if it isn't running:
+docker run -d --name papyrus-test-pg -e POSTGRES_USER=papyrus -e POSTGRES_PASSWORD=papyrus -e POSTGRES_DB=papyrus_test -p 127.0.0.1:5433:5432 postgres:16-alpine
+
 # React Compiler experiment (default OFF; see vite.config.ts)
 cd frontend && REACT_COMPILER=1 npm run build
 ```
 
-The local backend venv doesn't have pycups (host lacks CUPS headers); `pip install -e ".[dev]"` still works and `backend/tests/conftest.py` stubs `sys.modules["cups"]` so tests import cleanly without it. Docker/CI images have real pycups. CI (`.github/workflows/ci.yml`) runs backend ruff+pytest and frontend eslint+`npm test` (vitest)+build on every push/PR.
+The local backend venv doesn't have pycups (host lacks CUPS headers); `pip install -e ".[dev]"` still works and `backend/tests/conftest.py` stubs `sys.modules["cups"]` so tests import cleanly without it. Docker/CI images have real pycups. CI (`.github/workflows/ci.yml`) runs backend ruff+pytest and frontend eslint+`npm test` (vitest)+build on every push/PR. The backend job also runs a `postgres:16-alpine` service container (port 5433→5432, matching `PAPYRUS_TEST_DB_URL`'s default) so the ~52 integration tests execute in CI instead of skipping; a step after Pytest parses the `--junitxml` report and fails the job if any test was skipped, so a broken service container can't silently downgrade the suite.
 
 ## Environment Variables
 Only infrastructure settings use env vars (`PAPYRUS_` prefix). All other settings are managed via the Settings UI and stored in the AppConfig database table.
@@ -81,6 +85,8 @@ Only infrastructure settings use env vars (`PAPYRUS_` prefix). All other setting
 - `PAPYRUS_OIDC_ADMIN_GROUP` — OIDC group name that grants admin role
 - `PAPYRUS_OIDC_GROUPS_CLAIM` — Claim name containing group list (default: `groups`)
 - `PAPYRUS_DEV_MODE` — Development mode (bypass OIDC)
+- `PAPYRUS_CORS_ORIGINS` — Comma-separated list of allowed CORS origins; empty (default) means same-origin only and `CORSMiddleware` isn't added at all, since the app is normally served from behind a reverse proxy on the same origin
+- `PAPYRUS_TEST_DB_URL` — Test-only: overrides the Postgres URL the test harness (`backend/tests/conftest.py`) targets (default `postgresql+asyncpg://papyrus:papyrus@localhost:5433/papyrus_test`); set by CI, or export it locally if your test Postgres runs somewhere other than the `papyrus-test-pg` one-liner above
 
 **UI-managed settings** (stored in DB, configured via Settings page):
 SMTP, cloud OAuth, scanner/printer config, OCR, FTP/SFTP, Paperless-ngx, retention, webhooks, OIDC group mapping, etc. Use `get_setting(db, key)` from `app.routers.settings` to read them in code.
@@ -95,3 +101,6 @@ SMTP, cloud OAuth, scanner/printer config, OCR, FTP/SFTP, Paperless-ngx, retenti
 - **Frontend**: TypeScript strict mode. Tailwind for styling. Server state lives in the TanStack Query cache, always keyed via the `queryKeys` factory in `api/queries.ts` (never an inline key array). Zustand is for client-only UI state (auth, theme, toasts, WS connection flags) — never server data. Realtime WebSocket events are applied to the Query cache exclusively through `useRealtimeBridge`'s `setQueryData` calls; components never open their own sockets for list data or refetch in response to an event.
 - **Uploads**: Stream to disk (`save_upload_streaming`) rather than buffering whole files in memory; enforce `max_upload_size_mb` with an early 413 while streaming.
 - **WebSocket events**: The `jobs`/`scans`/`printers` channels (`/ws/jobs`, `/ws/scans`, `/ws/printers`) always broadcast the full serialized object (`job_created`/`job_updated`/`job_deleted`, `scan_completed`/`scan_deleted`, `printer_status`), never a partial payload — the frontend applies events incrementally instead of refetching. If a row is gone by the time a background task finishes, skip the broadcast rather than send a partial object.
+- **Errors**: Raise domain errors from `app/exceptions.py` (`PapyrusError` subclasses — `NotFoundError` 404, `PrinterUnavailableError`/`ScannerBusyError` 503, `ExternalServiceError` 502, `UploadTooLargeError` 413) instead of `HTTPException`; their `detail` is sent to the client verbatim, so write it for end users and never put internal state, stack traces, or upstream error strings into it. Never do `HTTPException(500, str(e))` — let an unexpected `Exception` fall through to the catch-all handler in `register_exception_handlers`, which logs the traceback and returns a generic message instead.
+- **Logging & request IDs**: All app and uvicorn logs flow through `app/logging_config.py`'s single stderr handler (JSON in prod, human-readable in dev) via stdlib `logging.config.dictConfig` — no structlog. `RequestIDMiddleware` (`app/middleware.py`) assigns/echoes an `X-Request-ID` header per request and stores it in the `request_id_var` contextvar (`app/request_context.py`); `get_request_id()` reads it from anywhere (including log filters) and every error JSON body includes the same id under `request_id`.
+- **Status-code contract with the frontend**: 401 → the axios interceptor in `frontend/src/api/client.ts` redirects to `/api/auth/login`; keep issuing 401 (never 403) for "not authenticated". 403 → authenticated but lacking the required role/permission (`require_admin`/`require_permission`); the frontend does not redirect on it, so don't reuse 401 for this case. 413 → upload exceeds `max_upload_size_mb`, raised as `UploadTooLargeError` mid-stream by `save_upload_streaming` before the whole body is buffered.

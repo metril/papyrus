@@ -33,6 +33,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Retention Policies**: Automatic cleanup of old scans and print jobs with configurable retention periods
 - **Backup / Restore**: Export and import all application settings as JSON (admin)
 - **Detailed Health Check**: System health endpoint with CUPS, scanner, database, disk, and uptime status
+- **Structured Logging**: JSON (or plain dev-mode) logs with a per-request `X-Request-ID`, echoed to the client and included in every log line and error response for easy correlation
 - **PWA Support**: Installable as a Progressive Web App on mobile and desktop
 - **Responsive Design**: Works on phones, tablets, and desktops, with light and dark themes
 - **Authentication**: OIDC (Authentik/Keycloak) with group-based role mapping, API tokens with fine-grained permissions
@@ -89,9 +90,26 @@ npm install
 npm run dev
 ```
 
+### Testing
+
+Backend tests are split into two tiers:
+
+- **Unit tests** run with no external services and pass with just `cd backend && pytest`.
+- **Integration tests** (auth, settings, jobs, printers, eSCL, webhooks, error handlers — anything that touches the database) need a real Postgres. Start one locally with:
+
+  ```bash
+  docker run -d --name papyrus-test-pg \
+    -e POSTGRES_USER=papyrus -e POSTGRES_PASSWORD=papyrus -e POSTGRES_DB=papyrus_test \
+    -p 127.0.0.1:5433:5432 postgres:16-alpine
+  ```
+
+  With the container running, `pytest` picks it up automatically (default `PAPYRUS_TEST_DB_URL=postgresql+asyncpg://papyrus:papyrus@localhost:5433/papyrus_test`, overridable via env) and runs the whole suite against it, applying Alembic migrations itself. Without it, the integration tests skip cleanly with reason "test Postgres unreachable...".
+
+Frontend unit tests use vitest + Testing Library (`cd frontend && npm test`).
+
 ### Continuous Integration
 
-`.github/workflows/ci.yml` runs on every push/PR: backend (`ruff check` + `pytest`) and frontend (`eslint` + `npm test` (vitest/Testing Library) + `npm run build`).
+`.github/workflows/ci.yml` runs on every push/PR: the backend job (`ruff check` + `pytest`) brings up a `postgres:16-alpine` service container so both tiers of tests run, then fails the job if the JUnit report shows any skipped test — a broken service container can't silently reduce the suite to unit-only. The frontend job runs `eslint` + `npm test` (vitest/Testing Library) + `npm run build`.
 
 ## Configuration
 
