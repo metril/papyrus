@@ -67,47 +67,57 @@ export default function ApiTokensCard() {
     >
       <div className="space-y-4">
         <div className="space-y-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
-          <input
-            type="text"
-            placeholder="Token name"
-            value={newTokenName}
-            onChange={(e) => setNewTokenName(e.target.value)}
-            className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
-          />
           <div>
-            <p className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1.5">Permissions</p>
+            <label htmlFor="new-token-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Name</label>
+            <input
+              id="new-token-name"
+              type="text"
+              placeholder="e.g. Home Assistant"
+              value={newTokenName}
+              onChange={(e) => setNewTokenName(e.target.value)}
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+            />
+          </div>
+          <div>
+            <p className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1.5">Permissions</p>
             <div className="flex flex-wrap gap-2">
-              {allPermissions.map((perm) => (
-                <label key={perm} className="flex items-center gap-1.5 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={newTokenPermissions.includes(perm)}
-                    onChange={() => togglePermission(perm)}
-                    className="rounded border-gray-300 dark:border-gray-600"
-                  />
-                  <span className="text-gray-700 dark:text-gray-300">{permissionLabels[perm]}</span>
-                </label>
-              ))}
+              {allPermissions.map((perm) => {
+                const selected = newTokenPermissions.includes(perm);
+                return (
+                  <button
+                    key={perm}
+                    type="button"
+                    aria-pressed={selected}
+                    onClick={() => togglePermission(perm)}
+                    className={`font-mono text-xs px-2.5 py-1 rounded-full font-medium border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-900 ${
+                      selected
+                        ? 'bg-ink-600 text-white border-ink-600 dark:bg-ink-500 dark:border-ink-500'
+                        : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:bg-gray-700'
+                    }`}
+                  >
+                    {permissionLabels[perm]}
+                  </button>
+                );
+              })}
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <div>
-              <p className="text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">Expires</p>
-              <select
-                value={newTokenExpiry ?? ''}
-                onChange={(e) => setNewTokenExpiry(e.target.value ? Number(e.target.value) : null)}
-                className="rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
-              >
-                <option value="">Never</option>
-                <option value="7">7 days</option>
-                <option value="30">30 days</option>
-                <option value="90">90 days</option>
-                <option value="365">1 year</option>
-              </select>
-            </div>
-            <div className="self-end">
-              <Button size="sm" onClick={createToken} disabled={!newTokenName || newTokenPermissions.length === 0}>Create</Button>
-            </div>
+          <div>
+            <label htmlFor="new-token-expiry" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Expires</label>
+            <select
+              id="new-token-expiry"
+              value={newTokenExpiry ?? ''}
+              onChange={(e) => setNewTokenExpiry(e.target.value ? Number(e.target.value) : null)}
+              className="w-full rounded-lg border border-gray-300 dark:border-gray-600 text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+            >
+              <option value="">Never</option>
+              <option value="7">7 days</option>
+              <option value="30">30 days</option>
+              <option value="90">90 days</option>
+              <option value="365">1 year</option>
+            </select>
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={createToken} disabled={!newTokenName || newTokenPermissions.length === 0}>Create</Button>
           </div>
         </div>
         {createdToken && (
