@@ -607,3 +607,53 @@ async def test_share_target_oversize_file_is_413(db, client, tmp_path):
         headers={"Authorization": f"Bearer {plaintext}"},
     )
     assert resp.status_code == 413
+
+
+async def test_share_target_skips_auto_pin_under_require_release_pin(db, client, tmp_path):
+    """Regression: the share flow redirects immediately and can never display a
+    generated PIN, so under require_release_pin the job must be held WITHOUT a
+    PIN (an unseen auto-PIN would make it permanently unreleasable)."""
+    await _seed_upload_dir(db, tmp_path)
+    await _seed_setting(db, "require_release_pin", "true")
+    plaintext = await _seed_share_user_and_token(db)
+
+    resp = await client.post(
+        "/api/share-target",
+        files=_pdf_file(),
+        headers={"Authorization": f"Bearer {plaintext}"},
+    )
+    assert resp.status_code == 303
+
+    list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
+    jobs = list_resp.json()["jobs"]
+    assert len(jobs) == 1
+    assert jobs[0]["status"] == "held"
+    assert jobs[0]["has_pin"] is False
+
+
+async def test_share_target_token_without_print_permission_redirects_to_login(db, client, tmp_path):
+    """A scope-limited API token lacking the "print" permission must not be
+    able to enqueue jobs through the share route (parity with /upload)."""
+    await _seed_upload_dir(db, tmp_path)
+    user = User(
+        email="scanonly@example.com", display_name="ScanOnly", role="user",
+        is_local=True, username="scanonly",
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    plaintext = "pprs_test_scan_only_token"
+    db.add(APIToken(
+        user_id=user.id, name="scan-token",
+        token_hash=hash_token(plaintext), permissions=["scan"],
+    ))
+    await db.commit()
+
+    resp = await client.post(
+        "/api/share-target",
+        files=_pdf_file(),
+        headers={"Authorization": f"Bearer {plaintext}"},
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/api/auth/login"
+    assert list(tmp_path.iterdir()) == []

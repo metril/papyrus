@@ -57,6 +57,7 @@ async def _create_print_job_from_upload(
     media: str = "A4",
     hold: bool = True,
     release_pin: str = "",
+    auto_pin: bool = True,
 ) -> tuple[PrintJob, str | None]:
     """Validate, stream-save, and create a print job from an uploaded file.
 
@@ -98,9 +99,12 @@ async def _create_print_job_from_upload(
     # Assign to default printer
     default_printer = await get_default_printer(db)
 
-    # Determine PIN: use provided value, or check if global setting requires one
+    # Determine PIN: use provided value, or check if global setting requires one.
+    # auto_pin=False skips the require_release_pin auto-generation for flows
+    # that have no way to show the PIN to anyone (the share-target redirect) —
+    # an unseen PIN would make the job permanently unreleasable.
     pin = release_pin.strip() if release_pin else None
-    if not pin:
+    if not pin and auto_pin:
         require_pin_val = await get_setting(db, "require_release_pin") or ""
         require_pin = require_pin_val.lower() in ("true", "1", "yes")
         if require_pin:
@@ -205,12 +209,20 @@ async def share_target(
     user = await _user_from_request_or_none(request, db)
     if user is None:
         return RedirectResponse("/api/auth/login", status_code=303)
+    # Scope-limited API tokens need the "print" permission here, matching
+    # /upload. Session users pass (token_permissions is None = full access).
+    token_permissions = getattr(request.state, "token_permissions", None)
+    if token_permissions is not None and "print" not in token_permissions:
+        return RedirectResponse("/api/auth/login", status_code=303)
 
     form = await request.form()
     for shared_file in form.getlist("file"):
         if isinstance(shared_file, str):
             continue  # not a file part; ignore a stray non-file "file" field
-        await _create_print_job_from_upload(db, user, shared_file)
+        # auto_pin=False: this flow redirects immediately and can never show a
+        # generated PIN, which would leave the job unreleasable under
+        # require_release_pin. Shared jobs are held without a PIN instead.
+        await _create_print_job_from_upload(db, user, shared_file, auto_pin=False)
 
     return RedirectResponse("/print", status_code=303)
 

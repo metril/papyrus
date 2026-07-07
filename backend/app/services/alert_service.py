@@ -4,7 +4,7 @@ Polls every configured physical printer (network hold queues have no real
 device to report on) for three conditions and fires a webhook (+ optional
 email) on each *onset*:
 
-- ``supply_low``  → ``printer.supply_low`` — a toner/ink marker at or below the
+- ``supply_low``  → ``printer.supply_low`` — a toner/ink marker strictly below the
   configured threshold (unknown levels, reported as ``-1``/absent, never alert).
 - ``error``       → ``printer.error``      — a ``printer-state-reasons`` entry
   matching a jam / open-door / empty-supply marker (matched tolerantly, since
@@ -110,7 +110,7 @@ def _collect_marker_pairs(status: dict, ipp: dict | None) -> list[tuple[str | No
 def _low_markers(
     pairs: list[tuple[str | None, object]], threshold: int
 ) -> list[tuple[str | None, int]]:
-    """Markers with a *known* level at/below (strictly below) the threshold.
+    """Markers with a *known* level strictly below the threshold.
 
     Unknown levels (-1, negative, non-int, bool) are ignored — never an alert.
     """
