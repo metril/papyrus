@@ -56,29 +56,58 @@ if [ ! -s "$TMPFILE" ]; then
     exit 1
 fi
 
-# POST to Papyrus API
-# $PRINTER is set by CUPS to the queue name that received the job
-HTTP_CODE=$(curl -s -o /dev/stderr -w "%{http_code}" \
-    -X POST "$PAPYRUS_API" \
-    -F "file=@${TMPFILE};filename=${TITLE:-Untitled}.pdf" \
-    -F "title=${TITLE:-Untitled}" \
-    -F "username=${USER:-unknown}" \
-    -F "copies=${COPIES:-1}" \
-    -F "duplex=${DUPLEX}" \
-    -F "media=${MEDIA}" \
-    -F "queue_name=${PRINTER:-}" \
-    2>/dev/null)
+# POST to Papyrus API.
+#
+# Text fields go through curl --form-string, NEVER -F. The title/username come
+# from CUPS untrusted, and -F treats a value that begins with @ or < as
+# "read the field content from a file" (and a ; as a parameter separator) — so
+# a document titled e.g. "@notes" or "a;b" makes curl abort before sending
+# anything and return HTTP 000, and the job silently never reaches Papyrus.
+# --form-string sends the value verbatim. The uploaded part uses a fixed, safe
+# filename (the real title is preserved in the "title" field, and the document
+# CUPS delivers to this backend is always PDF).
+#
+# $PRINTER is set by CUPS to the queue name that received the job.
+#
+# Retry on connection failure / 5xx (e.g. the API restarting during a deploy)
+# for a short window; a 4xx is a permanent rejection and is not retried.
+attempt=0
+max_attempts=10
+while : ; do
+    attempt=$((attempt + 1))
+    HTTP_CODE=$(curl -s -o /dev/stderr -w "%{http_code}" \
+        -X POST "$PAPYRUS_API" \
+        -F "file=@${TMPFILE};type=application/pdf;filename=document.pdf" \
+        --form-string "title=${TITLE:-Untitled}" \
+        --form-string "username=${USER:-unknown}" \
+        --form-string "copies=${COPIES:-1}" \
+        --form-string "duplex=${DUPLEX}" \
+        --form-string "media=${MEDIA}" \
+        --form-string "queue_name=${PRINTER:-}" \
+        2>/dev/null)
+    HTTP_CODE=${HTTP_CODE:-000}
 
-if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-    echo "INFO: Job submitted to Papyrus (HTTP $HTTP_CODE)" >&2
-    rm -f "$TMPFILE"
-    exit 0
-else
-    echo "ERROR: Papyrus API returned HTTP $HTTP_CODE" >&2
-    # Fail the job (CUPS_BACKEND_FAILED) so it surfaces as failed instead of
-    # silently reporting success while nothing appears in Papyrus. The temp file
-    # is kept for debugging. Safe because Papyrus creates every queue with
-    # printer-error-policy=abort-job, so CUPS aborts just this job without
-    # disabling the queue or retrying forever.
-    exit 1
-fi
+    if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+        echo "INFO: Job submitted to Papyrus (HTTP $HTTP_CODE)" >&2
+        rm -f "$TMPFILE"
+        exit 0
+    fi
+
+    if [ "$HTTP_CODE" -ge 400 ] && [ "$HTTP_CODE" -lt 500 ]; then
+        # Permanent client error — retrying won't help. Fail (CUPS aborts it).
+        echo "ERROR: Papyrus API rejected the job (HTTP $HTTP_CODE)" >&2
+        exit 1
+    fi
+
+    if [ "$attempt" -ge "$max_attempts" ]; then
+        # HTTP 000 (no connection) or 5xx after retries. Keep the temp file for
+        # debugging and fail the job (CUPS_BACKEND_FAILED). Safe because every
+        # Papyrus queue uses printer-error-policy=abort-job, so CUPS aborts just
+        # this job without disabling the queue or retrying forever.
+        echo "ERROR: Papyrus API unreachable after ${attempt} attempts (last HTTP $HTTP_CODE)" >&2
+        exit 1
+    fi
+
+    echo "WARN: Papyrus API HTTP $HTTP_CODE — retry ${attempt}/${max_attempts} in 3s" >&2
+    sleep 3
+done
