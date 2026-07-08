@@ -347,7 +347,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Papyrus",
     description="Web-based print and scan server",
-    version="1.0.2",
+    version="1.0.3",
     lifespan=lifespan,
 )
 
