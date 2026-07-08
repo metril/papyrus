@@ -55,6 +55,18 @@ async def _reconcile_on_startup() -> None:
         except Exception:
             existing_cups = set()
 
+        # Built-in zero-config hold queue backing the static AirPrint advert.
+        # printers.conf is not persisted, so recreate it every boot if missing.
+        if cups_admin.DEFAULT_QUEUE_NAME not in existing_cups:
+            try:
+                await cups_admin.ensure_default_queue()
+                logger.info(
+                    "Created built-in default hold queue: %s",
+                    cups_admin.DEFAULT_QUEUE_NAME,
+                )
+            except Exception as exc:
+                logger.warning("Failed to create default hold queue: %s", exc)
+
         result = await db.execute(select(Printer))
         for printer_obj in result.scalars():
             if printer_obj.cups_name in existing_cups:

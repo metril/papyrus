@@ -10,6 +10,19 @@ PPD_PATH = "/etc/cups/ppd/papyrus.ppd"
 AVAHI_SERVICES_DIR = "/etc/avahi/services"
 CUPS_PORT = 6310
 
+# Built-in zero-config hold queue that the static AirPrint advert points at.
+# This name MUST stay in sync with:
+#   - ``rp=printers/Papyrus`` in ``docker/avahi/airprint.service``
+#   - ``_SELF_ADVERTISEMENT_RESOURCE_MARKER`` in ``app/routers/printers.py``
+DEFAULT_QUEUE_NAME = "Papyrus"
+
+# CUPS defaults every queue to the ``stop-printer`` error policy, which disables
+# the whole queue on any backend failure and wedges all later jobs. Every queue
+# Papyrus creates overrides it to ``abort-job`` so one bad job is dropped while
+# the queue keeps serving everyone else. The papyrus backend script relies on
+# this: it ``exit 1``s on API failure, which is only safe under abort-job.
+ERROR_POLICY_OPTS = ["-o", "printer-error-policy=abort-job"]
+
 
 def _sanitize_cups_name(display_name: str) -> str:
     """Convert a display name to a valid CUPS queue name."""
@@ -115,6 +128,7 @@ async def add_physical_printer(cups_name: str, display_name: str, uri: str) -> N
         "-v", "papyrus:/",
         "-P", PPD_PATH,
         "-o", "printer-is-shared=true",
+        *ERROR_POLICY_OPTS,
         "-E",
     ])
     await _enable_queue(cups_name)
@@ -125,6 +139,7 @@ async def add_physical_printer(cups_name: str, display_name: str, uri: str) -> N
         "lpadmin", "-p", release,
         "-v", uri,
         "-m", "everywhere",
+        *ERROR_POLICY_OPTS,
         "-E",
     ])
     await _enable_queue(release)
@@ -147,10 +162,31 @@ async def add_network_queue(cups_name: str, display_name: str) -> None:
         "-v", "papyrus:/",
         "-P", PPD_PATH,
         "-o", "printer-is-shared=true",
+        *ERROR_POLICY_OPTS,
         "-E",
     ])
     await _enable_queue(cups_name)
     await _write_avahi_service(display_name, cups_name)
+
+
+async def ensure_default_queue() -> None:
+    """Create the built-in 'Papyrus' hold queue that the static AirPrint advert
+    (docker/avahi/airprint.service) points at.
+
+    Jobs sent here are held and — because no ``Printer`` row is named
+    ``Papyrus`` — routed to the default printer at ingest time. No Avahi service
+    is written: airprint.service already advertises this queue, so writing one
+    would double-advertise ``printers/Papyrus``.
+    """
+    await _run([
+        "lpadmin", "-p", DEFAULT_QUEUE_NAME,
+        "-v", "papyrus:/",
+        "-P", PPD_PATH,
+        "-o", "printer-is-shared=true",
+        *ERROR_POLICY_OPTS,
+        "-E",
+    ])
+    await _enable_queue(DEFAULT_QUEUE_NAME)
 
 
 async def remove_printer(cups_name: str) -> None:
