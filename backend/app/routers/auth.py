@@ -1,5 +1,10 @@
+import asyncio
+import uuid
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -19,8 +24,28 @@ from app.schemas import (
     APITokenResponse,
     UserResponse,
 )
+from app.services.throttle import Throttle
 
 router = APIRouter()
+
+_ph = PasswordHasher()
+
+# Caps local-login guesses at 5 failures / 5 minutes per (ip, username) pair
+# (F68) — this route is unauthenticated, so with no throttle an attacker can
+# script password guesses at full request rate.
+_login_throttle = Throttle(max_failures=5, lockout_seconds=300)
+
+
+@lru_cache(maxsize=1)
+def _dummy_hash() -> str:
+    """A real argon2 hash, computed once (lazily) and cached.
+
+    Verified against when the username doesn't exist, so an unknown-username
+    login pays the same argon2 CPU cost as a known-username/wrong-password
+    one — otherwise the near-instant early return leaks which usernames
+    exist via response timing.
+    """
+    return _ph.hash("papyrus-dummy-password-for-constant-time-verification")
 
 
 # --- Auth Providers ---
@@ -72,24 +97,35 @@ async def local_login(
         if not local_enabled:
             raise HTTPException(status_code=403, detail="Local login is disabled")
 
+    client_host = request.client.host if request.client else "unknown"
+    throttle_key = f"{client_host}:{body.username}"
+    _login_throttle.check(throttle_key)
+
     result = await db.execute(
         select(User).where(User.username == body.username, User.is_local.is_(True))
     )
     user = result.scalar_one_or_none()
-    if not user or not user.password_hash:
+
+    # Always run one argon2 verify, against the real hash if we have one and
+    # a dummy hash otherwise (F68/F67) — CPU/memory-hard work offloaded to a
+    # thread so it doesn't block the event loop.
+    has_real_hash = bool(user and user.password_hash)
+    hash_to_verify = user.password_hash if has_real_hash else _dummy_hash()
+    try:
+        await asyncio.to_thread(_ph.verify, hash_to_verify, body.password)
+        verified = has_real_hash
+    except VerifyMismatchError:
+        verified = False
+
+    if not verified:
+        _login_throttle.record_failure(throttle_key)
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    from argon2 import PasswordHasher
-    from argon2.exceptions import VerifyMismatchError
-    ph = PasswordHasher()
-    try:
-        ph.verify(user.password_hash, body.password)
-    except VerifyMismatchError:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+    _login_throttle.reset(throttle_key)
 
     # Rehash if needed (argon2-cffi best practice)
-    if ph.check_needs_rehash(user.password_hash):
-        user.password_hash = ph.hash(body.password)
+    if _ph.check_needs_rehash(user.password_hash):
+        user.password_hash = await asyncio.to_thread(_ph.hash, body.password)
 
     user.last_login = datetime.now(timezone.utc)
     await db.commit()
@@ -256,7 +292,7 @@ async def create_token(
 
 @router.delete("/tokens/{token_id}", status_code=204)
 async def revoke_token(
-    token_id: str,
+    token_id: uuid.UUID,
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):

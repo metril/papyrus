@@ -556,7 +556,7 @@ async def save_scan_to_smb(
 @router.post("/scans/bulk-delete", response_model=BulkDeleteResponse)
 async def bulk_delete_scans(
     body: BulkDeleteScansRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete multiple scans and their files."""

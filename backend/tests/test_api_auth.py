@@ -6,8 +6,12 @@ require_permission. 401/403 codes here are a frontend contract.
 """
 from datetime import datetime, timedelta, timezone
 
+from argon2 import PasswordHasher
+
 from app.auth.tokens import hash_token
 from app.models import APIToken, User
+
+_ph = PasswordHasher()
 
 
 async def _seed_user(db, *, role="user", email="tok@example.com", username="tok") -> User:
@@ -103,3 +107,99 @@ async def test_token_permission_scope_enforced_on_permission_route(db, client):
     await _seed_token(db, user, plaintext=has_print, permissions=["print"], name="print-ok")
     resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {has_print}"})
     assert resp.status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# Local login (F67 async offload, F68 throttle + constant-time unknown user)
+# --------------------------------------------------------------------------- #
+async def _seed_local_user(
+    db, *, username="localuser", password="correct-horse-battery", role="user"
+) -> User:
+    user = User(
+        email=f"{username}@example.com",
+        display_name=username.title(),
+        role=role,
+        is_local=True,
+        username=username,
+        password_hash=_ph.hash(password),
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def test_local_login_with_correct_password_succeeds(db, client):
+    password = "s3cure-test-password"
+    user = await _seed_local_user(db, username="loginok", password=password)
+
+    resp = await client.post(
+        "/api/auth/local-login", json={"username": "loginok", "password": password}
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"message": "logged in", "user_id": str(user.id)}
+
+
+async def test_local_login_with_wrong_password_is_401(db, client):
+    await _seed_local_user(db, username="loginwrongpw", password="the-real-password")
+
+    resp = await client.post(
+        "/api/auth/local-login",
+        json={"username": "loginwrongpw", "password": "not-the-password"},
+    )
+    assert resp.status_code == 401
+
+
+async def test_local_login_with_unknown_username_is_401(client):
+    """F68: an unknown username must not short-circuit before argon2 runs —
+    it still verifies against a dummy hash so the response looks the same as
+    a wrong-password attempt on a real user, both in status code and (by
+    construction) in the argon2 work performed."""
+    resp = await client.post(
+        "/api/auth/local-login",
+        json={"username": "does-not-exist", "password": "whatever"},
+    )
+    assert resp.status_code == 401
+
+
+async def test_local_login_throttled_after_five_failed_attempts(db, client):
+    """Regression (F68): local-login had no rate limit or lockout, so an
+    attacker could script password guesses at full request rate. After 5
+    failures from the same (ip, username) pair, the 6th attempt must 429
+    even with the correct password."""
+    password = "the-real-password"
+    await _seed_local_user(db, username="throttleuser", password=password)
+
+    for _ in range(5):
+        resp = await client.post(
+            "/api/auth/local-login",
+            json={"username": "throttleuser", "password": "wrong-guess"},
+        )
+        assert resp.status_code == 401
+
+    locked_resp = await client.post(
+        "/api/auth/local-login",
+        json={"username": "throttleuser", "password": password},
+    )
+    assert locked_resp.status_code == 429
+
+
+async def test_local_login_throttle_is_scoped_per_username(db, client):
+    """A different username from the same client is unaffected by another
+    username's lockout — the throttle key includes the username, not just
+    the caller's IP."""
+    password = "the-real-password"
+    await _seed_local_user(db, username="lockedout", password=password)
+    await _seed_local_user(db, username="unaffected", password=password)
+
+    for _ in range(5):
+        resp = await client.post(
+            "/api/auth/local-login",
+            json={"username": "lockedout", "password": "wrong-guess"},
+        )
+        assert resp.status_code == 401
+
+    ok_resp = await client.post(
+        "/api/auth/local-login", json={"username": "unaffected", "password": password}
+    )
+    assert ok_resp.status_code == 200

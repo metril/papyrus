@@ -45,6 +45,8 @@ from app.auth.dependencies import get_current_user
 from app.database import Base, async_session, engine
 from app.main import app
 from app.models import User
+from app.routers import auth as auth_router
+from app.routers import jobs as jobs_router
 from app.services import settings_cache
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -134,6 +136,20 @@ async def db(migrated_db):
             await conn.execute(text(_truncate_sql()))
         settings_cache.invalidate_all()
         await engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def _reset_process_local_throttles():
+    """Login/PIN throttles are process-local module singletons (by design —
+    see app/services/throttle.py), so recorded failures would otherwise leak
+    between tests: `db`'s TRUNCATE ... RESTART IDENTITY makes job ids (and
+    hence release-PIN throttle keys) repeat across tests, and login-throttle
+    keys repeat whenever tests reuse the same ip:username pair. Reset both
+    before every test for isolation.
+    """
+    auth_router._login_throttle._entries.clear()
+    jobs_router._release_pin_throttle._entries.clear()
+    yield
 
 
 @pytest_asyncio.fixture(loop_scope="function")

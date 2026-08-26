@@ -99,6 +99,44 @@ async def test_upload_creates_held_job_with_file_on_disk(db, user_client, tmp_pa
     assert get_resp.json()["status"] == "held"
 
 
+async def test_upload_with_non_digit_pin_is_400_with_no_file_left_on_disk(
+    db, user_client, tmp_path
+):
+    """Regression (F115): release_pin used to be validated only by the
+    String(10) DB column, so a too-long/non-numeric PIN blew up at commit
+    time as a generic 500 *after* save_upload_streaming had already written
+    the file — orphaning it on disk with no DB row. The PIN must be rejected
+    before any file I/O happens."""
+    await _seed_upload_dir(db, tmp_path)
+
+    resp = await user_client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "my-long-passphrase"}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "PIN must be 4–10 digits"
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_upload_with_too_short_pin_is_400(db, user_client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+
+    resp = await user_client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "123"}
+    )
+    assert resp.status_code == 400
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_upload_with_ten_digit_pin_is_accepted(db, user_client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+
+    resp = await user_client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234567890"}
+    )
+    assert resp.status_code == 201
+    assert resp.json()["release_pin"] == "1234567890"
+
+
 async def test_upload_with_required_pin_setting_returns_generated_pin(db, user_client, tmp_path):
     await _seed_upload_dir(db, tmp_path)
     await _seed_setting(db, "require_release_pin", "true")
@@ -128,6 +166,32 @@ async def test_release_with_wrong_pin_is_403(db, user_client, tmp_path, monkeypa
     assert release_resp.status_code == 403
 
     # Rejected release must not have touched CUPS or changed status.
+    get_resp = await user_client.get(f"/api/jobs/{job_id}")
+    assert get_resp.json()["status"] == "held"
+
+
+async def test_release_pin_locks_out_after_five_failed_attempts(
+    db, user_client, tmp_path, monkeypatch
+):
+    """Regression (F68): repeated wrong-PIN guesses used to have no attempt
+    counter, so a job's 4-digit PIN space (10,000 values) was sweepable.
+    After 5 failures the 6th attempt must 429 even with the correct PIN."""
+    monkeypatch.setattr(jobs_router, "CupsService", _FakeCupsService)
+    await _seed_upload_dir(db, tmp_path)
+
+    upload_resp = await user_client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"}
+    )
+    job_id = upload_resp.json()["id"]
+
+    for _ in range(5):
+        resp = await user_client.post(f"/api/jobs/{job_id}/release", json={"pin": "0000"})
+        assert resp.status_code == 403
+
+    # Locked out now, even with the correct PIN.
+    locked_resp = await user_client.post(f"/api/jobs/{job_id}/release", json={"pin": "1234"})
+    assert locked_resp.status_code == 429
+
     get_resp = await user_client.get(f"/api/jobs/{job_id}")
     assert get_resp.json()["status"] == "held"
 
@@ -210,6 +274,67 @@ async def test_bulk_delete_removes_all_rows(db, user_client, tmp_path):
     for job_id in ids:
         get_resp = await user_client.get(f"/api/jobs/{job_id}")
         assert get_resp.status_code == 404
+
+
+async def test_bulk_delete_token_without_print_permission_is_403(db, client, tmp_path):
+    """Regression (F8): bulk-delete used to depend on get_current_user, which
+    performs no permission check, so a token scoped to only "scan" could
+    bulk-delete print jobs even though DELETE /api/jobs/{id} correctly 403s
+    it. Assert the two routes agree.
+
+    Uses real Bearer tokens throughout (not `user_client`, whose
+    dependency_overrides on `get_current_user` would apply to every request
+    on the shared `app` instance and bypass the token-scoping path entirely).
+    """
+    await _seed_upload_dir(db, tmp_path)
+    uploader = User(
+        email="uploader-bulk@example.com", display_name="UploaderBulk", role="user",
+        is_local=True, username="uploader-bulk",
+    )
+    db.add(uploader)
+    await db.commit()
+    await db.refresh(uploader)
+    upload_token = "pprs_test_print_permission_bulk_delete"
+    db.add(APIToken(
+        user_id=uploader.id, name="print-ok",
+        token_hash=hash_token(upload_token), permissions=["print"],
+    ))
+    await db.commit()
+
+    upload_resp = await client.post(
+        "/api/jobs/upload",
+        files=_pdf_file(),
+        headers={"Authorization": f"Bearer {upload_token}"},
+    )
+    assert upload_resp.status_code == 201
+    job_id = upload_resp.json()["id"]
+
+    scan_only_user = User(
+        email="scanonly-bulk@example.com", display_name="ScanOnlyBulk", role="user",
+        is_local=True, username="scanonly-bulk",
+    )
+    db.add(scan_only_user)
+    await db.commit()
+    await db.refresh(scan_only_user)
+    scan_only_token = "pprs_test_scan_only_bulk_delete"
+    db.add(APIToken(
+        user_id=scan_only_user.id, name="scan-only",
+        token_hash=hash_token(scan_only_token), permissions=["scan"],
+    ))
+    await db.commit()
+
+    bulk_resp = await client.post(
+        "/api/jobs/bulk-delete",
+        json={"ids": [job_id]},
+        headers={"Authorization": f"Bearer {scan_only_token}"},
+    )
+    assert bulk_resp.status_code == 403
+
+    # The job must survive the rejected bulk-delete.
+    get_resp = await client.get(
+        f"/api/jobs/{job_id}", headers={"Authorization": f"Bearer {upload_token}"}
+    )
+    assert get_resp.status_code == 200
 
 
 # --------------------------------------------------------------------------- #

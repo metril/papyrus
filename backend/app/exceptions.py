@@ -53,6 +53,12 @@ class UploadTooLargeError(PapyrusError):
     status_code = 413
 
 
+class TooManyAttemptsError(PapyrusError):
+    """Raised when a throttle (login, release PIN, ...) is tripped."""
+
+    status_code = 429
+
+
 def _request_id(request: Request) -> str | None:
     """Request id from the contextvar, falling back to the scope stash.
 

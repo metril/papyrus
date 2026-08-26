@@ -159,9 +159,9 @@ async def _ensure_local_admin() -> None:
             from argon2 import PasswordHasher
             ph = PasswordHasher()
             try:
-                ph.verify(existing.password_hash, settings.admin_password)
+                await asyncio.to_thread(ph.verify, existing.password_hash, settings.admin_password)
             except Exception:
-                existing.password_hash = ph.hash(settings.admin_password)
+                existing.password_hash = await asyncio.to_thread(ph.hash, settings.admin_password)
                 await db.commit()
                 logger.info("Updated local admin password: %s", settings.admin_username)
             return
@@ -174,7 +174,7 @@ async def _ensure_local_admin() -> None:
             display_name=settings.admin_username,
             role="admin",
             is_local=True,
-            password_hash=ph.hash(settings.admin_password),
+            password_hash=await asyncio.to_thread(ph.hash, settings.admin_password),
             oidc_sub=None,
         )
         db.add(admin)

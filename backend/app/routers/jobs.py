@@ -1,4 +1,6 @@
 import os
+import re
+import secrets
 import sys
 from datetime import datetime, timezone
 
@@ -35,6 +37,7 @@ from app.services.file_service import (
     sanitize_filename,
     save_upload_streaming,
 )
+from app.services.throttle import Throttle
 from app.services.thumbnail_service import THUMBNAIL_CACHE_CONTROL, get_or_create_thumbnail
 from app.services.webhook_service import dispatch_webhook
 from app.services.ws_manager import ws_manager
@@ -45,6 +48,13 @@ router = APIRouter()
 # manifest action is a fixed, well-known path the browser navigates to
 # directly, so it can't live under the jobs prefix.
 share_target_router = APIRouter()
+
+_PIN_RE = re.compile(r"^\d{4,10}$")
+
+# Caps repeated release-PIN guesses on one held job at 5 failures / 5 minutes
+# (F68) — a job's 4-digit PIN space (10,000 values) is otherwise sweepable by
+# an authenticated printer user in well under an hour.
+_release_pin_throttle = Throttle(max_failures=5, lockout_seconds=300)
 
 
 async def _create_print_job_from_upload(
@@ -84,6 +94,14 @@ async def _create_print_job_from_upload(
             detail=f"Unsupported file type: {mime_type}. Accepted: PDF, images, office documents.",
         )
 
+    # Validate a caller-supplied PIN before any file I/O: it's a String(10)
+    # column, and previously an unvalidated PIN blew up at commit time as a
+    # generic 500 *after* the file had already been streamed to disk,
+    # orphaning it with no DB row (F115).
+    pin = release_pin.strip() if release_pin else None
+    if pin and not _PIN_RE.match(pin):
+        raise HTTPException(status_code=400, detail="PIN must be 4–10 digits")
+
     from app.routers.settings import get_setting, safe_int_setting
     _upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
     _max_mb = safe_int_setting(await get_setting(db, "max_upload_size_mb"), 50)
@@ -99,16 +117,14 @@ async def _create_print_job_from_upload(
     # Assign to default printer
     default_printer = await get_default_printer(db)
 
-    # Determine PIN: use provided value, or check if global setting requires one.
-    # auto_pin=False skips the require_release_pin auto-generation for flows
-    # that have no way to show the PIN to anyone (the share-target redirect) —
-    # an unseen PIN would make the job permanently unreleasable.
-    pin = release_pin.strip() if release_pin else None
+    # If no PIN was supplied, check whether the global setting requires one.
+    # auto_pin=False skips this auto-generation for flows that have no way to
+    # show the PIN to anyone (the share-target redirect) — an unseen PIN
+    # would make the job permanently unreleasable.
     if not pin and auto_pin:
         require_pin_val = await get_setting(db, "require_release_pin") or ""
         require_pin = require_pin_val.lower() in ("true", "1", "yes")
         if require_pin:
-            import secrets
             pin = f"{secrets.randbelow(10000):04d}"
 
     job = PrintJob(
@@ -588,11 +604,19 @@ async def release_job(
     if job.status != "held":
         raise HTTPException(status_code=400, detail=f"Job is not held (status: {job.status})")
 
-    # Validate release PIN if one is set on the job
+    # Validate release PIN if one is set on the job. Throttled (F68) — the
+    # PIN space is only 10,000 4-digit values, easily swept by an
+    # authenticated printer user without a per-job attempt cap — and compared
+    # with a constant-time function rather than `!=` so a timing side channel
+    # can't narrow the guess.
     if job.release_pin:
+        throttle_key = f"pin:{job_id}"
+        _release_pin_throttle.check(throttle_key)
         provided_pin = body.pin if body else None
-        if not provided_pin or provided_pin != job.release_pin:
+        if not provided_pin or not secrets.compare_digest(provided_pin, job.release_pin):
+            _release_pin_throttle.record_failure(throttle_key)
             raise HTTPException(status_code=403, detail="Invalid or missing release PIN")
+        _release_pin_throttle.reset(throttle_key)
 
     printer = None
     if job.printer_id:
@@ -719,7 +743,7 @@ async def cancel_job(
 @router.post("/bulk-delete", response_model=BulkDeleteResponse)
 async def bulk_delete_jobs(
     body: BulkDeleteJobsRequest,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
     """Delete multiple print jobs and their files."""

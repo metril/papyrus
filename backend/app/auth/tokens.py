@@ -1,6 +1,6 @@
 import hashlib
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,8 +39,14 @@ async def validate_token(db: AsyncSession, plaintext: str) -> APIToken | None:
     if token.expires_at and token.expires_at < datetime.now(timezone.utc):
         return None
 
-    # Update last_used_at
-    token.last_used_at = datetime.now(timezone.utc)
-    await db.commit()
+    # Update last_used_at, but only coarsely (F66): every Bearer-authenticated
+    # request — including read-only GETs — used to unconditionally UPDATE and
+    # COMMIT this row before the handler ran. Skipping the write when it was
+    # already stamped within the last 60s turns a poller's constant traffic
+    # into one write per minute instead of one per request.
+    now = datetime.now(timezone.utc)
+    if token.last_used_at is None or now - token.last_used_at > timedelta(seconds=60):
+        token.last_used_at = now
+        await db.commit()
 
     return token
