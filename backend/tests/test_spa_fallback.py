@@ -64,6 +64,19 @@ def test_rejects_a_decoded_traversal_sequence_reaching_proc_self_environ(tmp_pat
     assert resolve_static_file(str(static_dir), decoded_path) is None
 
 
+def test_rejects_a_path_with_an_embedded_nul_byte(tmp_path):
+    """`%00` is accepted by h11/uvicorn and Starlette's `path` convertor
+    matches it, so an unauthenticated `GET /%00` reaches this function as a
+    literal NUL byte. `os.path.realpath` raises `ValueError` for that
+    (`os.path.isfile` used to swallow it silently); this must degrade to
+    None/index.html rather than propagate into an unhandled 500.
+    """
+    static_dir = _make_static_dir(tmp_path)
+
+    assert resolve_static_file(str(static_dir), "\x00") is None
+    assert resolve_static_file(str(static_dir), "assets/\x00x.js") is None
+
+
 def test_rejects_a_symlink_that_escapes_static_dir(tmp_path):
     static_dir = _make_static_dir(tmp_path)
     outside_target = tmp_path / "outside.txt"

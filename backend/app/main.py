@@ -423,9 +423,20 @@ def resolve_static_file(static_dir: str, path: str) -> str | None:
     `static_dir` (this also rejects a symlink planted under `static_dir` that
     points outside it) and names a real file. Otherwise return None so the
     caller falls back to index.html.
+
+    A `path` containing an embedded NUL byte (e.g. `%00` — h11/uvicorn accept
+    it and Starlette's `path` convertor happily matches it) makes
+    `os.path.realpath` raise `ValueError` rather than returning a string; the
+    old inline `os.path.isfile` call silently swallowed that (`genericpath.
+    isfile` catches `OSError`/`ValueError`), so treat it the same way here —
+    not a match, fall back to index.html — instead of letting it propagate
+    into an unauthenticated 500.
     """
-    real_static_dir = os.path.realpath(static_dir)
-    candidate = os.path.realpath(os.path.join(static_dir, path))
+    try:
+        real_static_dir = os.path.realpath(static_dir)
+        candidate = os.path.realpath(os.path.join(static_dir, path))
+    except (OSError, ValueError):
+        return None
     if candidate.startswith(real_static_dir + os.sep) and os.path.isfile(candidate):
         return candidate
     return None

@@ -24,6 +24,14 @@ _start_time = time.monotonic()
 _HEALTH_CACHE_TTL_SECONDS = 15.0
 _health_cache: tuple[float, bool, bool] | None = None  # (checked_at, cups_ok, scanner_ok)
 
+# Single-flight guard: a TTL cache alone only protects *sequential* polling —
+# a burst of concurrent requests arriving before the first probe finishes and
+# populates the cache would all miss it and each fork their own `scanimage`
+# (the audit's literal "a few hundred concurrent anonymous GETs" scenario).
+# Serializing the probe body through this lock, with the cache re-checked
+# after acquiring it, makes every caller in a burst await one probe instead.
+_health_probe_lock = asyncio.Lock()
+
 
 def _reset_health_cache() -> None:
     """Test-only: clear the cached probe result."""
@@ -31,41 +39,66 @@ def _reset_health_cache() -> None:
     _health_cache = None
 
 
-async def _probe_subsystems() -> tuple[bool, bool]:
-    """Return `(cups_ok, scanner_ok)`, probing at most once per TTL window."""
-    global _health_cache
-    now = time.monotonic()
+def _cached_probe(now: float) -> tuple[bool, bool] | None:
     if _health_cache is not None and (now - _health_cache[0]) < _HEALTH_CACHE_TTL_SECONDS:
         return _health_cache[1], _health_cache[2]
+    return None
 
-    cups_ok = False
-    # Check CUPS (blocking pycups call -> worker thread)
-    try:
-        import cups
 
-        def _probe_cups():
-            cups.Connection().getPrinters()
+async def _probe_subsystems() -> tuple[bool, bool]:
+    """Return `(cups_ok, scanner_ok)`, probing at most once per TTL window.
 
-        await asyncio.to_thread(_probe_cups)
-        cups_ok = True
-    except Exception:
-        pass
+    Concurrent callers within the same window all await `_health_probe_lock`
+    rather than each forking their own probe; whichever caller gets there
+    first refreshes the cache, and everyone else re-checks it after
+    acquiring the lock and returns that fresh result instead of probing again.
+    """
+    global _health_cache
+    cached = _cached_probe(time.monotonic())
+    if cached is not None:
+        return cached
 
-    scanner_ok = False
-    # Check scanner
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "scanimage", "-L",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-        scanner_ok = b"device" in stdout.lower() if stdout else False
-    except Exception:
-        pass
+    async with _health_probe_lock:
+        # Re-check: another caller may have refreshed the cache while this
+        # one was waiting for the lock.
+        now = time.monotonic()
+        cached = _cached_probe(now)
+        if cached is not None:
+            return cached
 
-    _health_cache = (now, cups_ok, scanner_ok)
-    return cups_ok, scanner_ok
+        cups_ok = False
+        # Check CUPS (blocking pycups call -> worker thread)
+        try:
+            import cups
+
+            def _probe_cups():
+                cups.Connection().getPrinters()
+
+            await asyncio.to_thread(_probe_cups)
+            cups_ok = True
+        except Exception:
+            pass
+
+        scanner_ok = False
+        # Check scanner
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "scanimage", "-L",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                raise
+            scanner_ok = b"device" in stdout.lower() if stdout else False
+        except Exception:
+            pass
+
+        _health_cache = (now, cups_ok, scanner_ok)
+        return cups_ok, scanner_ok
 
 
 @router.get("/health", response_model=HealthResponse)
