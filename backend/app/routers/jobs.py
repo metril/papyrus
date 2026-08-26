@@ -49,7 +49,7 @@ router = APIRouter()
 # directly, so it can't live under the jobs prefix.
 share_target_router = APIRouter()
 
-_PIN_RE = re.compile(r"^\d{4,10}$")
+_PIN_RE = re.compile(r"^[0-9]{4,10}$")  # [0-9], not \d — \d is Unicode-aware
 
 # Caps repeated release-PIN guesses on one held job at 5 failures / 5 minutes
 # (F68) — a job's 4-digit PIN space (10,000 values) is otherwise sweepable by
@@ -613,7 +613,14 @@ async def release_job(
         throttle_key = f"pin:{job_id}"
         _release_pin_throttle.check(throttle_key)
         provided_pin = body.pin if body else None
-        if not provided_pin or not secrets.compare_digest(provided_pin, job.release_pin):
+        # Encode to bytes: secrets.compare_digest raises TypeError on a
+        # non-ASCII str operand, and provided_pin is user input that isn't
+        # regex-constrained here (only at upload time, and only going
+        # forward — a PIN stored before that validation existed could still
+        # be non-ASCII). Comparing bytes sidesteps both.
+        if not provided_pin or not secrets.compare_digest(
+            provided_pin.encode(), job.release_pin.encode()
+        ):
             _release_pin_throttle.record_failure(throttle_key)
             raise HTTPException(status_code=403, detail="Invalid or missing release PIN")
         _release_pin_throttle.reset(throttle_key)

@@ -137,6 +137,21 @@ async def test_upload_with_ten_digit_pin_is_accepted(db, user_client, tmp_path):
     assert resp.json()["release_pin"] == "1234567890"
 
 
+async def test_upload_with_non_ascii_digit_pin_is_400(db, user_client, tmp_path):
+    """Regression: Python's `\\d` is Unicode-aware, so `^\\d{4,10}$` accepted
+    non-ASCII digit PINs like the Arabic-Indic "١٢٣٤" — which then made
+    every subsequent release attempt 500 (secrets.compare_digest rejects
+    non-ASCII input). The PIN pattern must be ASCII-digits-only."""
+    await _seed_upload_dir(db, tmp_path)
+
+    resp = await user_client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "١٢٣٤"}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "PIN must be 4–10 digits"
+    assert list(tmp_path.iterdir()) == []
+
+
 async def test_upload_with_required_pin_setting_returns_generated_pin(db, user_client, tmp_path):
     await _seed_upload_dir(db, tmp_path)
     await _seed_setting(db, "require_release_pin", "true")
@@ -168,6 +183,33 @@ async def test_release_with_wrong_pin_is_403(db, user_client, tmp_path, monkeypa
     # Rejected release must not have touched CUPS or changed status.
     get_resp = await user_client.get(f"/api/jobs/{job_id}")
     assert get_resp.json()["status"] == "held"
+
+
+async def test_release_with_non_ascii_pin_is_403_not_500(db, user_client, tmp_path, monkeypatch):
+    """Regression: secrets.compare_digest raises TypeError on a non-ASCII
+    `str` operand, so a release attempt with e.g. {"pin": "café"} used to
+    500 through the catch-all handler instead of counting as a normal wrong
+    guess. Must be a curated 403, and must still consume the attempt
+    budget (checked via the lockout it contributes to below)."""
+    monkeypatch.setattr(jobs_router, "CupsService", _FakeCupsService)
+    await _seed_upload_dir(db, tmp_path)
+
+    upload_resp = await user_client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"}
+    )
+    job_id = upload_resp.json()["id"]
+
+    release_resp = await user_client.post(f"/api/jobs/{job_id}/release", json={"pin": "café"})
+    assert release_resp.status_code == 403
+
+    # It must have counted as a failure: 4 more (any) wrong guesses reach the
+    # 5-failure cap, and the 6th attempt — even with the correct PIN — 429s.
+    for _ in range(4):
+        resp = await user_client.post(f"/api/jobs/{job_id}/release", json={"pin": "0000"})
+        assert resp.status_code == 403
+
+    locked_resp = await user_client.post(f"/api/jobs/{job_id}/release", json={"pin": "1234"})
+    assert locked_resp.status_code == 429
 
 
 async def test_release_pin_locks_out_after_five_failed_attempts(

@@ -26,11 +26,15 @@ class Throttle:
     callable) so tests can advance time without sleeping.
     """
 
+    # record_failure calls between periodic full sweeps — see _sweep_expired.
+    _SWEEP_EVERY = 1000
+
     def __init__(self, max_failures: int, lockout_seconds: float, clock=time.monotonic):
         self.max_failures = max_failures
         self.lockout_seconds = lockout_seconds
         self._clock = clock
         self._entries: dict[str, _Entry] = {}
+        self._failures_since_sweep = 0
 
     def _current_count(self, key: str) -> int:
         """Return the live failure count for `key`, evicting it first if its
@@ -42,6 +46,26 @@ class Throttle:
             del self._entries[key]
             return 0
         return entry.count
+
+    def _sweep_expired(self) -> None:
+        """Drop every entry whose window has expired.
+
+        `_current_count` only evicts a key's *own* stale entry, and only
+        when that same key is checked/recorded again. A caller that never
+        revisits a key — e.g. local-login's key embeds the attempted
+        username, so a script rotating through distinct usernames leaves one
+        `_Entry` behind per username — would otherwise accumulate entries
+        forever. Called periodically from `record_failure` (the only method
+        that grows the dict) rather than on every call, so the common case
+        stays O(1).
+        """
+        now = self._clock()
+        expired = [
+            key for key, entry in self._entries.items()
+            if now - entry.window_start > self.lockout_seconds
+        ]
+        for key in expired:
+            del self._entries[key]
 
     def check(self, key: str) -> None:
         """Raise TooManyAttemptsError if `key` is currently locked out."""
@@ -57,6 +81,11 @@ class Throttle:
             self._entries[key] = _Entry(count=1, window_start=now)
         else:
             entry.count += 1
+
+        self._failures_since_sweep += 1
+        if self._failures_since_sweep >= self._SWEEP_EVERY:
+            self._failures_since_sweep = 0
+            self._sweep_expired()
 
     def reset(self, key: str) -> None:
         """Clear any recorded failures for `key` (e.g. on a successful attempt)."""

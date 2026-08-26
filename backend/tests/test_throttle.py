@@ -86,3 +86,26 @@ def test_record_failure_after_partial_expiry_does_not_immediately_lock():
     clock.advance(301)
     t.record_failure("k")
     t.check("k")  # only 1 failure in the current window
+
+
+def test_stale_entries_across_many_distinct_keys_are_swept_periodically():
+    """Regression: `_current_count` only evicts a key's own stale entry when
+    that same key is checked/recorded again. An attacker rotating through
+    distinct keys (e.g. many different usernames against local-login, since
+    the throttle key embeds the username) never revisits a key, so nothing
+    ever swept the resulting entries — unbounded growth. A periodic sweep
+    (every `_SWEEP_EVERY` record_failure calls) must reclaim them."""
+    clock = _FakeClock()
+    t = _throttle(max_failures=5, lockout_seconds=300, clock=clock)
+
+    for i in range(Throttle._SWEEP_EVERY - 1):
+        t.record_failure(f"key-{i}")
+    assert len(t._entries) == Throttle._SWEEP_EVERY - 1  # nothing swept yet
+
+    clock.advance(301)  # every existing entry's window has now expired
+
+    # This call crosses the sweep threshold; it should reclaim every expired
+    # entry, leaving only the fresh one just recorded by this same call.
+    t.record_failure("trigger-sweep")
+    assert len(t._entries) == 1
+    assert "trigger-sweep" in t._entries
