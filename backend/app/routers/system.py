@@ -13,15 +13,32 @@ router = APIRouter()
 
 _start_time = time.monotonic()
 
+# /health has no auth dependency (it's the unauthenticated liveness/readiness
+# probe), so the CUPS connection + `scanimage -L` fork below must not run on
+# every request — a burst of anonymous hits would otherwise fork one
+# scanimage process per request and saturate the shared to_thread executor,
+# starving every other blocking call routed through it (CUPS status,
+# release, thumbnails, ...). Cache the two probe results for
+# _HEALTH_CACHE_TTL_SECONDS instead. db_ok/disk_free_mb stay uncached — they
+# are cheap (one SELECT 1, one disk stat) and reflect current state.
+_HEALTH_CACHE_TTL_SECONDS = 15.0
+_health_cache: tuple[float, bool, bool] | None = None  # (checked_at, cups_ok, scanner_ok)
 
-@router.get("/health", response_model=HealthResponse)
-async def health_check(db: AsyncSession = Depends(get_db)):
-    """Detailed health check with subsystem status."""
+
+def _reset_health_cache() -> None:
+    """Test-only: clear the cached probe result."""
+    global _health_cache
+    _health_cache = None
+
+
+async def _probe_subsystems() -> tuple[bool, bool]:
+    """Return `(cups_ok, scanner_ok)`, probing at most once per TTL window."""
+    global _health_cache
+    now = time.monotonic()
+    if _health_cache is not None and (now - _health_cache[0]) < _HEALTH_CACHE_TTL_SECONDS:
+        return _health_cache[1], _health_cache[2]
+
     cups_ok = False
-    scanner_ok = False
-    db_ok = False
-    disk_free_mb = 0
-
     # Check CUPS (blocking pycups call -> worker thread)
     try:
         import cups
@@ -34,6 +51,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     except Exception:
         pass
 
+    scanner_ok = False
     # Check scanner
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -45,6 +63,18 @@ async def health_check(db: AsyncSession = Depends(get_db)):
         scanner_ok = b"device" in stdout.lower() if stdout else False
     except Exception:
         pass
+
+    _health_cache = (now, cups_ok, scanner_ok)
+    return cups_ok, scanner_ok
+
+
+@router.get("/health", response_model=HealthResponse)
+async def health_check(db: AsyncSession = Depends(get_db)):
+    """Detailed health check with subsystem status."""
+    db_ok = False
+    disk_free_mb = 0
+
+    cups_ok, scanner_ok = await _probe_subsystems()
 
     # Check database
     try:

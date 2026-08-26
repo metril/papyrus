@@ -1,4 +1,8 @@
+import logging
+
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -43,3 +47,30 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def validate_runtime_secrets() -> None:
+    """Hard-fail startup if `PAPYRUS_SESSION_SECRET` is unset or still the
+    placeholder default.
+
+    Starlette's `SessionMiddleware` signs auth cookies with this key
+    (`app.main` adds it with `secret_key=settings.session_secret`) and a
+    session cookie is full authentication (`app/auth/dependencies.py`
+    trusts `session["user_id"]` outright) — an empty or well-known key lets
+    an attacker forge any user's session, including an admin's. Only
+    `PAPYRUS_DEV_MODE` downgrades this to a warning, since dev mode already
+    bypasses OIDC.
+    """
+    if settings.session_secret in ("", "change-me-in-production"):
+        if settings.dev_mode:
+            logger.warning(
+                "PAPYRUS_SESSION_SECRET is not set (or is the default "
+                "placeholder) — session cookies are forgeable. Continuing "
+                "only because PAPYRUS_DEV_MODE is enabled."
+            )
+        else:
+            raise RuntimeError(
+                "PAPYRUS_SESSION_SECRET must be set to a random, unique "
+                "value in production — refusing to start with an empty or "
+                "placeholder session secret."
+            )

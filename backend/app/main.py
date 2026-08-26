@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import FileResponse
 
-from app.config import settings
+from app.config import settings, validate_runtime_secrets
 from app.exceptions import register_exception_handlers
 from app.logging_config import setup_logging
 from app.middleware import RequestIDMiddleware
@@ -313,7 +313,10 @@ async def _alert_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: seed defaults, create dirs, reconcile hardware
+    # Startup: validate secrets first — fail fast before touching the DB or
+    # hardware if the session signing key is missing/placeholder.
+    validate_runtime_secrets()
+    # Seed defaults, create dirs, reconcile hardware
     if not settings.encryption_key:
         logger.warning(
             "PAPYRUS_ENCRYPTION_KEY is not set — encrypted settings "
@@ -357,8 +360,18 @@ app = FastAPI(
 # the current request_id.
 register_exception_handlers(app)
 
-# Session middleware for OIDC (must be added before CORS)
-app.add_middleware(SessionMiddleware, secret_key=settings.session_secret)
+# Session middleware for OIDC (must be added before CORS). https_only tracks
+# PAPYRUS_BASE_URL's scheme so the cookie isn't marked Secure in http:// dev
+# deployments (which would make it unsendable) but is over any https:// one;
+# max_age/same_site are set explicitly rather than relying on Starlette's
+# defaults, which happen to already match these values.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.session_secret,
+    https_only=settings.base_url.lower().startswith("https://"),
+    max_age=14 * 24 * 3600,
+    same_site="lax",
+)
 
 # Only add CORS if explicit origins are configured — the app is same-origin
 # behind Traefik by default, and allow_origins=["*"] is spec-invalid together
@@ -398,6 +411,26 @@ app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])
 # eSCL scanner protocol (no /api prefix — clients expect /eSCL/ at root)
 app.include_router(escl.router, tags=["escl"])
 
+
+def resolve_static_file(static_dir: str, path: str) -> str | None:
+    """Resolve `path` under `static_dir`, rejecting any path-traversal escape.
+
+    `path` is untrusted, URL-decoded, and unauthenticated (it's whatever the
+    caller sent as `/{path:path}` — uvicorn percent-decodes `%2f` etc. before
+    routing, so `..%2f..%2f..%2fproc/self/environ` arrives here identical to
+    a literal `../../../proc/self/environ`). Resolve it with `os.path.realpath`
+    and only return it if the resolved path is actually contained within
+    `static_dir` (this also rejects a symlink planted under `static_dir` that
+    points outside it) and names a real file. Otherwise return None so the
+    caller falls back to index.html.
+    """
+    real_static_dir = os.path.realpath(static_dir)
+    candidate = os.path.realpath(os.path.join(static_dir, path))
+    if candidate.startswith(real_static_dir + os.sep) and os.path.isfile(candidate):
+        return candidate
+    return None
+
+
 # Serve frontend static files (built React app) with SPA fallback
 # All static files (including /assets/*) are served through spa_fallback.
 # This avoids StaticFiles returning JSON 404s for stale hashed asset requests.
@@ -405,7 +438,7 @@ static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 if os.path.isdir(static_dir):
     @app.get("/{path:path}")
     async def spa_fallback(path: str):
-        file_path = os.path.join(static_dir, path)
-        if path and os.path.isfile(file_path):
-            return FileResponse(file_path)
+        resolved = resolve_static_file(static_dir, path)
+        if resolved:
+            return FileResponse(resolved)
         return FileResponse(os.path.join(static_dir, "index.html"))
