@@ -1,12 +1,27 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import type { ReactNode } from 'react';
+import { memo } from 'react';
 import { server } from '../test/mocks/server';
 import HistoryPage from './HistoryPage';
 import type { PrintJob, ScanJob } from '../types';
+
+// Review fix #3: HistoryRow's own memoization is only as good as the props
+// HistoryPage hands it — a render-count spy on the real row component (same
+// probe technique as JobRow.test.tsx's memoization test) proves the *page's*
+// prop stability end to end, not just that `memo()` is present.
+const { historyRowRenderSpy } = vi.hoisted(() => ({ historyRowRenderSpy: vi.fn() }));
+
+vi.mock('../components/history/HistoryRow', async () => {
+  const actual = await vi.importActual<typeof import('../components/history/HistoryRow')>(
+    '../components/history/HistoryRow',
+  );
+  historyRowRenderSpy.mockImplementation(actual.HistoryRowComponent);
+  return { ...actual, default: memo(historyRowRenderSpy) };
+});
 
 function makeWrapper() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -185,5 +200,46 @@ describe('HistoryPage', () => {
     expect(jobsCalls).toContain('50');
     // Both pages' items are now loaded (2 of 2) — no more to fetch.
     expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument();
+  });
+
+  it('does not re-render every row when only one row\'s selection changes (F: useQueries combine)', async () => {
+    server.use(
+      http.get('/api/jobs', () => HttpResponse.json({ jobs: [job], total: 1 })),
+      http.get('/api/scanner/scans', () => HttpResponse.json({ scans: [scan], total: 1 })),
+    );
+
+    const user = userEvent.setup();
+    render(<HistoryPage />, { wrapper: makeWrapper() });
+
+    await waitFor(() => expect(screen.getByText('doc.pdf')).toBeInTheDocument());
+    // Mount legitimately re-renders both rows a handful of times as the two
+    // independent queries (jobs page 0, scans page 0) each step through
+    // their own pending→success transition — that churn is unrelated to
+    // the bug and settles once the content is visible. Poll until the
+    // render count stops climbing before taking the baseline, so the
+    // real assertion below isn't polluted by trailing settle renders.
+    await waitFor(() => {
+      const before = historyRowRenderSpy.mock.calls.length;
+      return new Promise<void>((resolve, reject) => {
+        setTimeout(() => {
+          if (historyRowRenderSpy.mock.calls.length === before) resolve();
+          else reject(new Error('still settling'));
+        }, 0);
+      });
+    });
+    historyRowRenderSpy.mockClear();
+
+    // Select just the print row's own checkbox (index 0 is the "select
+    // all" header checkbox; index 1 is the print row, sorted newest-first).
+    const checkboxes = screen.getAllByRole('checkbox');
+    await user.click(checkboxes[1]);
+    await waitFor(() => expect(screen.getByText('1 selected')).toBeInTheDocument());
+
+    // Without `combine`, useQueries returns a fresh array every render,
+    // busting the items/filtered memos and re-rendering BOTH rows (2 calls)
+    // even though only the toggled row's props actually changed. With
+    // combine, jobs/scans stay referentially stable, so only the toggled
+    // row (whose `selected` prop genuinely changed) re-renders.
+    expect(historyRowRenderSpy).toHaveBeenCalledTimes(1);
   });
 });

@@ -47,6 +47,21 @@ def _safe_join(base_url: str, path: str) -> str:
     return urlunsplit((base.scheme, base.netloc, base.path + path, "", ""))
 
 
+def _relative_to_base(href: str, base_path: str) -> str:
+    """Strip the connection's own base path off a WebDAV `href`, returning a
+    path relative to the connection root.
+
+    `_safe_join` above always re-prepends `base_path` when building the next
+    request URL, so an entry's `path` must NOT already include it -- passing
+    the raw absolute `href` back in as the next `path` (as the frontend does
+    when navigating into a folder) would otherwise double-prefix it, e.g.
+    ``/remote.php/dav/files/alice`` + ``/remote.php/dav/files/alice/Docs``.
+    """
+    base_path = base_path.rstrip("/")
+    relative = href[len(base_path):] if base_path and href.startswith(base_path) else href
+    return relative if relative.startswith("/") else "/" + relative
+
+
 class WebDAVService:
     """WebDAV client for Nextcloud and other WebDAV-compatible servers."""
 
@@ -99,6 +114,14 @@ class WebDAVService:
         """List files and directories at the given WebDAV path."""
         password = decrypt_value(password_encrypted)
         url = _safe_join(base_url, path)
+        # The entry for the requested collection itself (Depth:1 returns it
+        # first, alongside its children) is identified by comparing against
+        # the *requested URL's* server-relative path -- not the caller's
+        # `path` alone, which used to make `href.endswith("")` true for
+        # every entry whenever `path` was the default "/" (every string
+        # ends with the empty string), silently emptying every root listing.
+        requested_path = urlsplit(url).path.rstrip("/")
+        base_path = urlsplit(base_url.rstrip("/")).path
 
         propfind_body = """<?xml version="1.0" encoding="utf-8" ?>
 <d:propfind xmlns:d="DAV:">
@@ -136,9 +159,8 @@ class WebDAVService:
                 continue
             href = href_el.text.rstrip("/")
 
-            # Skip the directory itself (first entry is the queried path)
-            req_path = path.rstrip("/")
-            if href.endswith(req_path) or href == req_path:
+            # Skip the entry for the requested collection itself.
+            if href == requested_path:
                 continue
 
             propstat = response.find("d:propstat", ns)
@@ -173,7 +195,7 @@ class WebDAVService:
 
             entries.append({
                 "name": name,
-                "path": href,
+                "path": _relative_to_base(href, base_path),
                 "is_directory": is_dir,
                 "size": size,
                 "modified_at": modified_at,

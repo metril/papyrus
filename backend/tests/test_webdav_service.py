@@ -191,6 +191,117 @@ async def test_list_files_success_parses_entries():
     assert entries[0]["size"] == 1234
 
 
+# --------------------------------------------------------------------------- #
+# list_files — root-listing "skip self" guard + relative-path round-trip
+# (review fix: req_path.rstrip("/") was "" for the default root path, and
+# every href.endswith("") is True, so every entry was skipped and the root
+# listing came back empty; separately, entries carried the raw absolute
+# href, which double-prefixed through _safe_join when navigating into one)
+# --------------------------------------------------------------------------- #
+
+_ALICE_BASE = "http://nextcloud.local/remote.php/dav/files/alice"
+
+
+async def test_list_files_root_listing_returns_children_not_empty():
+    body = """<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/remote.php/dav/files/alice/</d:href>
+    <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/remote.php/dav/files/alice/Documents/</d:href>
+    <d:propstat><d:prop>
+      <d:displayname>Documents</d:displayname>
+      <d:resourcetype><d:collection/></d:resourcetype>
+    </d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/remote.php/dav/files/alice/report.pdf</d:href>
+    <d:propstat><d:prop>
+      <d:displayname>report.pdf</d:displayname>
+      <d:getcontentlength>1234</d:getcontentlength>
+      <d:resourcetype/>
+      <d:getcontenttype>application/pdf</d:getcontenttype>
+    </d:prop></d:propstat>
+  </d:response>
+</d:multistatus>"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(207, text=body)
+
+    _install_transport(handler)
+    # `path` intentionally omitted -- exercises the default root ("/"),
+    # which is exactly the case the old `req_path = ""` guard broke.
+    entries = await webdav_service.list_files(_ALICE_BASE, "user", encrypt_value("pw"))
+
+    assert [e["name"] for e in entries] == ["Documents", "report.pdf"]
+
+
+async def test_list_files_subfolder_listing_excludes_the_collection_itself():
+    body = """<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/remote.php/dav/files/alice/Documents/</d:href>
+    <d:propstat><d:prop>
+      <d:displayname>Documents</d:displayname>
+      <d:resourcetype><d:collection/></d:resourcetype>
+    </d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/remote.php/dav/files/alice/Documents/notes.txt</d:href>
+    <d:propstat><d:prop>
+      <d:displayname>notes.txt</d:displayname>
+      <d:getcontentlength>12</d:getcontentlength>
+      <d:resourcetype/>
+    </d:prop></d:propstat>
+  </d:response>
+</d:multistatus>"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(207, text=body)
+
+    _install_transport(handler)
+    entries = await webdav_service.list_files(
+        _ALICE_BASE, "user", encrypt_value("pw"), "/Documents"
+    )
+
+    assert [e["name"] for e in entries] == ["notes.txt"]
+
+
+async def test_list_files_entry_paths_are_relative_to_base_and_round_trip_through_safe_join():
+    body = """<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/remote.php/dav/files/alice/</d:href>
+    <d:propstat><d:prop><d:resourcetype><d:collection/></d:resourcetype></d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>/remote.php/dav/files/alice/Documents/</d:href>
+    <d:propstat><d:prop>
+      <d:displayname>Documents</d:displayname>
+      <d:resourcetype><d:collection/></d:resourcetype>
+    </d:prop></d:propstat>
+  </d:response>
+</d:multistatus>"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(207, text=body)
+
+    _install_transport(handler)
+    entries = await webdav_service.list_files(_ALICE_BASE, "user", encrypt_value("pw"))
+
+    assert entries[0]["path"] == "/Documents"
+    # Navigating into "Documents" builds this path back into the next
+    # request URL via _safe_join (exactly what the frontend does) -- it
+    # must land on the same absolute URL the original href pointed at,
+    # not a double-prefixed .../alice/remote.php/dav/files/alice/Documents.
+    assert (
+        _safe_join(_ALICE_BASE, entries[0]["path"])
+        == "http://nextcloud.local/remote.php/dav/files/alice/Documents"
+    )
+
+
 async def test_upload_file_error_never_echoes_response_body(tmp_path, caplog):
     src = tmp_path / "scan.pdf"
     src.write_bytes(b"%PDF-1.4 fake")

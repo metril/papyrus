@@ -83,31 +83,57 @@ export default function HistoryPage() {
   const [pageCount, setPageCount] = useState(1);
   const pageIndexes = useMemo(() => Array.from({ length: pageCount }, (_, i) => i), [pageCount]);
 
-  const jobPages = useQueries({
+  // Review fix: `useQueries` with no `combine` returns a freshly-mapped
+  // array on every render — `jobPages`/`scanPages` (and anything derived
+  // from them) changed identity on every render regardless of whether the
+  // underlying data actually changed, busting the `items`/`filtered`
+  // useMemos below and, with them, HistoryRow's React.memo (every row —
+  // thumbnails included — re-rendered on every checkbox click). `combine`
+  // is memoized internally via a deep-equal structural-sharing check, so
+  // `jobs`/`scans`/`total` below keep the same reference across renders
+  // whose underlying query data hasn't changed.
+  const jobsHistory = useQueries({
     queries: pageIndexes.map((page) => ({
       queryKey: queryKeys.jobs.history(page),
       queryFn: () => listJobs({ limit: HISTORY_PAGE_SIZE, offset: page * HISTORY_PAGE_SIZE }),
     })),
+    combine: (results) => ({
+      jobs: results.flatMap((r) => r.data?.jobs ?? []),
+      total: results[0]?.data?.total ?? 0,
+      isPending: results[0]?.isPending ?? false,
+      isError: results.some((r) => r.isError),
+      isFetching: results.some((r) => r.isFetching),
+    }),
   });
-  const scanPages = useQueries({
+  const scansHistory = useQueries({
     queries: pageIndexes.map((page) => ({
       queryKey: queryKeys.scans.history(page),
       queryFn: () => listScans({ limit: HISTORY_PAGE_SIZE, offset: page * HISTORY_PAGE_SIZE }),
     })),
+    combine: (results) => ({
+      scans: results.flatMap((r) => r.data?.scans ?? []),
+      total: results[0]?.data?.total ?? 0,
+      isPending: results[0]?.isPending ?? false,
+      isError: results.some((r) => r.isError),
+      isFetching: results.some((r) => r.isFetching),
+    }),
   });
 
-  const jobs = useMemo(() => jobPages.flatMap((q) => q.data?.jobs ?? []), [jobPages]);
-  const scans = useMemo(() => scanPages.flatMap((q) => q.data?.scans ?? []), [scanPages]);
-  const jobsTotal = jobPages[0]?.data?.total ?? 0;
-  const scansTotal = scanPages[0]?.data?.total ?? 0;
-  const canLoadMore = jobs.length < jobsTotal || scans.length < scansTotal;
-  const loadingMore = pageCount > 1 && (jobPages.some((q) => q.isFetching) || scanPages.some((q) => q.isFetching));
+  const jobs = jobsHistory.jobs;
+  const scans = scansHistory.scans;
+  const canLoadMore = jobs.length < jobsHistory.total || scans.length < scansHistory.total;
+  const loadingMore = pageCount > 1 && (jobsHistory.isFetching || scansHistory.isFetching);
 
-  const loading = jobPages[0]?.isPending || scanPages[0]?.isPending;
-  const hasError = jobPages.some((q) => q.isError) || scanPages.some((q) => q.isError);
+  const loading = jobsHistory.isPending || scansHistory.isPending;
+  const hasError = jobsHistory.isError || scansHistory.isError;
+  // Refetch by key prefix (not by iterating stored `.refetch` closures —
+  // those aren't part of the memoized `combine` output above, and stuffing
+  // a fresh function into it on every render would itself defeat combine's
+  // structural-sharing memoization) — matches the invalidation pattern the
+  // realtime bridge already uses for these same `historyAll` prefixes.
   const refetchAll = () => {
-    jobPages.forEach((q) => q.refetch());
-    scanPages.forEach((q) => q.refetch());
+    queryClient.refetchQueries({ queryKey: queryKeys.jobs.historyAll });
+    queryClient.refetchQueries({ queryKey: queryKeys.scans.historyAll });
   };
 
   const [tab, setTab] = useState<Tab>('all');
