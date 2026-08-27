@@ -2,9 +2,10 @@ import { memo, useState } from 'react';
 import { Lock, Printer } from 'lucide-react';
 import { getJobThumbnailUrl } from '../../api/scanner';
 import { useAuthStore } from '../../store/authStore';
+import { isLockedForViewer } from '../../lib/jobAccess';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
-import type { PrintJob, ManagedPrinter, User } from '../../types';
+import type { PrintJob, ManagedPrinter } from '../../types';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -119,16 +120,6 @@ function LockedThumbnail() {
       <Lock className="h-4 w-4 text-ink-400 dark:text-ink-500" strokeWidth={1.75} aria-hidden="true" />
     </div>
   );
-}
-
-/** True when `job` is PIN-protected and belongs to neither the viewer nor
- * an admin — the file endpoints (download/preview/thumbnail) 403 those
- * requests without a PIN, so the UI must not attempt them (F27). A job with
- * no owner (network jobs) is never locked. */
-function isLockedForViewer(job: PrintJob, viewer: User | null): boolean {
-  if (!job.has_pin || job.user_id == null) return false;
-  if (viewer?.role === 'admin') return false;
-  return job.user_id !== viewer?.id;
 }
 
 export interface JobRowProps {

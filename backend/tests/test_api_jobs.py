@@ -838,6 +838,80 @@ async def test_file_gate_pin_throttle_is_shared_with_release(db, client, tmp_pat
     assert release_resp.status_code == 429
 
 
+async def test_file_gate_missing_pin_never_throttles(db, client, tmp_path, monkeypatch):
+    """Regression (review round 3): a *missing* pin used to record a
+    throttle failure just like a wrong one, on the same pin:{job_id} key
+    release_job uses — but release_job has no owner bypass at all, so any
+    page that renders a thumbnail/preview/download link for a held job the
+    viewer doesn't own (e.g. HistoryPage, before it gained JobRow's lock
+    guard) could lock the job's real owner out of their own /release purely
+    from page-load traffic, with nobody ever guessing a PIN. A request with
+    no pin at all must always 403 without touching the throttle."""
+    await _seed_upload_dir(db, tmp_path)
+    monkeypatch.setattr(jobs_router, "CupsService", _FakeCupsService)
+    await _seed_default_printer(db)
+    _, owner_token = await _make_user_with_token(db, "ownernopinthrottle")
+    _, other_token = await _make_user_with_token(db, "othernopinthrottle")
+
+    upload_resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    job_id = upload_resp.json()["id"]
+
+    for _ in range(10):
+        resp = await client.get(
+            f"/api/jobs/{job_id}/download",
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+        assert resp.status_code == 403
+
+    for _ in range(10):
+        resp = await client.get(
+            f"/api/jobs/{job_id}/thumbnail",
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+        assert resp.status_code == 403
+
+    # None of the above recorded a throttle failure — release with the
+    # correct PIN still succeeds, not 429.
+    release_resp = await client.post(
+        f"/api/jobs/{job_id}/release", json={"pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert release_resp.status_code == 200
+
+
+async def test_reprint_missing_pin_never_throttles(db, client, tmp_path, monkeypatch):
+    """Same regression as test_file_gate_missing_pin_never_throttles, for
+    reprint_job's PIN gate: a bare "Reprint" click with no pin body must not
+    record a throttle failure either."""
+    await _seed_upload_dir(db, tmp_path)
+    monkeypatch.setattr(jobs_router, "CupsService", _FakeCupsService)
+    await _seed_default_printer(db)
+    _, owner_token = await _make_user_with_token(db, "ownernopinrp")
+    _, other_token = await _make_user_with_token(db, "othernopinrp")
+
+    upload_resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    job_id = upload_resp.json()["id"]
+
+    for _ in range(10):
+        resp = await client.post(
+            f"/api/jobs/{job_id}/reprint",
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+        assert resp.status_code == 403
+
+    release_resp = await client.post(
+        f"/api/jobs/{job_id}/release", json={"pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert release_resp.status_code == 200
+
+
 # --------------------------------------------------------------------------- #
 # Network job ingest
 # --------------------------------------------------------------------------- #

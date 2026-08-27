@@ -1,12 +1,24 @@
 import { memo, useState } from 'react';
-import { Download, Eye, Printer, ScanLine, Trash2 } from 'lucide-react';
+import { Download, Eye, Lock, Printer, ScanLine, Trash2 } from 'lucide-react';
 import { getJobThumbnailUrl, getScanThumbnailUrl } from '../../api/scanner';
+import { useAuthStore } from '../../store/authStore';
+import { isLockedForViewer } from '../../lib/jobAccess';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
 import type { HistoryItem } from '../../pages/HistoryPage';
+import type { PrintJob, User } from '../../types';
 
 function canPreview(item: HistoryItem): boolean {
   return item.status === 'completed' || item.status === 'held';
+}
+
+/** True when `item` is a PIN-protected print job owned by someone else the
+ * viewer isn't an admin over — the file endpoints 403 those requests
+ * without a PIN (F27), so HistoryRow must not issue a thumbnail/preview/
+ * download request for one. Scans are never locked (no PIN concept). */
+function isHistoryItemLocked(item: HistoryItem, viewer: User | null): boolean {
+  if (item.type !== 'print') return false;
+  return isLockedForViewer(item.raw as PrintJob, viewer);
 }
 
 interface HistoryThumbnailProps {
@@ -54,6 +66,21 @@ function HistoryThumbnailComponent({ item, onPreview }: HistoryThumbnailProps) {
 // sibling row's re-render never re-triggers this row's own thumbnail <img>.
 const HistoryThumbnail = memo(HistoryThumbnailComponent);
 
+// F27: a PIN-protected print item owned by someone else 403s on
+// /thumbnail and /preview (no PIN to supply), so HistoryRow must not even
+// issue that request — show a static lock glyph instead, matching JobRow's
+// treatment (sized for this row's smaller 10x10 thumbnail slot).
+function LockedHistoryThumbnail() {
+  return (
+    <div
+      className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800"
+      title="PIN-protected — owned by another user"
+    >
+      <Lock className="h-4 w-4 text-ink-400 dark:text-ink-500" strokeWidth={1.75} aria-hidden="true" />
+    </div>
+  );
+}
+
 export interface HistoryRowProps {
   item: HistoryItem;
   /** Primitive so toggling one row's checkbox doesn't re-render every other row. */
@@ -72,7 +99,9 @@ export interface HistoryRowProps {
  * is what production code renders.
  */
 export function HistoryRowComponent({ item, selected, onToggleSelect, onPreview, onDeleteJob, onDeleteScan }: HistoryRowProps) {
-  const previewable = canPreview(item);
+  const viewer = useAuthStore((s) => s.user);
+  const locked = isHistoryItemLocked(item, viewer);
+  const previewable = canPreview(item) && !locked;
   const TypeIcon = item.type === 'print' ? Printer : ScanLine;
 
   // Dispatch which stable mutate-ref to call here (in the row, which already
@@ -92,7 +121,9 @@ export function HistoryRowComponent({ item, selected, onToggleSelect, onPreview,
           onChange={() => onToggleSelect(item.id)}
           className="h-4 w-4 shrink-0"
         />
-        {previewable ? (
+        {locked ? (
+          <LockedHistoryThumbnail />
+        ) : previewable ? (
           <HistoryThumbnail item={item} onPreview={onPreview} />
         ) : (
           <TypeIcon className="h-5 w-5 shrink-0 text-gray-400 dark:text-gray-500" strokeWidth={1.75} aria-hidden="true" />
@@ -102,11 +133,12 @@ export function HistoryRowComponent({ item, selected, onToggleSelect, onPreview,
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => previewable && onPreview(item)}
+              disabled={locked}
               className={`text-sm truncate text-left ${
                 previewable
                   ? 'text-ink-600 dark:text-ink-400 hover:underline cursor-pointer'
                   : 'text-gray-900 dark:text-gray-100'
-              }`}
+              } ${locked ? 'cursor-default' : ''}`}
             >
               {item.label}
             </button>

@@ -1,10 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HistoryRowComponent } from './HistoryRow';
 import type { HistoryRowProps } from './HistoryRow';
 import type { HistoryItem } from '../../pages/HistoryPage';
-import type { PrintJob, ScanJob } from '../../types';
+import type { PrintJob, ScanJob, User } from '../../types';
+import { useAuthStore } from '../../store/authStore';
 
 const rawJob: PrintJob = {
   id: 1,
@@ -138,5 +139,66 @@ describe('HistoryRow thumbnail', () => {
     await user.click(container.querySelector('img')!);
 
     expect(onPreview).toHaveBeenCalledWith(printItem);
+  });
+});
+
+describe('HistoryRow PIN lock placeholder (F27)', () => {
+  const owner: User = { id: 'user-owner', email: 'o@example.com', display_name: 'Owner', role: 'user' };
+  const otherUser: User = { id: 'user-other', email: 'x@example.com', display_name: 'Other', role: 'user' };
+  const admin: User = { id: 'user-admin', email: 'a@example.com', display_name: 'Admin', role: 'admin' };
+
+  const pinPrintJob: PrintJob = { ...rawJob, user_id: owner.id, has_pin: true, status: 'held' };
+  const pinPrintItem: HistoryItem = {
+    ...printItem,
+    status: 'held',
+    raw: pinPrintJob,
+  };
+
+  afterEach(() => {
+    // HistoryRowComponent reads the viewer from the real zustand authStore
+    // singleton — reset it so a test's viewer doesn't leak into the next.
+    useAuthStore.setState({ user: null });
+  });
+
+  it('does not render the thumbnail img for a PIN-protected item owned by another user — shows a lock placeholder instead', () => {
+    useAuthStore.setState({ user: otherUser });
+    const { container } = render(<HistoryRowComponent {...makeProps({ item: pinPrintItem })} />);
+
+    expect(container.querySelector('img[src="/api/jobs/1/thumbnail"]')).toBeNull();
+    expect(container.querySelector('svg.lucide-lock')).not.toBeNull();
+    expect(screen.queryByRole('button', { name: 'View' })).toBeNull();
+    expect(screen.queryByRole('link')).toBeNull(); // no Download <a>
+  });
+
+  it('renders the real thumbnail for the item owner, no lock', () => {
+    useAuthStore.setState({ user: owner });
+    const { container } = render(<HistoryRowComponent {...makeProps({ item: pinPrintItem })} />);
+
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/jobs/1/thumbnail');
+    expect(container.querySelector('svg.lucide-lock')).toBeNull();
+  });
+
+  it('renders the real thumbnail for an admin, no lock', () => {
+    useAuthStore.setState({ user: admin });
+    const { container } = render(<HistoryRowComponent {...makeProps({ item: pinPrintItem })} />);
+
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/jobs/1/thumbnail');
+    expect(container.querySelector('svg.lucide-lock')).toBeNull();
+  });
+
+  it('never locks a scan item, even one with an unrelated viewer', () => {
+    useAuthStore.setState({ user: otherUser });
+    const { container } = render(<HistoryRowComponent {...makeProps({ item: scanItem })} />);
+
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/scanner/scans/scan-abc/thumbnail');
+    expect(container.querySelector('svg.lucide-lock')).toBeNull();
+  });
+
+  it('never locks a print item with no PIN, even for an unrelated viewer', () => {
+    useAuthStore.setState({ user: otherUser });
+    const { container } = render(<HistoryRowComponent {...makeProps({ item: printItem })} />);
+
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/jobs/1/thumbnail');
+    expect(container.querySelector('svg.lucide-lock')).toBeNull();
   });
 });

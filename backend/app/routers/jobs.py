@@ -494,6 +494,30 @@ def _require_job_owner_or_admin(job: PrintJob, user: User) -> None:
         raise HTTPException(status_code=403, detail="Not authorized to modify this job")
 
 
+def _check_pin_or_403(job_id: int, stored_pin: str, provided_pin: str | None, detail: str) -> None:
+    """Constant-time, throttled PIN check shared by the file-access gate
+    (`_require_file_access`) and `reprint_job`'s PIN gate.
+
+    Only touches the per-job throttle when a pin was actually *supplied*
+    (`provided_pin is not None`) — a missing pin still 403s but must never
+    count as a guess. The throttle key (`pin:{job_id}`) is shared with
+    `release_job`, which has no owner bypass at all, so recording a failure
+    for mere "no pin provided" traffic — e.g. a page rendering a thumbnail
+    for a held job the viewer doesn't own — could lock the job's actual
+    owner out of their own `/release` for the full lockout window without
+    anyone ever guessing wrong (review round 3 regression).
+    """
+    if provided_pin is None:
+        raise HTTPException(status_code=403, detail=detail)
+    throttle_key = f"pin:{job_id}"
+    _release_pin_throttle.check(throttle_key)
+    if _pin_grants_access(provided_pin, stored_pin):
+        _release_pin_throttle.reset(throttle_key)
+        return
+    _release_pin_throttle.record_failure(throttle_key)
+    raise HTTPException(status_code=403, detail=detail)
+
+
 def _require_file_access(job: PrintJob, user: User, pin: str | None) -> None:
     """Guard access to a print job's underlying file — download, preview, and
     thumbnail all share this (F27). Without it, `release_pin` protected only
@@ -503,11 +527,6 @@ def _require_file_access(job: PrintJob, user: User, pin: str | None) -> None:
     Allowed: the job's owner, an admin, or anyone supplying the correct
     release PIN via the `pin` query param. Jobs without a PIN are unaffected
     — the shared print queue's file access stays open to any print user.
-
-    Shares `release_job`'s per-job PIN throttle (F68, same `pin:{job_id}` key)
-    — without that, this query-param check would be a second, unthrottled
-    oracle over the same 10,000-value PIN space release_job already
-    rate-limits, defeating the lockout entirely.
     """
     if not job.release_pin:
         return
@@ -515,13 +534,7 @@ def _require_file_access(job: PrintJob, user: User, pin: str | None) -> None:
         return
     if user.role == "admin":
         return
-    throttle_key = f"pin:{job.id}"
-    _release_pin_throttle.check(throttle_key)
-    if _pin_grants_access(pin, job.release_pin):
-        _release_pin_throttle.reset(throttle_key)
-        return
-    _release_pin_throttle.record_failure(throttle_key)
-    raise HTTPException(status_code=403, detail="PIN required to access this file")
+    _check_pin_or_403(job.id, job.release_pin, pin, "PIN required to access this file")
 
 
 @router.get("/{job_id}/download")
@@ -1013,19 +1026,16 @@ async def reprint_job(
     # F27: reprinting hands the requester a brand-new row *they* own — for a
     # PIN-protected original, that would otherwise be an unprotected copy of
     # someone else's confidential file. Gate it like file access (owner/admin
-    # bypass; anyone else needs the correct PIN) and share release_job's
-    # throttle (same pin:{job_id} key) so this isn't a second, unthrottled
-    # oracle over the PIN space.
+    # bypass; anyone else needs the correct PIN), via the same shared,
+    # missing-pin-safe helper (review round 3: a bare "Reprint" click with no
+    # pin must not itself count as a throttle failure).
     if original.release_pin:
         is_owner = original.user_id is not None and original.user_id == user.id
         if not is_owner and user.role != "admin":
-            throttle_key = f"pin:{job_id}"
-            _release_pin_throttle.check(throttle_key)
             provided_pin = body.pin if body else None
-            if not _pin_grants_access(provided_pin, original.release_pin):
-                _release_pin_throttle.record_failure(throttle_key)
-                raise HTTPException(status_code=403, detail="PIN required to reprint this file")
-            _release_pin_throttle.reset(throttle_key)
+            _check_pin_or_403(
+                job_id, original.release_pin, provided_pin, "PIN required to reprint this file"
+            )
 
     default_printer = await get_default_printer(db)
 
