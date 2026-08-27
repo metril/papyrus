@@ -188,6 +188,22 @@ async def test_receive_with_wrong_token_is_403(db, client, tmp_path):
     assert resp.status_code == 403
 
 
+async def test_receive_with_non_ascii_token_is_403_not_500(db, client, tmp_path):
+    """Regression: secrets.compare_digest raises TypeError on a non-ASCII
+    `str` operand, so a malformed token used to 500 through the catch-all
+    handler instead of a clean 403 (same class of bug as jobs.py's ingest
+    token and release_job's PIN check)."""
+    await _seed_webhook_secret(db)
+    await _seed_upload_dir(db, tmp_path)
+
+    resp = await client.post(
+        "/api/email/receive",
+        files=_email_files(("doc.pdf", _MINIMAL_PDF)),
+        data={"token": "café"},
+    )
+    assert resp.status_code == 403
+
+
 # --------------------------------------------------------------------------- #
 # F57 — rate limit is keyed by the validated token, not the client IP
 # --------------------------------------------------------------------------- #

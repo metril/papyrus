@@ -47,20 +47,25 @@ def _require_lan_client(request: Request) -> None:
     this, anyone who can reach the app's URL at all could drive a scan and
     read back whatever's on the platen.
 
-    The deployment fronts the whole app with Traefik on the same host
-    (`network_mode: host`, uvicorn started with no `--proxy-headers`), so
-    `request.client.host` — the raw TCP peer — is loopback/private for
-    *every* request that reaches this process, proxied or not; on its own
-    it can never distinguish a LAN caller from one relayed from the public
-    internet. So: when the peer is loopback/private (i.e. it could
-    plausibly be the trusted local proxy) AND an `X-Forwarded-For` header is
-    present, the *rightmost* XFF entry — the one appended by that single
-    trusted proxy hop, everything before it is client-supplied and
-    untrustworthy — is evaluated instead of the peer. A peer that isn't
-    loopback/private is never trusted to supply XFF at all (nothing stops a
-    direct internet caller from setting that header itself), so its own
-    address is what's checked, XFF or not. Unparseable/missing host, or an
-    XFF whose rightmost entry isn't LAN, → 403 either way: fail closed.
+    uvicorn's `proxy_headers` defaults to True with `forwarded_allow_ips`
+    defaulting to `"127.0.0.1"`, so when Traefik really is on loopback (the
+    documented `network_mode: host` deployment), uvicorn itself already
+    rewrites `request.client.host` to the real client from XFF before this
+    code ever sees the request — the XFF handling below is redundant in
+    that case, not the primary defense. It earns its keep in two other
+    shapes: a reverse proxy that isn't on loopback (e.g. a docker-bridge
+    IP, which isn't in uvicorn's default `forwarded_allow_ips`, so uvicorn
+    leaves `request.client.host` as that bridge IP on every request), and
+    an eSCL client that itself sits behind another LAN proxy. For those,
+    when the peer is loopback/private (i.e. it could plausibly be a
+    trusted local proxy hop) AND an `X-Forwarded-For` header is present,
+    the *rightmost* XFF entry — the one appended by that single trusted
+    hop, everything before it is client-supplied and untrustworthy — is
+    evaluated instead of the peer. A peer that isn't loopback/private is
+    never trusted to supply XFF at all (nothing stops a direct internet
+    caller from setting that header itself), so its own address is what's
+    checked, XFF or not. Unparseable/missing host, or an XFF whose
+    rightmost entry isn't LAN, → 403 either way: fail closed.
     """
     host = request.client.host if request.client else None
     if host is None:

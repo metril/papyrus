@@ -72,7 +72,6 @@ async def create_copy(
     # The print job gets its own copy of the scanned file rather than
     # aliasing the scan's path (F29) — deleting either row's file must not
     # take the other row's file with it.
-    from app.routers.settings import get_setting
     upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
     print_filename = f"copy_{result['scan_id']}.tiff"
     print_filepath = get_upload_path(print_filename, upload_dir=upload_dir)

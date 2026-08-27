@@ -278,9 +278,10 @@ export default function AppShell() {
       <main className="md:ml-64 flex-1 flex flex-col min-h-screen">
         <div className="flex-1 p-4 md:p-8 pb-20 md:pb-8">
           {/* Review fix (F101): keyed on the route so navigating away from a
-              route that render-errored remounts the boundary fresh instead
-              of leaving it permanently in its error state — see
-              ChunkErrorBoundary's componentDidMount. */}
+              route that render-errored unmounts and remounts the boundary
+              fresh — resetting its hasError/isChunkError state via the
+              class field initializer — instead of leaving it permanently
+              in its error state. */}
           <ChunkErrorBoundary key={location.pathname}>
             <Suspense fallback={<RouteFallback />}>
               <Outlet />

@@ -30,11 +30,19 @@ def upgrade() -> None:
     )
 
     # F11: partial unique indexes make it impossible for two rows to persist
-    # is_default=true, closing the race the old clear-then-set left open.
+    # is_default=true, closing the race the old clear-then-set left open. An
+    # install that already has two (or more) rows with is_default=true --
+    # possible under that old race -- would otherwise fail create_index with
+    # an IntegrityError, so clean up duplicates first, keeping the
+    # lowest-id row as the survivor.
+    op.execute("""UPDATE printers SET is_default = false WHERE is_default AND id NOT IN
+                  (SELECT id FROM printers WHERE is_default ORDER BY id LIMIT 1)""")
     op.create_index(
         "ux_printers_default", "printers", ["is_default"],
         unique=True, postgresql_where=sa.text("is_default"),
     )
+    op.execute("""UPDATE scanners SET is_default = false WHERE is_default AND id NOT IN
+                  (SELECT id FROM scanners WHERE is_default ORDER BY id LIMIT 1)""")
     op.create_index(
         "ux_scanners_default", "scanners", ["is_default"],
         unique=True, postgresql_where=sa.text("is_default"),

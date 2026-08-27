@@ -181,6 +181,16 @@ async def _ensure_local_admin() -> None:
 
     async with async_session() as db:
         if not settings.admin_username or not settings.admin_password:
+            if settings.admin_username and not settings.admin_password:
+                # A username with no password is never enough to create an
+                # account -- warn instead of silently skipping, since this is
+                # very likely a deployment that meant to set one (unlike
+                # both-unset, which is the ordinary dev/OIDC-only case).
+                logger.warning(
+                    "PAPYRUS_ADMIN_USERNAME is set but PAPYRUS_ADMIN_PASSWORD is empty — "
+                    "skipping local admin account creation. Set PAPYRUS_ADMIN_PASSWORD "
+                    "(see .env.example) to create a local admin account."
+                )
             return
 
         # Check if this local admin already exists

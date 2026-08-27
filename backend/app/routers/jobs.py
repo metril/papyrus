@@ -419,7 +419,16 @@ async def ingest_network_job(
 
     if settings.ingest_token:
         provided_token = request.headers.get("X-Papyrus-Ingest-Token", "")
-        if not secrets.compare_digest(provided_token, settings.ingest_token):
+        # .encode() form (matches _pin_grants_access): secrets.compare_digest
+        # raises TypeError on a non-ASCII str operand, which would otherwise
+        # 500 instead of cleanly 403ing a malformed header.
+        try:
+            token_matches = secrets.compare_digest(
+                provided_token.encode(), settings.ingest_token.encode()
+            )
+        except (UnicodeEncodeError, AttributeError, TypeError):
+            token_matches = False
+        if not token_matches:
             raise HTTPException(status_code=403, detail="Internal endpoint only")
 
     if not file.filename:
@@ -800,15 +809,16 @@ async def release_job(
     # PIN space is only 10,000 4-digit values, easily swept by an
     # authenticated printer user without a per-job attempt cap — and compared
     # with the same constant-time helper the file-access endpoints use, so a
-    # timing side channel can't narrow the guess.
+    # timing side channel can't narrow the guess. Uses the shared
+    # missing-pin-safe gate (`_check_pin_or_403`) rather than inlining the
+    # throttle check: a *missing* PIN must never count as a guess (review:
+    # this endpoint has no owner bypass at all, so recording a failure for
+    # bare pinless POSTs -- e.g. a client retrying without a body -- could
+    # lock the job's real owner out of their own release for 5 minutes with
+    # nobody ever having guessed wrong).
     if job.release_pin:
-        throttle_key = f"pin:{job_id}"
-        _release_pin_throttle.check(throttle_key)
         provided_pin = body.pin if body else None
-        if not _pin_grants_access(provided_pin, job.release_pin):
-            _release_pin_throttle.record_failure(throttle_key)
-            raise HTTPException(status_code=403, detail="Invalid or missing release PIN")
-        _release_pin_throttle.reset(throttle_key)
+        _check_pin_or_403(job_id, job.release_pin, provided_pin, "Invalid or missing release PIN")
 
     printer = None
     if job.printer_id:

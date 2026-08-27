@@ -985,6 +985,48 @@ async def test_reprint_missing_pin_never_throttles(db, client, tmp_path, monkeyp
     assert release_resp.status_code == 200
 
 
+async def test_release_missing_pin_never_throttles(db, client, tmp_path, monkeypatch):
+    """Regression (final-review Important #4): release_job used to record a
+    throttle failure for a *missing* PIN too, on the same pin:{job_id} key
+    used everywhere else -- and release_job has no owner bypass at all, so
+    ten pinless POST /{id}/release calls by any other print user could lock
+    the job's actual owner out of their own release for 5 minutes, without
+    anyone ever guessing a PIN. A pinless release must always 403 without
+    touching the throttle; a supplied wrong PIN still counts; a supplied
+    correct PIN still resets it."""
+    await _seed_upload_dir(db, tmp_path)
+    monkeypatch.setattr(jobs_router, "CupsService", _FakeCupsService)
+    await _seed_default_printer(db)
+    _, owner_token = await _make_user_with_token(db, "ownernopinrelease")
+    _, other_token = await _make_user_with_token(db, "othernopinrelease")
+
+    upload_resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    job_id = upload_resp.json()["id"]
+
+    for _ in range(10):
+        resp = await client.post(
+            f"/api/jobs/{job_id}/release",
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+        assert resp.status_code == 403
+
+    get_resp = await client.get(
+        f"/api/jobs/{job_id}", headers={"Authorization": f"Bearer {owner_token}"}
+    )
+    assert get_resp.json()["status"] == "held"
+
+    # None of the pinless calls above touched the throttle -- the owner's
+    # correct-PIN release still succeeds, not 429.
+    release_resp = await client.post(
+        f"/api/jobs/{job_id}/release", json={"pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert release_resp.status_code == 200
+
+
 # --------------------------------------------------------------------------- #
 # Network job ingest
 # --------------------------------------------------------------------------- #
@@ -1028,6 +1070,27 @@ async def test_ingest_with_wrong_token_header_is_403(db, client, tmp_path, monke
         "/api/jobs/internal/ingest",
         files=_pdf_file("network.pdf"),
         headers={"X-Papyrus-Ingest-Token": "wrong"},
+    )
+    assert resp.status_code == 403
+
+
+async def test_ingest_with_non_ascii_token_header_is_403_not_500(
+    db, client, tmp_path, monkeypatch
+):
+    """Regression: secrets.compare_digest raises TypeError on a non-ASCII
+    `str` operand, so a malformed header used to 500 through the catch-all
+    handler instead of a clean 403."""
+    await _seed_upload_dir(db, tmp_path)
+    monkeypatch.setattr(jobs_router.settings, "ingest_token", "s3cr3t")
+
+    # httpx's own header normalization rejects a plain non-ASCII `str`
+    # header value outright (ascii-encodes client-side); send the raw UTF-8
+    # bytes directly so the non-ASCII value actually reaches the server,
+    # where secrets.compare_digest is the thing under test.
+    resp = await client.post(
+        "/api/jobs/internal/ingest",
+        files=_pdf_file("network.pdf"),
+        headers={"X-Papyrus-Ingest-Token": "café".encode()},
     )
     assert resp.status_code == 403
 

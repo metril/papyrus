@@ -175,7 +175,14 @@ async def receive_email(
     webhook_secret = await _get_webhook_secret(db)
     if not webhook_secret:
         raise HTTPException(status_code=503, detail="Webhook not configured")
-    if not secrets.compare_digest(token, webhook_secret):
+    # .encode() form (matches _pin_grants_access in jobs.py): compare_digest
+    # raises TypeError on a non-ASCII str operand, which would otherwise 500
+    # instead of cleanly 403ing a malformed token.
+    try:
+        token_matches = secrets.compare_digest(token.encode(), webhook_secret.encode())
+    except (UnicodeEncodeError, AttributeError, TypeError):
+        token_matches = False
+    if not token_matches:
         raise HTTPException(status_code=403, detail="Invalid webhook token")
 
     from app.routers.settings import get_setting, safe_int_setting
