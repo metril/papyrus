@@ -1,7 +1,16 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { QueryClient } from '@tanstack/react-query';
-import { applyJobEvent, applyScanEvent, applyPrinterEvent } from './useRealtimeBridge';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { createElement } from 'react';
+import type { ReactNode } from 'react';
+import {
+  applyJobEvent,
+  applyScanEvent,
+  applyPrinterEvent,
+  useRealtimeBridge,
+} from './useRealtimeBridge';
 import { queryKeys } from '../api/queries';
+import { useConnectionStore } from '../store/connectionStore';
 import type { PrintJob, ScanJob, WSMessage } from '../types';
 
 function makeJob(id: number, overrides: Partial<PrintJob> = {}): PrintJob {
@@ -208,5 +217,129 @@ describe('applyPrinterEvent', () => {
     applyPrinterEvent(qc, msg('something_else', {}));
 
     expect(qc.getQueryState(queryKeys.printerStatus)?.isInvalidated).toBe(false);
+  });
+});
+
+// --- F144: invalidate-once on the first connect when the fetch/socket race is lost ---
+
+/**
+ * Minimal mock of the browser WebSocket, driven manually via
+ * `simulateOpen`/`simulateClose` -- see useWebSocket.test.ts for the same
+ * pattern in more detail. `useRealtimeBridge` opens three sockets at once
+ * (jobs/scans/printers); tests below pick the one they care about by its
+ * url substring.
+ */
+class MockWebSocket {
+  static instances: MockWebSocket[] = [];
+  url: string;
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onclose: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+  close = vi.fn();
+
+  constructor(url: string) {
+    this.url = url;
+    MockWebSocket.instances.push(this);
+  }
+
+  simulateOpen() {
+    this.readyState = 1;
+    this.onopen?.();
+  }
+}
+
+function socketFor(urlSubstring: string): MockWebSocket {
+  const ws = MockWebSocket.instances.find((s) => s.url.includes(urlSubstring));
+  if (!ws) throw new Error(`no mock socket opened for ${urlSubstring}`);
+  return ws;
+}
+
+function makeWrapper(queryClient: QueryClient) {
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return createElement(QueryClientProvider, { client: queryClient }, children);
+  };
+}
+
+describe('useRealtimeBridge (F144: first-connect invalidation)', () => {
+  beforeEach(() => {
+    MockWebSocket.instances = [];
+    vi.stubGlobal('WebSocket', MockWebSocket);
+    useConnectionStore.setState({
+      jobsConnected: false,
+      scansConnected: false,
+      printersConnected: false,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('invalidates once when cached data predates the socket opening (missed-event race)', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Simulates GET /api/jobs resolving before the socket opens: a
+    // job_created broadcast in between would have reached no listener.
+    qc.setQueryData(queryKeys.jobs.list(), { jobs: [], total: 0 }, { updatedAt: Date.now() - 10_000 });
+
+    renderHook(() => useRealtimeBridge(), { wrapper: makeWrapper(qc) });
+    expect(qc.getQueryState(queryKeys.jobs.list())?.isInvalidated).toBe(false);
+
+    act(() => socketFor('/api/system/ws/jobs').simulateOpen());
+
+    expect(qc.getQueryState(queryKeys.jobs.list())?.isInvalidated).toBe(true);
+  });
+
+  it('does not invalidate when cached data is at least as new as the socket open (no race lost)', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Fetch "resolves" after the socket will open -- nothing was missed.
+    qc.setQueryData(queryKeys.jobs.list(), { jobs: [], total: 0 }, { updatedAt: Date.now() + 10_000 });
+
+    renderHook(() => useRealtimeBridge(), { wrapper: makeWrapper(qc) });
+    act(() => socketFor('/api/system/ws/jobs').simulateOpen());
+
+    expect(qc.getQueryState(queryKeys.jobs.list())?.isInvalidated).toBe(false);
+  });
+
+  it('does not invalidate or seed the cache when the query was never fetched', () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    renderHook(() => useRealtimeBridge(), { wrapper: makeWrapper(qc) });
+    act(() => socketFor('/api/system/ws/jobs').simulateOpen());
+
+    expect(qc.getQueryCache().find({ queryKey: queryKeys.jobs.list() })).toBeUndefined();
+  });
+
+  it('still invalidates on a genuine reconnect (second connect), regardless of freshness', () => {
+    vi.useFakeTimers();
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Fresh data -- the first-connect freshness check alone would skip
+    // invalidating, so a positive result here can only come from the
+    // reconnect branch.
+    qc.setQueryData(queryKeys.jobs.list(), { jobs: [], total: 0 }, { updatedAt: Date.now() + 10_000 });
+
+    renderHook(() => useRealtimeBridge(), { wrapper: makeWrapper(qc) });
+    const first = socketFor('/api/system/ws/jobs');
+    act(() => first.simulateOpen());
+    expect(qc.getQueryState(queryKeys.jobs.list())?.isInvalidated).toBe(false);
+
+    // A real disconnect (server/network drops the socket, not our cleanup):
+    // useWebSocket's own reconnect logic schedules and opens a new socket
+    // after the default 1s backoff.
+    const before = MockWebSocket.instances.length;
+    act(() => first.onclose?.());
+    act(() => vi.advanceTimersByTime(1000));
+    expect(MockWebSocket.instances.length).toBe(before + 1);
+
+    const second = MockWebSocket.instances[MockWebSocket.instances.length - 1];
+    act(() => second.simulateOpen());
+
+    // Second connected->true is a reconnect (hasConnectedRef already true
+    // from the first) -- always invalidates, unlike the first connect's
+    // freshness-gated check.
+    expect(qc.getQueryState(queryKeys.jobs.list())?.isInvalidated).toBe(true);
+
+    vi.useRealTimers();
   });
 });

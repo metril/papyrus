@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_permission
+from app.auth.ws import authenticate_websocket
 from app.database import get_db
 from app.models import CloudProvider, ScanJob, ScanProfile, SMBShare, User
 from app.schemas import (
@@ -841,8 +842,19 @@ async def delete_profile(
 
 # WebSocket endpoint for scan progress
 @router.websocket("/ws/scan/{scan_id}")
-async def scan_progress_ws(websocket: WebSocket, scan_id: str):
-    """WebSocket for real-time scan progress updates."""
+async def scan_progress_ws(
+    websocket: WebSocket, scan_id: str, db: AsyncSession = Depends(get_db)
+):
+    """WebSocket for real-time scan progress updates.
+
+    F48: authenticated before accept(), same as the system.py channels --
+    ScanForm opens this before POSTing /scan, using the browser's session
+    cookie, which authenticate_websocket honors same as any other route.
+    """
+    user = await authenticate_websocket(websocket, db)
+    if user is None:
+        await websocket.close(code=1008)
+        return
     channel = f"scan:{scan_id}"
     await ws_manager.connect(channel, websocket)
     try:

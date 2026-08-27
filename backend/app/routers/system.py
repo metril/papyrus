@@ -5,6 +5,7 @@ import time
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.ws import authenticate_websocket
 from app.database import get_db
 from app.schemas import HealthResponse
 from app.services.ws_manager import ws_manager
@@ -143,8 +144,17 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
 
 @router.websocket("/ws/jobs")
-async def jobs_ws(websocket: WebSocket):
-    """WebSocket for real-time print job status updates."""
+async def jobs_ws(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
+    """WebSocket for real-time print job status updates.
+
+    F48: broadcasts carry full job metadata for every user, so the handshake
+    must be authenticated before accept() -- an unauthenticated or
+    cross-origin client is closed with 1008 and never joins the channel.
+    """
+    user = await authenticate_websocket(websocket, db)
+    if user is None:
+        await websocket.close(code=1008)
+        return
     await ws_manager.connect("jobs", websocket)
     try:
         while True:
@@ -154,8 +164,12 @@ async def jobs_ws(websocket: WebSocket):
 
 
 @router.websocket("/ws/scans")
-async def scans_ws(websocket: WebSocket):
-    """WebSocket for real-time scan list updates."""
+async def scans_ws(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
+    """WebSocket for real-time scan list updates. See jobs_ws's F48 note."""
+    user = await authenticate_websocket(websocket, db)
+    if user is None:
+        await websocket.close(code=1008)
+        return
     await ws_manager.connect("scans", websocket)
     try:
         while True:
@@ -165,8 +179,12 @@ async def scans_ws(websocket: WebSocket):
 
 
 @router.websocket("/ws/printers")
-async def printers_ws(websocket: WebSocket):
-    """WebSocket for real-time printer status updates."""
+async def printers_ws(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
+    """WebSocket for real-time printer status updates. See jobs_ws's F48 note."""
+    user = await authenticate_websocket(websocket, db)
+    if user is None:
+        await websocket.close(code=1008)
+        return
     await ws_manager.connect("printers", websocket)
     try:
         while True:

@@ -1,0 +1,235 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { act, renderHook } from '@testing-library/react';
+import { useWebSocket } from './useWebSocket';
+
+/**
+ * Minimal mock of the browser WebSocket, driven manually by tests via
+ * `simulateOpen`/`simulateClose`/`simulateMessage` instead of a real
+ * network round trip. `close()` intentionally does NOT synchronously call
+ * `simulateClose()` -- a real WebSocket's close event always fires
+ * asynchronously, and several tests below (the F17 stale-socket races)
+ * depend on being able to control that timing precisely.
+ */
+class MockWebSocket {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  static instances: MockWebSocket[] = [];
+
+  url: string;
+  readyState = MockWebSocket.CONNECTING;
+  onopen: (() => void) | null = null;
+  onclose: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  onerror: (() => void) | null = null;
+
+  send = vi.fn();
+  close = vi.fn(() => {
+    this.readyState = MockWebSocket.CLOSED;
+  });
+
+  constructor(url: string) {
+    this.url = url;
+    MockWebSocket.instances.push(this);
+  }
+
+  simulateOpen() {
+    this.readyState = MockWebSocket.OPEN;
+    this.onopen?.();
+  }
+
+  simulateClose() {
+    this.readyState = MockWebSocket.CLOSED;
+    this.onclose?.();
+  }
+
+  simulateMessage(data: unknown) {
+    this.onmessage?.({ data: JSON.stringify(data) });
+  }
+}
+
+function latestSocket(): MockWebSocket {
+  return MockWebSocket.instances[MockWebSocket.instances.length - 1];
+}
+
+beforeEach(() => {
+  MockWebSocket.instances = [];
+  vi.stubGlobal('WebSocket', MockWebSocket);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+describe('useWebSocket', () => {
+  it('opens a socket derived from the given url and reports connected on open', () => {
+    const { result } = renderHook(() => useWebSocket({ url: '/api/system/ws/jobs' }));
+
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(latestSocket().url).toContain('/api/system/ws/jobs');
+    expect(result.current.connected).toBe(false);
+
+    act(() => latestSocket().simulateOpen());
+    expect(result.current.connected).toBe(true);
+  });
+
+  it('forwards parsed messages to onMessage and ignores non-JSON frames', () => {
+    const onMessage = vi.fn();
+    renderHook(() => useWebSocket({ url: '/x', onMessage }));
+    const ws = latestSocket();
+
+    act(() => ws.simulateOpen());
+    act(() => ws.simulateMessage({ type: 'job_created', data: { id: 1 } }));
+    expect(onMessage).toHaveBeenCalledWith({ type: 'job_created', data: { id: 1 } });
+
+    act(() => ws.onmessage?.({ data: 'not json' }));
+    expect(onMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('sets connected false when the socket closes', () => {
+    const { result } = renderHook(() => useWebSocket({ url: '/x' }));
+    const ws = latestSocket();
+    act(() => ws.simulateOpen());
+    expect(result.current.connected).toBe(true);
+
+    act(() => ws.simulateClose());
+    expect(result.current.connected).toBe(false);
+  });
+
+  it('does not open a socket at all when url is null', () => {
+    renderHook(() => useWebSocket({ url: null }));
+    expect(MockWebSocket.instances).toHaveLength(0);
+  });
+
+  describe('reconnect backoff (F84)', () => {
+    it('caps the delay at 30s and keeps retrying well past the old 10-attempt ceiling', () => {
+      vi.useFakeTimers();
+      renderHook(() => useWebSocket({ url: '/x', reconnectInterval: 1000 }));
+
+      // 1000, 2000, 4000, 8000, 16000, then capped at 30000 from here on.
+      // 12 consecutive failures is more than the old maxReconnectAttempts
+      // (10) -- the fix removes that ceiling entirely.
+      const expectedDelays = [
+        1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000, 30000, 30000, 30000, 30000,
+      ];
+
+      for (const delay of expectedDelays) {
+        const before = MockWebSocket.instances.length;
+        act(() => latestSocket().simulateClose());
+
+        act(() => {
+          vi.advanceTimersByTime(delay - 1);
+        });
+        expect(MockWebSocket.instances.length).toBe(before);
+
+        act(() => {
+          vi.advanceTimersByTime(1);
+        });
+        expect(MockWebSocket.instances.length).toBe(before + 1);
+      }
+    });
+
+    it('resets the backoff counter after a successful open', () => {
+      vi.useFakeTimers();
+      renderHook(() => useWebSocket({ url: '/x', reconnectInterval: 1000 }));
+
+      act(() => latestSocket().simulateClose());
+      act(() => vi.advanceTimersByTime(1000)); // first retry: 1000ms delay
+      expect(MockWebSocket.instances).toHaveLength(2);
+
+      act(() => latestSocket().simulateOpen()); // succeeds -- counter resets
+      act(() => latestSocket().simulateClose());
+
+      const before = MockWebSocket.instances.length;
+      act(() => vi.advanceTimersByTime(999));
+      expect(MockWebSocket.instances.length).toBe(before); // not yet due
+      act(() => vi.advanceTimersByTime(1));
+      expect(MockWebSocket.instances.length).toBe(before + 1); // due at 1000ms again, not 2000ms
+    });
+  });
+
+  describe('cleanup and stale-socket handling (F17)', () => {
+    it('cleanup closes the socket and its close event schedules no reconnect', () => {
+      vi.useFakeTimers();
+      const { unmount } = renderHook(() => useWebSocket({ url: '/x' }));
+      const ws = latestSocket();
+      act(() => ws.simulateOpen());
+
+      unmount();
+      expect(ws.close).toHaveBeenCalledTimes(1);
+
+      // The real close event still fires asynchronously after unmount.
+      act(() => ws.simulateClose());
+      act(() => vi.advanceTimersByTime(60_000));
+
+      expect(MockWebSocket.instances).toHaveLength(1); // no reconnect socket
+    });
+
+    it('an orphaned socket from a url change never steals the ref or reconnects to the stale url', () => {
+      vi.useFakeTimers();
+      const { rerender } = renderHook(({ url }) => useWebSocket({ url }), {
+        initialProps: { url: '/scan-a' },
+      });
+      const socketA = MockWebSocket.instances[0];
+      act(() => socketA.simulateOpen());
+
+      rerender({ url: '/scan-b' });
+      expect(MockWebSocket.instances).toHaveLength(2);
+      const socketB = MockWebSocket.instances[1];
+      expect(socketB.url).toContain('/scan-b');
+
+      // Socket A's close event arrives late, after B has already taken over.
+      act(() => socketA.simulateClose());
+
+      // No reconnect to the stale /scan-a url should ever be scheduled.
+      act(() => vi.advanceTimersByTime(60_000));
+      expect(MockWebSocket.instances).toHaveLength(2);
+      expect(MockWebSocket.instances.every((s) => s.url !== socketA.url || s === socketA)).toBe(
+        true,
+      );
+
+      // B is unaffected and still behaves normally afterwards.
+      act(() => socketB.simulateOpen());
+      act(() => socketB.simulateClose());
+      const before = MockWebSocket.instances.length;
+      act(() => vi.advanceTimersByTime(1000));
+      expect(MockWebSocket.instances.length).toBe(before + 1);
+    });
+  });
+
+  describe('wake reconnects (F84)', () => {
+    it('reconnects immediately on window "online" when no socket is open', () => {
+      vi.useFakeTimers();
+      renderHook(() => useWebSocket({ url: '/x' }));
+      act(() => latestSocket().simulateClose()); // socket gone, backoff timer pending
+
+      expect(MockWebSocket.instances).toHaveLength(1);
+      act(() => window.dispatchEvent(new Event('online')));
+      expect(MockWebSocket.instances).toHaveLength(2);
+    });
+
+    it('reconnects on document visibilitychange to visible when no socket is open', () => {
+      vi.useFakeTimers();
+      renderHook(() => useWebSocket({ url: '/x' }));
+      act(() => latestSocket().simulateClose());
+
+      Object.defineProperty(document, 'visibilityState', {
+        value: 'visible',
+        configurable: true,
+      });
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      expect(MockWebSocket.instances).toHaveLength(2);
+    });
+
+    it('does not open a second socket on "online" when one is already open', () => {
+      vi.useFakeTimers();
+      renderHook(() => useWebSocket({ url: '/x' }));
+      act(() => latestSocket().simulateOpen());
+
+      act(() => window.dispatchEvent(new Event('online')));
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
+  });
+});

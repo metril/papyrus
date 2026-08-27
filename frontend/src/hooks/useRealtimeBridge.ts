@@ -22,6 +22,16 @@ import type { PrintJob, ScanJob, WSMessage } from '../types';
  * query entry is created — so we never seed a partial list.
  */
 
+// Hoisted once at module scope: `queryKeys.jobs.list()`/`.scans.list()` are
+// factory functions that return a *new* array on every call. Used directly
+// as a `useEffect` dependency below (freshnessKey), a fresh reference every
+// render would make that effect re-run — and re-invalidate — on every
+// render once `hasConnectedRef` is already true, not just on `connected`
+// changes. `queryKeys.printerStatus` needs no such hoisting: it's a plain
+// `as const` array property, already one stable reference.
+const JOBS_LIST_KEY = queryKeys.jobs.list();
+const SCANS_LIST_KEY = queryKeys.scans.list();
+
 interface JobsCache {
   jobs: PrintJob[];
   total: number;
@@ -121,15 +131,27 @@ function invalidatePrinters(queryClient: QueryClient): void {
 
 /**
  * Wire a single WS channel: dispatch its events to the cache, mirror its
- * `connected` flag into the connection store, and on RECONNECT (not the initial
- * connect) invalidate the channel's keys to recover any events missed while down.
+ * `connected` flag into the connection store, and invalidate the channel's
+ * keys to recover any events missed while the socket wasn't listening.
  *
- * `hasConnectedRef` distinguishes the two: the first `connected → true` sets the
- * flag without invalidating; any later `false → true` transition (the ref is
- * already true) is a reconnect and invalidates. A separate mount-only effect
- * resets the ref on unmount so a genuine remount — and StrictMode's simulated
- * unmount/remount — starts fresh and never mistakes the first connect for a
- * reconnect.
+ * `hasConnectedRef` distinguishes the first connect from a later reconnect:
+ * the first `connected → true` doesn't unconditionally invalidate (see
+ * F144 below); any later `false → true` transition (the ref is already
+ * true) is a reconnect and always invalidates, to recover events missed
+ * while the socket was down. A separate mount-only effect resets the ref on
+ * unmount so a genuine remount — and StrictMode's simulated unmount/remount
+ * — starts fresh and never mistakes the first connect for a reconnect.
+ *
+ * F144: the initial list fetch and the socket handshake start concurrently
+ * at mount, and the socket can win or lose that race. If it loses (opens
+ * *after* the fetch resolved), an event broadcast in between reaches no
+ * listener and is silently dropped — e.g. GET /api/jobs resolves at t=80ms,
+ * a job is created at t=100ms, and ws.onopen doesn't fire until t=140ms.
+ * On the first `connected → true`, `freshnessKey`'s `dataUpdatedAt` is
+ * compared against the socket-open time: if the cached data predates the
+ * socket opening, we lost that race and invalidate once to reconcile;
+ * data fetched at/after the socket opened (or never fetched at all, so
+ * there's nothing to reconcile) skips the redundant invalidate.
  */
 function useChannel(
   url: string,
@@ -137,6 +159,7 @@ function useChannel(
   applyEvent: (queryClient: QueryClient, msg: WSMessage) => void,
   invalidate: (queryClient: QueryClient) => void,
   setConnected: (connected: boolean) => void,
+  freshnessKey: readonly unknown[],
 ): void {
   const onMessage = useCallback(
     (msg: WSMessage) => applyEvent(queryClient, msg),
@@ -157,12 +180,19 @@ function useChannel(
   useEffect(() => {
     setConnected(connected);
     if (!connected) return;
+
     if (hasConnectedRef.current) {
       invalidate(queryClient);
-    } else {
-      hasConnectedRef.current = true;
+      return;
     }
-  }, [connected, queryClient, invalidate, setConnected]);
+    hasConnectedRef.current = true;
+
+    const openedAt = Date.now();
+    const dataUpdatedAt = queryClient.getQueryState(freshnessKey)?.dataUpdatedAt;
+    if (dataUpdatedAt !== undefined && dataUpdatedAt < openedAt) {
+      invalidate(queryClient);
+    }
+  }, [connected, queryClient, invalidate, setConnected, freshnessKey]);
 }
 
 /**
@@ -182,13 +212,28 @@ export function useRealtimeBridge(): void {
     if (msg.type === 'scan_completed') showToast('Scan completed', 'success');
   }, []);
 
-  useChannel('/api/system/ws/jobs', queryClient, applyJobEvent, invalidateJobs, setJobsConnected);
-  useChannel('/api/system/ws/scans', queryClient, applyScanWithToast, invalidateScans, setScansConnected);
+  useChannel(
+    '/api/system/ws/jobs',
+    queryClient,
+    applyJobEvent,
+    invalidateJobs,
+    setJobsConnected,
+    JOBS_LIST_KEY,
+  );
+  useChannel(
+    '/api/system/ws/scans',
+    queryClient,
+    applyScanWithToast,
+    invalidateScans,
+    setScansConnected,
+    SCANS_LIST_KEY,
+  );
   useChannel(
     '/api/system/ws/printers',
     queryClient,
     applyPrinterEvent,
     invalidatePrinters,
     setPrintersConnected,
+    queryKeys.printerStatus,
   );
 }
