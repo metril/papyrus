@@ -70,7 +70,7 @@ INGEST_MAX_BYTES = 1024 * 1024 * 1024
 
 async def _create_print_job_from_upload(
     db: AsyncSession,
-    user: User,
+    user: User | None,
     file: UploadFile,
     *,
     copies: int = 1,
@@ -79,13 +79,29 @@ async def _create_print_job_from_upload(
     hold: bool = True,
     release_pin: str = "",
     auto_pin: bool = True,
+    source_type: str = "upload",
+    title: str | None = None,
 ) -> tuple[PrintJob, str | None]:
     """Validate, stream-save, and create a print job from an uploaded file.
 
-    This is the shared core behind ``POST /upload`` and ``POST
-    /api/share-target`` so both pipelines stay byte-identical — validation,
-    streaming save, PIN handling, held/auto-print dispatch, and the
-    print.held webhook all live here exactly once.
+    This is the shared core behind ``POST /upload``, ``POST
+    /api/share-target``, and email-ingested jobs (``POST /api/email/receive``,
+    F55/F25/F71) so every pipeline stays byte-identical — validation,
+    streaming save (with the configured size cap; F25), PIN handling,
+    held/auto-print dispatch, and the print.held webhook all live here
+    exactly once.
+
+    ``user`` is optional: network/email-ingested jobs have no authenticated
+    user, matching ``PrintJob.user_id``'s nullable column — the row gets
+    ``user_id=None`` and webhook payloads omit ``user_id`` rather than
+    crashing on ``None.id``.
+
+    ``title``, if given, is used (truncated to the column's 255-char limit)
+    instead of the default "sanitized filename" title — e.g. the email path
+    wants the message subject, which is arbitrary/unbounded input that must
+    never be allowed to blow past ``PrintJob.title``'s ``String(255)``
+    column (F71: that used to raise ``StringDataRightTruncation`` after the
+    file was already written to disk).
 
     Raises HTTPException(400) for a missing filename or unsupported mime
     type. UploadTooLargeError (a PapyrusError, 413) propagates from
@@ -139,8 +155,8 @@ async def _create_print_job_from_upload(
             pin = f"{secrets.randbelow(10000):04d}"
 
     job = PrintJob(
-        user_id=user.id,
-        title=sanitize_filename(file.filename),
+        user_id=user.id if user else None,
+        title=title[:255] if title else sanitize_filename(file.filename),
         filename=sanitize_filename(file.filename),
         filepath=upload_path,
         file_size=file_size,
@@ -149,7 +165,7 @@ async def _create_print_job_from_upload(
         copies=copies,
         duplex=duplex,
         media=media,
-        source_type="upload",
+        source_type=source_type,
         printer_id=default_printer.id if default_printer else None,
         release_pin=pin,
     )
@@ -162,12 +178,14 @@ async def _create_print_job_from_upload(
         "data": serialize_print_job(job),
     })
 
+    user_id_str = str(user.id) if user else None
+
     # Every upload fires print.upload, regardless of hold/auto-print (F137) —
     # print.held below is the narrower "landed in the hold queue" signal.
     await dispatch_webhook(db, "print.upload", {
         "id": job.id,
         "title": job.title,
-        "user_id": str(user.id),
+        "user_id": user_id_str,
         "source_type": job.source_type,
     })
 
@@ -178,7 +196,7 @@ async def _create_print_job_from_upload(
         await dispatch_webhook(db, "print.held", {
             "id": job.id,
             "title": job.title,
-            "user_id": str(user.id),
+            "user_id": user_id_str,
             "source_type": job.source_type,
         })
     else:

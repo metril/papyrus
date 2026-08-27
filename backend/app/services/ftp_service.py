@@ -1,7 +1,10 @@
 """FTP/SFTP upload service."""
 
 import asyncio
+import base64
 import ftplib
+import hashlib
+import hmac
 import logging
 import os
 
@@ -13,6 +16,64 @@ logger = logging.getLogger(__name__)
 
 class FTPError(ExternalServiceError):
     pass
+
+
+def _normalize_fingerprint(value: str) -> str:
+    """Strip whitespace and an optional "SHA256:" prefix so a fingerprint
+    pasted from tooling (or from this service's own warning log) compares
+    equal to the raw base64 digest stored/computed here."""
+    value = value.strip()
+    if value.upper().startswith("SHA256:"):
+        value = value[len("SHA256:"):]
+    return value
+
+
+def _sftp_key_fingerprint(key) -> str:
+    """SHA256/base64 fingerprint of a paramiko host key's public blob."""
+    return base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode()
+
+
+def _connect_sftp_transport(host, port, username, password, host_key_fingerprint):
+    """Open a paramiko SFTP `Transport`, verifying (or pinning) the server's
+    host key before sending credentials (F58).
+
+    `Transport.connect()` performs key exchange and authentication in one
+    call with no way to verify the host key first, so this splits it:
+    `start_client()` completes the key exchange alone, `get_remote_server_key()`
+    reads the (now-known) host key, and only once it's been checked --
+    matched against `host_key_fingerprint` if one is pinned, otherwise
+    accepted-on-first-use with a warning -- does `auth_password()` send the
+    username/password. Without this, `Transport.connect()` accepts any
+    server key silently, so a MITM on the configured host gets the stored
+    password and every auto-delivered scan.
+    """
+    import paramiko
+
+    transport = paramiko.Transport((host, port))
+    try:
+        transport.start_client(timeout=30)
+        server_key = transport.get_remote_server_key()
+        actual_fingerprint = _sftp_key_fingerprint(server_key)
+
+        pinned = _normalize_fingerprint(host_key_fingerprint) if host_key_fingerprint else ""
+        if pinned:
+            if not hmac.compare_digest(actual_fingerprint, pinned):
+                raise FTPError(
+                    "SFTP server host key does not match the pinned fingerprint "
+                    "(possible MITM, or the server key changed)"
+                )
+        else:
+            logger.warning(
+                "SFTP host key for %s:%s is not pinned -- accepting it this time. "
+                "Set sftp_host_key_fingerprint to SHA256:%s to pin it.",
+                host, port, actual_fingerprint,
+            )
+
+        transport.auth_password(username, password)
+        return transport
+    except Exception:
+        transport.close()
+        raise
 
 
 class FTPService:
@@ -66,15 +127,17 @@ class FTPService:
         filepath: str,
         filename: str,
         remote_dir: str = "/",
+        host_key_fingerprint: str | None = None,
     ) -> None:
         """Upload a file via SFTP (SSH)."""
         password = decrypt_value(password_encrypted)
 
         def _upload():
             import paramiko
-            transport = paramiko.Transport((host, port))
+            transport = _connect_sftp_transport(
+                host, port, username, password, host_key_fingerprint
+            )
             try:
-                transport.connect(username=username, password=password)
                 sftp = paramiko.SFTPClient.from_transport(transport)
                 if sftp is None:
                     raise FTPError("Could not open SFTP session")
@@ -110,10 +173,18 @@ class FTPService:
             try:
                 ftp.connect(host, port, timeout=10)
                 ftp.login(username, password)
-                ftp.quit()
                 return True
-            except Exception:
+            except Exception as exc:
+                logger.warning("FTP connection test to %s:%s failed: %s", host, port, exc)
                 return False
+            finally:
+                try:
+                    ftp.quit()
+                except Exception:
+                    try:
+                        ftp.close()
+                    except Exception:
+                        pass
 
         return await asyncio.to_thread(_test)
 
@@ -132,10 +203,12 @@ class FTPService:
             transport = paramiko.Transport((host, port))
             try:
                 transport.connect(username=username, password=password)
-                transport.close()
                 return True
-            except Exception:
+            except Exception as exc:
+                logger.warning("SFTP connection test to %s:%s failed: %s", host, port, exc)
                 return False
+            finally:
+                transport.close()
 
         return await asyncio.to_thread(_test)
 

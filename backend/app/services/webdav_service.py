@@ -1,21 +1,66 @@
 """WebDAV/Nextcloud client service."""
 
+import asyncio
+import logging
 import xml.etree.ElementTree as ET
+from enum import Enum
+from urllib.parse import urlsplit, urlunsplit
 
 from app.exceptions import ExternalServiceError
 from app.services.crypto import decrypt_value
 from app.services.http_client import get_http_client
+
+logger = logging.getLogger(__name__)
 
 
 class WebDAVError(ExternalServiceError):
     pass
 
 
+class WebDAVConnectError(str, Enum):
+    """Why `WebDAVService.test_connection` couldn't confirm connectivity --
+    distinguishable so the caller can surface something more useful than one
+    flat "could not connect" for a bad password vs. a TLS/DNS failure (F154).
+    """
+
+    AUTH = "auth"
+    TRANSPORT = "transport"
+    NOT_WEBDAV = "not_webdav"
+
+
+def _safe_join(base_url: str, path: str) -> str:
+    """Join `base_url` with a WebDAV-relative `path`, always keeping the
+    connection's own scheme+host.
+
+    `path` can never redirect the request to a different host: naive string
+    concatenation (the previous implementation) lets a caller-supplied path
+    like ``"@evil.com/x"`` turn ``"http://realhost"`` into
+    ``"http://realhost@evil.com/x"`` -- a URL whose host is *evil.com*, with
+    "realhost" merely as (discarded) userinfo, while Basic auth for the real
+    server is still attached (F13). Building the URL structurally via
+    ``urlsplit``/``urlunsplit`` means whatever is in `path` only ever
+    contributes to the path component.
+    """
+    base = urlsplit(base_url.rstrip("/"))
+    if not path.startswith("/"):
+        path = "/" + path
+    return urlunsplit((base.scheme, base.netloc, base.path + path, "", ""))
+
+
 class WebDAVService:
     """WebDAV client for Nextcloud and other WebDAV-compatible servers."""
 
-    async def test_connection(self, base_url: str, username: str, password_encrypted: str) -> bool:
-        """Test WebDAV connectivity with a PROPFIND on the root."""
+    async def test_connection(
+        self, base_url: str, username: str, password_encrypted: str
+    ) -> WebDAVConnectError | None:
+        """Test WebDAV connectivity with a PROPFIND on the root.
+
+        Returns `None` on success, or a `WebDAVConnectError` reason on
+        failure. Every failure is logged at warning level (F154) -- the
+        previous bare `except Exception: return False` discarded the actual
+        cause entirely, so a TLS/DNS failure looked identical to a bad
+        password both server-side and to the admin.
+        """
         password = decrypt_value(password_encrypted)
         client = get_http_client()
         try:
@@ -26,9 +71,23 @@ class WebDAVService:
                 headers={"Depth": "0"},
                 timeout=10.0,
             )
-            return resp.status_code in (207, 200)
-        except Exception:
-            return False
+        except Exception as exc:
+            logger.warning("WebDAV connection test to %s failed: %s", base_url, exc)
+            return WebDAVConnectError.TRANSPORT
+
+        if resp.status_code in (401, 403):
+            logger.warning(
+                "WebDAV connection test to %s failed authentication (%d)",
+                base_url, resp.status_code,
+            )
+            return WebDAVConnectError.AUTH
+        if resp.status_code not in (207, 200):
+            logger.warning(
+                "WebDAV connection test to %s returned unexpected status %d",
+                base_url, resp.status_code,
+            )
+            return WebDAVConnectError.NOT_WEBDAV
+        return None
 
     async def list_files(
         self,
@@ -39,7 +98,7 @@ class WebDAVService:
     ) -> list[dict]:
         """List files and directories at the given WebDAV path."""
         password = decrypt_value(password_encrypted)
-        url = f"{base_url.rstrip('/')}{path}"
+        url = _safe_join(base_url, path)
 
         propfind_body = """<?xml version="1.0" encoding="utf-8" ?>
 <d:propfind xmlns:d="DAV:">
@@ -62,7 +121,10 @@ class WebDAVService:
             timeout=30.0,
         )
         if resp.status_code != 207:
-            raise WebDAVError(f"PROPFIND failed ({resp.status_code}): {resp.text[:200]}")
+            logger.warning(
+                "WebDAV PROPFIND on %s failed (%d): %s", url, resp.status_code, resp.text[:200]
+            )
+            raise WebDAVError("Failed to list files on the WebDAV server")
 
         entries = []
         root = ET.fromstring(resp.text)
@@ -132,16 +194,19 @@ class WebDAVService:
     ) -> str:
         """Download a file from WebDAV to a local path."""
         password = decrypt_value(password_encrypted)
-        url = f"{base_url.rstrip('/')}{remote_path}"
+        url = _safe_join(base_url, remote_path)
 
         client = get_http_client()
         resp = await client.get(url, auth=(username, password), timeout=120.0)
         if resp.status_code != 200:
-            raise WebDAVError(f"Download failed ({resp.status_code})")
+            logger.warning("WebDAV download from %s failed (%d)", url, resp.status_code)
+            raise WebDAVError("Failed to download file from the WebDAV server")
 
-        with open(local_path, "wb") as f:
-            f.write(resp.content)
+        def _write():
+            with open(local_path, "wb") as f:
+                f.write(resp.content)
 
+        await asyncio.to_thread(_write)
         return local_path
 
     async def upload_file(
@@ -155,10 +220,13 @@ class WebDAVService:
     ) -> None:
         """Upload a local file to a WebDAV path."""
         password = decrypt_value(password_encrypted)
-        dest = f"{base_url.rstrip('/')}{destination_folder.rstrip('/')}/{filename}"
+        dest = _safe_join(base_url, f"{destination_folder.rstrip('/')}/{filename}")
 
-        with open(filepath, "rb") as f:
-            content = f.read()
+        def _read():
+            with open(filepath, "rb") as f:
+                return f.read()
+
+        content = await asyncio.to_thread(_read)
 
         client = get_http_client()
         resp = await client.put(
@@ -168,7 +236,10 @@ class WebDAVService:
             timeout=120.0,
         )
         if resp.status_code not in (200, 201, 204):
-            raise WebDAVError(f"Upload failed ({resp.status_code}): {resp.text[:200]}")
+            logger.warning(
+                "WebDAV upload to %s failed (%d): %s", dest, resp.status_code, resp.text[:200]
+            )
+            raise WebDAVError("Failed to upload file to the WebDAV server")
 
     async def mkdir(
         self,
@@ -179,12 +250,13 @@ class WebDAVService:
     ) -> None:
         """Create a directory on the WebDAV server."""
         password = decrypt_value(password_encrypted)
-        url = f"{base_url.rstrip('/')}{path}"
+        url = _safe_join(base_url, path)
 
         client = get_http_client()
         resp = await client.request("MKCOL", url, auth=(username, password), timeout=10.0)
         if resp.status_code not in (201, 405):  # 405 = already exists
-            raise WebDAVError(f"MKCOL failed ({resp.status_code})")
+            logger.warning("WebDAV MKCOL on %s failed (%d)", url, resp.status_code)
+            raise WebDAVError("Failed to create directory on the WebDAV server")
 
 
 webdav_service = WebDAVService()

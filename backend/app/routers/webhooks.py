@@ -5,7 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import require_admin
 from app.database import get_db
 from app.models import User, Webhook
-from app.schemas import WebhookCreate, WebhookResponse
+from app.schemas import WebhookCreate, WebhookResponse, WebhookUpdate
+from app.services.crypto import encrypt_value
 from app.services.webhook_service import WEBHOOK_EVENTS
 
 router = APIRouter()
@@ -42,7 +43,11 @@ async def create_webhook(
     webhook = Webhook(
         name=body.name,
         url=body.url,
-        secret=body.secret,
+        # F121: encrypted at rest, like every other stored credential/secret
+        # in the schema. Read side (webhook_service.dispatch_webhook) uses
+        # decrypt_value_lenient so a secret written before this fix
+        # (plaintext) still verifies until it's next saved through here.
+        secret=encrypt_value(body.secret) if body.secret else None,
         events=body.events,
         enabled=body.enabled,
         created_by=user.id,
@@ -56,24 +61,42 @@ async def create_webhook(
 @router.put("/{webhook_id}", response_model=WebhookResponse)
 async def update_webhook(
     webhook_id: int,
-    body: WebhookCreate,
+    body: WebhookUpdate,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ):
-    """Update a webhook."""
+    """Update a webhook.
+
+    PATCH semantics (F18): a field the client didn't send is left alone, so
+    e.g. the enable/disable toggle can PUT just `{"enabled": ...}` without
+    clobbering `secret` — `WebhookResponse` never returns it, so the client
+    has no way to echo it back, and unconditionally overwriting it (the
+    previous behaviour) silently nulled the HMAC signing secret on every
+    toggle, after which deliveries went out unsigned.
+    """
     webhook = await db.get(Webhook, webhook_id)
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")
 
-    invalid = [e for e in body.events if e not in WEBHOOK_EVENTS]
-    if invalid:
-        raise HTTPException(status_code=400, detail=f"Invalid events: {invalid}")
+    updates = body.model_dump(exclude_unset=True)
 
-    webhook.name = body.name
-    webhook.url = body.url
-    webhook.secret = body.secret
-    webhook.events = body.events
-    webhook.enabled = body.enabled
+    if "events" in updates:
+        invalid = [e for e in body.events if e not in WEBHOOK_EVENTS]
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"Invalid events: {invalid}")
+        webhook.events = body.events
+
+    if "name" in updates:
+        webhook.name = body.name
+    if "url" in updates:
+        webhook.url = body.url
+    if "enabled" in updates:
+        webhook.enabled = body.enabled
+    # secret: only a non-null value changes anything -- omitted *or*
+    # explicitly null both keep the stored secret (F18/F121).
+    if "secret" in updates and body.secret is not None:
+        webhook.secret = encrypt_value(body.secret) if body.secret else None
+
     await db.commit()
     await db.refresh(webhook)
     return webhook

@@ -34,6 +34,9 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "smtp_user": (str, False),
     "smtp_password": (str, True),
     "smtp_from": (str, False),
+    # F56: starttls (default) | tls | none -- replaces the old port==587/465
+    # heuristic, which silently sent AUTH in cleartext on any other port.
+    "smtp_security": (str, False),
     "gdrive_client_id": (str, False),
     "gdrive_client_secret": (str, True),
     "dropbox_app_key": (str, False),
@@ -52,10 +55,13 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "ftp_password": (str, True),
     "ftp_remote_dir": (str, False),
     "ftp_protocol": (str, False),  # ftp, ftps, sftp
+    # F58: SHA256/base64 fingerprint of the expected SFTP host key. Not
+    # encrypted -- it's a public key fingerprint, not a secret. Empty means
+    # "accept and pin on first use" (a warning is logged with the actual
+    # fingerprint so the admin can copy it in here).
+    "sftp_host_key_fingerprint": (str, False),
     "require_release_pin": (bool, False),
     "print_retention_days": (int, False),
-    # Email webhook (encryption managed by email.py, not the generic CONFIGURABLE pattern)
-    "email_webhook_secret": (str, False),
     # Supply/error alerts (poller in main.py + alert_service)
     "alerts_enabled": (bool, False),
     "alert_toner_threshold": (int, False),
@@ -86,6 +92,7 @@ DEFAULTS: dict[str, str] = {
     "dev_mode": "false",
     "require_release_pin": "false",
     "smtp_port": "587",
+    "smtp_security": "starttls",
     "ocr_enabled": "false",
     "ocr_language": "eng",
     "ftp_port": "21",

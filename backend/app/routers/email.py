@@ -1,26 +1,34 @@
-import os
+import logging
 import secrets
 import time
 from collections import defaultdict
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from cryptography.fernet import InvalidToken
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_admin
 from app.database import get_db
-from app.models import AppConfig, PrintJob, User
+from app.models import AppConfig, User
+from app.routers.jobs import _create_print_job_from_upload
 from app.schemas import EmailConfig, EmailConfigStatus
 from app.services import settings_cache
 from app.services.convert_service import is_printable
 from app.services.crypto import decrypt_value, encrypt_value
 from app.services.email_service import email_service
-from app.services.file_service import detect_mime_type, get_upload_path, sanitize_filename
+from app.services.file_service import detect_mime_type
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# In-memory rate limiting for webhook
+# In-memory rate limiting for the /receive webhook. F57: keyed by the
+# validated token (see receive_email) rather than the client/proxy IP, and
+# idle buckets are evicted so a rotated token's bucket doesn't linger
+# forever.
 _webhook_requests: dict[str, list[float]] = defaultdict(list)
+_BUCKET_IDLE_SECONDS = 3600.0
 
 
 async def _get_smtp_config(db: AsyncSession) -> dict:
@@ -92,36 +100,61 @@ async def test_email(
 
 
 async def _get_webhook_secret(db: AsyncSession) -> str:
-    """Get webhook secret from DB or env."""
+    """Get webhook secret from DB or env.
+
+    F74: an unguarded decrypt here meant a rotated PAPYRUS_ENCRYPTION_KEY (or
+    a restored foreign backup) turned every inbound /api/email/receive into
+    a generic 500 with no hint the key was the cause. A decrypt failure is
+    treated the same as "not configured" (empty string), matching
+    get_setting's guarded pattern.
+    """
     result = await db.execute(
         select(AppConfig).where(AppConfig.key == "email_webhook_secret")
     )
     row = result.scalar_one_or_none()
-    if row:
+    if not row:
+        return ""
+    try:
         return decrypt_value(row.value)
-    return ""
+    except InvalidToken:
+        logger.warning(
+            "Failed to decrypt email webhook secret -- encryption key may have changed"
+        )
+        return ""
 
 
-def _check_rate_limit(client_ip: str, max_requests: int = 10) -> bool:
-    """Check if client IP is within rate limit. Returns True if allowed."""
+def _check_rate_limit(key: str, max_requests: int = 10) -> bool:
+    """Sliding-window rate limit. Returns True if the call for `key` is allowed.
+
+    F57: `key` is the caller-supplied identity to rate-limit on -- the
+    validated webhook token (see receive_email), not the client/proxy IP, so
+    every sender no longer shares one bucket behind a proxy that doesn't
+    forward the real client address. Also evicts any bucket that's seen no
+    requests in over an hour, so a rotated/one-off token's bucket doesn't
+    accumulate in `_webhook_requests` forever.
+    """
     now = time.time()
     window = 60.0  # 1 minute
 
-    # Clean old entries
-    _webhook_requests[client_ip] = [
-        t for t in _webhook_requests[client_ip] if now - t < window
+    for stale_key in [
+        k for k, timestamps in _webhook_requests.items()
+        if not timestamps or now - timestamps[-1] > _BUCKET_IDLE_SECONDS
+    ]:
+        del _webhook_requests[stale_key]
+
+    _webhook_requests[key] = [
+        t for t in _webhook_requests[key] if now - t < window
     ]
 
-    if len(_webhook_requests[client_ip]) >= max_requests:
+    if len(_webhook_requests[key]) >= max_requests:
         return False
 
-    _webhook_requests[client_ip].append(now)
+    _webhook_requests[key].append(now)
     return True
 
 
 @router.post("/receive", status_code=201)
 async def receive_email(
-    request: Request,
     files: list[UploadFile] = File(...),
     token: str = Form(...),
     sender: str = Form(default=""),
@@ -134,24 +167,33 @@ async def receive_email(
     to forward email attachments for printing. Authentication is via
     a shared secret token, not OIDC.
     """
-    # Rate limit
-    from app.routers.settings import get_setting, safe_int_setting
-    rate_limit = safe_int_setting(await get_setting(db, "email_webhook_rate_limit"), 10)
-    client_ip = request.client.host if request.client else "unknown"
-    if not _check_rate_limit(client_ip, max_requests=rate_limit):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded")
-
-    # Validate webhook token
+    # F57: validate the token *before* touching the rate limiter -- an
+    # attacker posting junk tokens must not be able to exhaust the
+    # legitimate forwarder's quota (the old order recorded every hit,
+    # authenticated or not, in a bucket keyed by the client/proxy IP that
+    # every sender behind that proxy shares).
     webhook_secret = await _get_webhook_secret(db)
     if not webhook_secret:
         raise HTTPException(status_code=503, detail="Webhook not configured")
     if not secrets.compare_digest(token, webhook_secret):
         raise HTTPException(status_code=403, detail="Invalid webhook token")
 
-    # Ensure upload directory exists
-    upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
-    os.makedirs(upload_dir, exist_ok=True)
+    from app.routers.settings import get_setting, safe_int_setting
+    rate_limit = safe_int_setting(await get_setting(db, "email_webhook_rate_limit"), 10)
+    if not _check_rate_limit(token, max_requests=rate_limit):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
+    # F71: the subject is unbounded, arbitrary input, while PrintJob.title is
+    # String(255) -- truncate up front rather than letting a long subject
+    # blow up the DB write after every attachment is already on disk.
+    title = subject.strip()[:255] if subject and subject.strip() else "Email Attachment"
+
+    # F55/F25: each attachment is created via the same shared helper
+    # `/upload` and the share-target route use, so it gets the same
+    # streaming save + configured size cap (an oversize attachment 413s
+    # instead of being buffered whole in memory with no limit), the same
+    # job_created WS broadcast, and the same print.upload/print.held webhook
+    # dispatch -- none of which this endpoint used to do at all.
     created_jobs = []
     for upload_file in files:
         if not upload_file.filename:
@@ -161,36 +203,11 @@ async def receive_email(
         if not is_printable(mime_type):
             continue
 
-        # Save file
-        filepath = get_upload_path(upload_file.filename, upload_dir=upload_dir)
-        content = await upload_file.read()
-
-        if not content:
-            continue
-
-        with open(filepath, "wb") as f:
-            f.write(content)
-
-        file_size = len(content)
-        safe_filename = sanitize_filename(upload_file.filename)
-        title = f"{subject} - {safe_filename}" if subject else safe_filename
-
-        # Create held print job (no user_id since this is webhook-based)
-        job = PrintJob(
-            user_id=None,
-            title=title,
-            filename=safe_filename,
-            filepath=filepath,
-            file_size=file_size,
-            mime_type=mime_type,
-            status="held",
-            source_type="email",
+        job, _pin = await _create_print_job_from_upload(
+            db, None, upload_file,
+            hold=True, auto_pin=False, source_type="email", title=title,
         )
-        db.add(job)
-        await db.flush()
         created_jobs.append({"id": job.id, "title": job.title})
-
-    await db.commit()
 
     return {"jobs": created_jobs, "total": len(created_jobs)}
 

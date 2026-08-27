@@ -1,22 +1,31 @@
 """WebDAV/Nextcloud API endpoints."""
 
+from urllib.parse import urlparse
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user, require_permission
+from app.auth.dependencies import require_permission
 from app.database import get_db
 from app.models import CloudProvider, User
 from app.services.crypto import encrypt_value
-from app.services.webdav_service import webdav_service
+from app.services.net_guard import UnsafeHostError, assert_safe_host
+from app.services.webdav_service import WebDAVConnectError, webdav_service
 
 router = APIRouter()
+
+_CONNECT_ERROR_DETAIL = {
+    WebDAVConnectError.AUTH: "Authentication failed — check the username and password",
+    WebDAVConnectError.TRANSPORT: "Could not reach the WebDAV server — check the URL",
+    WebDAVConnectError.NOT_WEBDAV: "The server did not respond like a WebDAV server",
+}
 
 
 @router.post("/connect", status_code=201)
 async def connect_webdav(
     body: dict,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
     """Connect a WebDAV/Nextcloud server.
@@ -30,12 +39,26 @@ async def connect_webdav(
     if not url or not username or not password:
         raise HTTPException(status_code=400, detail="url, username, and password are required")
 
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise HTTPException(status_code=400, detail="URL must use http:// or https://")
+    if not parsed.hostname:
+        raise HTTPException(status_code=400, detail="Invalid URL")
+
+    # F13: reject loopback/link-local/multicast/unspecified targets before
+    # ever making a request — private/LAN addresses are allowed on purpose,
+    # a self-hosted Nextcloud instance lives there.
+    try:
+        await assert_safe_host(parsed.hostname)
+    except UnsafeHostError:
+        raise HTTPException(status_code=400, detail="Invalid URL")
+
     password_enc = encrypt_value(password)
 
     # Test connection first
-    ok = await webdav_service.test_connection(url, username, password_enc)
-    if not ok:
-        raise HTTPException(status_code=400, detail="Could not connect to WebDAV server")
+    reason = await webdav_service.test_connection(url, username, password_enc)
+    if reason is not None:
+        raise HTTPException(status_code=400, detail=_CONNECT_ERROR_DETAIL[reason])
 
     # Store as a CloudProvider with provider="webdav"
     provider = CloudProvider(
@@ -74,7 +97,7 @@ def _parse_webdav_creds(provider: CloudProvider) -> tuple[str, str, str]:
 async def list_webdav_files(
     provider_id: int,
     path: str = Query(default="/"),
-    user: User = Depends(require_permission("scan")),
+    user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
     """List files at a WebDAV path."""

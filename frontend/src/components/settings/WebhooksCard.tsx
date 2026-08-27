@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import { useToast } from '../../hooks/useToast';
-import { createWebhook, updateWebhook, deleteWebhook, type Webhook, type WebhookCreate } from '../../api/webhooks';
+import { createWebhook, updateWebhook, deleteWebhook, type Webhook, type WebhookCreate, type WebhookUpdate } from '../../api/webhooks';
 import { useWebhooks, useWebhookEvents, queryKeys } from '../../api/queries';
 
 export default function WebhooksCard() {
@@ -24,7 +24,7 @@ export default function WebhooksCard() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, body }: { id: number; body: WebhookCreate }) => updateWebhook(id, body),
+    mutationFn: ({ id, body }: { id: number; body: WebhookUpdate }) => updateWebhook(id, body),
     meta: { suppressGlobalError: true },
     onSuccess: invalidateWebhooks,
     onError: () => toast.show('Failed to update webhook', 'error'),
@@ -48,9 +48,14 @@ export default function WebhooksCard() {
   };
 
   const toggleEnabled = (hook: Webhook) => {
+    // F18: PATCH-shaped — send only `enabled`. The backend now leaves
+    // name/url/events/secret untouched when they're absent; a full
+    // WebhookCreate-shaped PUT here used to null the signing secret every
+    // toggle (secret is never in Webhook/listWebhooks, so there was nothing
+    // to echo back).
     updateMutation.mutate({
       id: hook.id,
-      body: { name: hook.name, url: hook.url, events: hook.events, enabled: !hook.enabled },
+      body: { enabled: !hook.enabled },
     });
   };
 

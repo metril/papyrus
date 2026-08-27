@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 
 from app.auth.dependencies import require_admin, require_permission
 from app.database import get_db
@@ -103,18 +104,33 @@ async def download_from_share(
     if share is None:
         raise HTTPException(status_code=404, detail="Share not found")
 
-    # Download to temp file
+    # Download to a temp file. F59: a fixed `papyrus_smb_<basename>` path
+    # collided across concurrent downloads of the same filename (from
+    # different shares, or the same request twice) -- the second write
+    # truncated the file the first response was still streaming -- and was
+    # never cleaned up. mkstemp() gives every download a unique path, and
+    # the BackgroundTask below removes it once the response has been sent.
     filename = os.path.basename(path)
-    temp_path = os.path.join(tempfile.gettempdir(), f"papyrus_smb_{filename}")
+    fd, temp_path = tempfile.mkstemp(prefix="papyrus_smb_", suffix=f"_{filename}")
+    os.close(fd)
 
-    await smb_service.download(
-        server=share.server,
-        share_name=share.share_name,
-        remote_path=path,
-        local_path=temp_path,
-        username=share.username,
-        password_encrypted=share.password_encrypted,
-        domain=share.domain,
+    try:
+        await smb_service.download(
+            server=share.server,
+            share_name=share.share_name,
+            remote_path=path,
+            local_path=temp_path,
+            username=share.username,
+            password_encrypted=share.password_encrypted,
+            domain=share.domain,
+        )
+    except Exception:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
+
+    return FileResponse(
+        temp_path, filename=filename, background=BackgroundTask(os.unlink, temp_path)
     )
-
-    return FileResponse(temp_path, filename=filename)

@@ -1,8 +1,13 @@
 """Paperless-ngx integration service."""
 
+import asyncio
+import logging
+
 from app.exceptions import ExternalServiceError
 from app.services.crypto import decrypt_value
 from app.services.http_client import get_http_client
+
+logger = logging.getLogger(__name__)
 
 
 class PaperlessError(ExternalServiceError):
@@ -27,28 +32,40 @@ class PaperlessService:
         api_token = decrypt_value(api_token_encrypted)
         url = f"{paperless_url.rstrip('/')}/api/documents/post_document/"
 
-        with open(filepath, "rb") as f:
-            files = {"document": (filename, f)}
-            data: dict[str, str] = {}
-            if title:
-                data["title"] = title
-            if correspondent:
-                data["correspondent"] = correspondent
-            if tags:
-                for tag in tags:
-                    data["tags"] = tag  # Paperless accepts multiple tags fields
+        # F39: read off the event loop -- passing an *open file handle* into
+        # httpx's `files=` (the previous shape) has httpx's multipart
+        # encoder read it synchronously while building the request body,
+        # blocking the loop for the whole disk read. Reading the bytes
+        # up front in a worker thread avoids that.
+        def _read() -> bytes:
+            with open(filepath, "rb") as f:
+                return f.read()
 
-            client = get_http_client()
-            resp = await client.post(
-                url,
-                headers={"Authorization": f"Token {api_token}"},
-                files=files,
-                data=data,
-                timeout=60,
-            )
+        content = await asyncio.to_thread(_read)
+
+        data: dict[str, str] = {}
+        if title:
+            data["title"] = title
+        if correspondent:
+            data["correspondent"] = correspondent
+        if tags:
+            for tag in tags:
+                data["tags"] = tag  # Paperless accepts multiple tags fields
+
+        client = get_http_client()
+        resp = await client.post(
+            url,
+            headers={"Authorization": f"Token {api_token}"},
+            files={"document": (filename, content)},
+            data=data,
+            timeout=60,
+        )
 
         if resp.status_code not in (200, 202):
-            raise PaperlessError(f"Paperless upload failed ({resp.status_code}): {resp.text}")
+            logger.warning(
+                "Paperless-ngx upload failed (%d): %s", resp.status_code, resp.text
+            )
+            raise PaperlessError("Failed to upload document to Paperless-ngx")
 
         # Paperless returns a task ID as a string like "abc-123"
         task_id = resp.text.strip().strip('"')

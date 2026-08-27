@@ -1,9 +1,12 @@
+import asyncio
+import logging
 from email.message import Message
 from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 import aiosmtplib
+from cryptography.fernet import InvalidToken
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,9 +14,36 @@ from app.exceptions import ExternalServiceError
 from app.models import AppConfig
 from app.services.crypto import decrypt_value
 
+logger = logging.getLogger(__name__)
+
+_VALID_SECURITY_MODES = {"starttls", "tls", "none"}
+
 
 class EmailError(ExternalServiceError):
     pass
+
+
+def _tls_flags(security: str) -> tuple[bool, bool]:
+    """Map the ``smtp_security`` setting to aiosmtplib's (use_tls, start_tls).
+
+    F56: this replaces the old ``port == 465`` / ``port == 587`` heuristic,
+    which passed an explicit ``start_tls=False`` for any other port --
+    aiosmtplib treats that as "never attempt STARTTLS" (only ``None`` is
+    opportunistic), so a relay on 25/2525 sent AUTH in the clear while the
+    Test button still reported success.
+
+    * "tls" — implicit TLS from connect (port 465-style).
+    * "starttls" (default) — require a STARTTLS upgrade; fail loudly if the
+      server doesn't support it, rather than silently falling back to
+      cleartext.
+    * "none" — no encryption at all; an explicit, informed opt-in rather
+      than an accidental default.
+    """
+    if security == "tls":
+        return True, False
+    if security == "none":
+        return False, False
+    return False, True  # starttls
 
 
 class EmailService:
@@ -25,6 +55,7 @@ class EmailService:
             "user": "",
             "password": "",
             "from_addr": "",
+            "security": "starttls",
         }
         if db_config:
             if db_config.get("smtp_host"):
@@ -34,9 +65,22 @@ class EmailService:
             if db_config.get("smtp_user"):
                 config["user"] = db_config["smtp_user"]
             if db_config.get("smtp_password_encrypted"):
-                config["password"] = decrypt_value(db_config["smtp_password_encrypted"])
+                # F74: an unguarded decrypt here means a rotated
+                # PAPYRUS_ENCRYPTION_KEY (or a restored foreign backup) turns
+                # every SMTP send into a generic 500 with no hint the key is
+                # the cause. Treat a decrypt failure as "no password
+                # configured" and log a warning, matching get_setting.
+                try:
+                    config["password"] = decrypt_value(db_config["smtp_password_encrypted"])
+                except InvalidToken:
+                    logger.warning(
+                        "Failed to decrypt SMTP password -- encryption key may have changed"
+                    )
             if db_config.get("smtp_from"):
                 config["from_addr"] = db_config["smtp_from"]
+            security = db_config.get("smtp_security")
+            if security in _VALID_SECURITY_MODES:
+                config["security"] = security
         return config
 
     def is_configured(self, db_config: dict | None = None) -> bool:
@@ -58,6 +102,7 @@ class EmailService:
         Extracted so ``send_scan`` and ``send_alert`` share one implementation
         of the connect/STARTTLS/auth logic and raise the same ``EmailError``.
         """
+        use_tls, start_tls = _tls_flags(config["security"])
         try:
             await aiosmtplib.send(
                 msg,
@@ -65,8 +110,8 @@ class EmailService:
                 port=config["port"],
                 username=config["user"] or None,
                 password=config["password"] or None,
-                use_tls=config["port"] == 465,
-                start_tls=config["port"] == 587,
+                use_tls=use_tls,
+                start_tls=start_tls,
             )
         except Exception as e:
             raise EmailError(f"Failed to send email: {e}")
@@ -93,13 +138,16 @@ class EmailService:
 
         msg.attach(MIMEText(body or "Scanned document attached.", "plain"))
 
-        # Attach the scan file
-        with open(filepath, "rb") as f:
-            attachment = MIMEApplication(f.read())
-            attachment.add_header(
-                "Content-Disposition", "attachment", filename=filename
-            )
-            msg.attach(attachment)
+        # Attach the scan file. F39: read off the event loop -- a large scan
+        # would otherwise block every other request/WS broadcast for the
+        # whole disk read.
+        def _build_attachment() -> MIMEApplication:
+            with open(filepath, "rb") as f:
+                attachment = MIMEApplication(f.read())
+            attachment.add_header("Content-Disposition", "attachment", filename=filename)
+            return attachment
+
+        msg.attach(await asyncio.to_thread(_build_attachment))
 
         await self._deliver(msg, config)
 
@@ -124,22 +172,32 @@ class EmailService:
         await self._deliver(msg, config)
 
     async def test_connection(self, db_config: dict | None = None) -> bool:
-        """Test SMTP connection."""
+        """Test SMTP connection.
+
+        F104: closes the session in a ``finally`` (a failed login used to
+        leave the connection open until the server's own idle timeout) and
+        logs the cause at warning level instead of swallowing it entirely.
+        """
         config = self._get_config(db_config)
+        use_tls, start_tls = _tls_flags(config["security"])
+        smtp = aiosmtplib.SMTP(
+            hostname=config["host"], port=config["port"], use_tls=use_tls, start_tls=start_tls
+        )
         try:
-            smtp = aiosmtplib.SMTP(
-                hostname=config["host"],
-                port=config["port"],
-                use_tls=config["port"] == 465,
-                start_tls=config["port"] == 587,
-            )
             await smtp.connect()
             if config["user"] and config["password"]:
                 await smtp.login(config["user"], config["password"])
-            await smtp.quit()
             return True
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "SMTP connection test to %s:%s failed: %s", config["host"], config["port"], exc
+            )
             return False
+        finally:
+            try:
+                await smtp.quit()
+            except Exception:
+                pass
 
 
 email_service = EmailService()

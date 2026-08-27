@@ -419,29 +419,33 @@ async def upload_scan_to_cloud(
 
     filename = f"scan_{scan_id}.{job.format}"
 
+    # F14: refresh the token first if it's expired, rather than handing the
+    # (possibly stale) stored token straight to the provider SDK.
+    if provider.provider not in ("gdrive", "dropbox", "onedrive"):
+        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider.provider}")
+    access_token = await cloud_service.get_valid_access_token(db, provider)
+
     if provider.provider == "gdrive":
         file_id = await cloud_service.upload_to_gdrive(
             filepath=job.filepath,
             filename=filename,
-            access_token_encrypted=provider.access_token_encrypted,
+            access_token=access_token,
         )
         return {"message": "Uploaded to Google Drive", "file_id": file_id}
     elif provider.provider == "dropbox":
         path = await cloud_service.upload_to_dropbox(
             filepath=job.filepath,
             filename=filename,
-            access_token_encrypted=provider.access_token_encrypted,
+            access_token=access_token,
         )
         return {"message": "Uploaded to Dropbox", "path": path}
-    elif provider.provider == "onedrive":
+    else:
         file_id = await cloud_service.upload_to_onedrive(
             filepath=job.filepath,
             filename=filename,
-            access_token_encrypted=provider.access_token_encrypted,
+            access_token=access_token,
         )
         return {"message": "Uploaded to OneDrive", "file_id": file_id}
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown provider: {provider.provider}")
 
 
 @router.post("/scans/{scan_id}/paperless")

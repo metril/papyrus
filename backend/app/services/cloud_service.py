@@ -1,9 +1,18 @@
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING
 
 from app.exceptions import ExternalServiceError
 from app.services.crypto import decrypt_value
 from app.services.http_client import get_http_client
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.models import CloudProvider
+
+logger = logging.getLogger(__name__)
 
 
 class CloudError(ExternalServiceError):
@@ -39,7 +48,8 @@ class CloudService:
             },
         )
         if resp.status_code != 200:
-            raise CloudError(f"Failed to refresh Google token: {resp.text}")
+            logger.warning("Google token refresh failed (%d): %s", resp.status_code, resp.text)
+            raise CloudError("Failed to refresh Google Drive access token")
 
         data = resp.json()
         new_access_token = data["access_token"]
@@ -147,10 +157,16 @@ class CloudService:
         self,
         filepath: str,
         filename: str,
-        access_token_encrypted: str,
+        access_token: str,
         folder_id: str | None = None,
     ) -> str:
-        """Upload a file to Google Drive. Returns the file ID."""
+        """Upload a file to Google Drive. Returns the file ID.
+
+        `access_token` must already be a valid, decrypted token -- callers
+        get one from `get_valid_access_token` (F14), which refreshes it
+        first if it's close to/past expiry rather than handing this a
+        possibly-stale token that just 401s against the Drive API.
+        """
         try:
             from google.oauth2.credentials import Credentials
             from googleapiclient.discovery import build
@@ -160,7 +176,6 @@ class CloudService:
                 "Google Drive SDK not installed. Install with: pip install papyrus[cloud]"
             )
 
-        access_token = decrypt_value(access_token_encrypted)
         credentials = Credentials(token=access_token)
         service = build("drive", "v3", credentials=credentials)
 
@@ -203,7 +218,8 @@ class CloudService:
             },
         )
         if resp.status_code != 200:
-            raise CloudError(f"Failed to refresh Dropbox token: {resp.text}")
+            logger.warning("Dropbox token refresh failed (%d): %s", resp.status_code, resp.text)
+            raise CloudError("Failed to refresh Dropbox access token")
 
         data = resp.json()
         new_access_token = data["access_token"]
@@ -270,16 +286,19 @@ class CloudService:
         self,
         filepath: str,
         filename: str,
-        access_token_encrypted: str,
+        access_token: str,
         remote_path: str = "/Papyrus Scans",
     ) -> str:
-        """Upload a file to Dropbox. Returns the path."""
+        """Upload a file to Dropbox. Returns the path.
+
+        `access_token` must already be a valid, decrypted token -- see
+        `upload_to_gdrive`'s docstring (F14).
+        """
         try:
             import dropbox
         except ImportError:
             raise CloudError("Dropbox SDK not installed. Install with: pip install papyrus[cloud]")
 
-        access_token = decrypt_value(access_token_encrypted)
         dbx = dropbox.Dropbox(access_token)
 
         dest_path = f"{remote_path}/{filename}"
@@ -320,7 +339,8 @@ class CloudService:
             },
         )
         if resp.status_code != 200:
-            raise CloudError(f"Failed to refresh OneDrive token: {resp.text}")
+            logger.warning("OneDrive token refresh failed (%d): %s", resp.status_code, resp.text)
+            raise CloudError("Failed to refresh OneDrive access token")
 
         data = resp.json()
         new_access_token = data["access_token"]
@@ -348,7 +368,8 @@ class CloudService:
             params={"$top": "100", "$orderby": "name"},
         )
         if resp.status_code != 200:
-            raise CloudError(f"OneDrive API error: {resp.text}")
+            logger.warning("OneDrive list-files API error (%d): %s", resp.status_code, resp.text)
+            raise CloudError("Failed to list OneDrive files")
 
         data = resp.json()
 
@@ -381,29 +402,37 @@ class CloudService:
             follow_redirects=True,
         )
         if resp.status_code != 200:
-            raise CloudError(f"OneDrive download error: {resp.status_code}")
+            logger.warning("OneDrive download error (%d)", resp.status_code)
+            raise CloudError("Failed to download file from OneDrive")
 
-        with open(local_path, "wb") as f:
-            f.write(resp.content)
+        def _write():
+            with open(local_path, "wb") as f:
+                f.write(resp.content)
 
+        await asyncio.to_thread(_write)
         return local_path
 
     async def upload_to_onedrive(
         self,
         filepath: str,
         filename: str,
-        access_token_encrypted: str,
+        access_token: str,
         folder_path: str = "/Papyrus Scans",
     ) -> str:
-        """Upload a file to OneDrive. Returns the item ID."""
-        access_token = decrypt_value(access_token_encrypted)
+        """Upload a file to OneDrive. Returns the item ID.
 
+        `access_token` must already be a valid, decrypted token -- see
+        `upload_to_gdrive`'s docstring (F14).
+        """
         # Simple upload (< 4MB) via PUT to path
         upload_path = f"{folder_path}/{filename}".replace("//", "/")
         url = f"{self.GRAPH_BASE}/me/drive/root:{upload_path}:/content"
 
-        with open(filepath, "rb") as f:
-            content = f.read()
+        def _read():
+            with open(filepath, "rb") as f:
+                return f.read()
+
+        content = await asyncio.to_thread(_read)
 
         client = get_http_client()
         resp = await client.put(
@@ -415,9 +444,65 @@ class CloudService:
             content=content,
         )
         if resp.status_code not in (200, 201):
-            raise CloudError(f"OneDrive upload error: {resp.text}")
+            logger.warning("OneDrive upload error (%d): %s", resp.status_code, resp.text)
+            raise CloudError("Failed to upload file to OneDrive")
 
         return resp.json()["id"]
+
+    # --- Shared expiry-aware access token (F14) ---
+
+    async def get_valid_access_token(
+        self, db: "AsyncSession", provider: "CloudProvider"
+    ) -> str:
+        """Return a valid, decrypted access token for `provider`, refreshing
+        it first if it has expired.
+
+        Every upload path must go through this rather than a raw
+        `decrypt_value(provider.access_token_encrypted)`: Google/OneDrive
+        tokens live ~1 hour, and a stale token 401s against the provider's
+        API (or, on the scan auto-deliver path, is silently swallowed by its
+        best-effort error handling). This is the same refresh-if-expiring
+        logic the browse/download routes already used
+        (routers/cloud.py's `_get_access_token`), now shared by both.
+        """
+        # Local import: cloud_service is a low-level service and
+        # app.routers.settings imports from several services itself, so a
+        # module-level import here would risk an import cycle.
+        from app.routers.settings import get_setting
+        from app.services.crypto import encrypt_value
+
+        now = datetime.now(timezone.utc)
+        if provider.token_expiry and provider.token_expiry.replace(tzinfo=timezone.utc) < now:
+            if not provider.refresh_token_encrypted:
+                raise CloudError("Cloud storage session expired. Please reconnect.")
+
+            if provider.provider == "gdrive":
+                client_id = await get_setting(db, "gdrive_client_id")
+                client_secret = await get_setting(db, "gdrive_client_secret")
+                new_token, expiry = await self.refresh_gdrive_token(
+                    provider.refresh_token_encrypted, client_id, client_secret
+                )
+            elif provider.provider == "dropbox":
+                app_key = await get_setting(db, "dropbox_app_key")
+                app_secret = await get_setting(db, "dropbox_app_secret")
+                new_token, expiry = await self.refresh_dropbox_token(
+                    provider.refresh_token_encrypted, app_key, app_secret
+                )
+            elif provider.provider == "onedrive":
+                client_id = await get_setting(db, "onedrive_client_id")
+                client_secret = await get_setting(db, "onedrive_client_secret")
+                new_token, expiry = await self.refresh_onedrive_token(
+                    provider.refresh_token_encrypted, client_id, client_secret
+                )
+            else:
+                raise CloudError("Unknown cloud provider")
+
+            provider.access_token_encrypted = encrypt_value(new_token)
+            provider.token_expiry = expiry
+            await db.commit()
+            return new_token
+
+        return decrypt_value(provider.access_token_encrypted)
 
 
 cloud_service = CloudService()

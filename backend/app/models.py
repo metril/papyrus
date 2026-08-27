@@ -251,8 +251,11 @@ class Webhook(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     url: Mapped[str] = mapped_column(String(500), nullable=False)
-    # Text, not String(255): a later task Fernet-encrypts this at rest, and
-    # ciphertext exceeds 255 chars for a long secret.
+    # Fernet-encrypted at rest (F121), like every other stored credential in
+    # this schema; Text not String(255) since ciphertext exceeds 255 chars
+    # for a long secret. Rows written before F121 hold legacy plaintext --
+    # webhook_service.dispatch_webhook decrypts leniently, and any row is
+    # re-encrypted the next time its secret is explicitly updated.
     secret: Mapped[str | None] = mapped_column(Text, nullable=True)
     # e.g. ["print.release", "scan.complete"]
     events: Mapped[list] = mapped_column(JSON, nullable=False, default=list)

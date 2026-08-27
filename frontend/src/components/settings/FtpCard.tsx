@@ -30,8 +30,24 @@ export default function FtpCard({ appSettings, set, save }: SettingsSectionProps
             <option value="sftp">SFTP (SSH)</option>
           </select>
         </div>
+        {String(appSettings.ftp_protocol ?? 'ftp') === 'sftp' && (
+          <SettingField
+            label="SFTP host key fingerprint (SHA256, base64)"
+            value={appSettings.sftp_host_key_fingerprint ?? ''}
+            onChange={set('sftp_host_key_fingerprint')}
+            placeholder="Leave blank to pin on first connection"
+            mono
+          />
+        )}
         <div className="flex justify-end">
-          <SaveButton section="ftp" keys={['ftp_host', 'ftp_port', 'ftp_username', 'ftp_password', 'ftp_remote_dir', 'ftp_protocol']} save={save} />
+          <SaveButton
+            section="ftp"
+            keys={[
+              'ftp_host', 'ftp_port', 'ftp_username', 'ftp_password', 'ftp_remote_dir',
+              'ftp_protocol', 'sftp_host_key_fingerprint',
+            ]}
+            save={save}
+          />
         </div>
       </div>
     </Card>

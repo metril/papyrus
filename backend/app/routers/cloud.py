@@ -4,7 +4,6 @@ import secrets
 import tempfile
 from datetime import datetime, timedelta, timezone
 
-import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy import select
@@ -16,10 +15,17 @@ from app.database import get_db
 from app.models import CloudProvider, User
 from app.routers.settings import get_setting
 from app.schemas import CloudFileEntry
-from app.services.cloud_service import cloud_service
-from app.services.crypto import decrypt_value, encrypt_value
+from app.services.cloud_service import CloudError, cloud_service
+from app.services.crypto import encrypt_value
+from app.services.http_client import get_http_client
 
 router = APIRouter()
+
+# F119: a bounded timeout on the token-exchange requests -- these three
+# `async with httpx.AsyncClient()` blocks used to construct/tear down a
+# throwaway client per OAuth connect instead of the shared pooled one every
+# other outbound call in this app uses.
+_OAUTH_TIMEOUT_SECONDS = 15.0
 
 GDRIVE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GDRIVE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -157,17 +163,18 @@ async def oauth_callback(
     base_url = settings.base_url
     redirect_uri = f"{base_url}/api/cloud/callback/{provider}"
 
+    client = get_http_client()
+
     if provider == "gdrive":
         client_id = await get_setting(db, "gdrive_client_id")
         client_secret = await get_setting(db, "gdrive_client_secret")
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(GDRIVE_TOKEN_URL, data={
-                "code": code,
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-            })
+        resp = await client.post(GDRIVE_TOKEN_URL, data={
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        }, timeout=_OAUTH_TIMEOUT_SECONDS)
         if resp.status_code != 200:
             raise HTTPException(status_code=502, detail="Failed to exchange token with Google")
         data = resp.json()
@@ -175,14 +182,13 @@ async def oauth_callback(
     elif provider == "dropbox":
         app_key = await get_setting(db, "dropbox_app_key")
         app_secret = await get_setting(db, "dropbox_app_secret")
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(DROPBOX_TOKEN_URL, data={
-                "code": code,
-                "client_id": app_key,
-                "client_secret": app_secret,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-            })
+        resp = await client.post(DROPBOX_TOKEN_URL, data={
+            "code": code,
+            "client_id": app_key,
+            "client_secret": app_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        }, timeout=_OAUTH_TIMEOUT_SECONDS)
         if resp.status_code != 200:
             raise HTTPException(status_code=502, detail="Failed to exchange token with Dropbox")
         data = resp.json()
@@ -190,15 +196,14 @@ async def oauth_callback(
     elif provider == "onedrive":
         client_id = await get_setting(db, "onedrive_client_id")
         client_secret = await get_setting(db, "onedrive_client_secret")
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(ONEDRIVE_TOKEN_URL, data={
-                "code": code,
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "redirect_uri": redirect_uri,
-                "grant_type": "authorization_code",
-                "scope": ONEDRIVE_SCOPES,
-            })
+        resp = await client.post(ONEDRIVE_TOKEN_URL, data={
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+            "scope": ONEDRIVE_SCOPES,
+        }, timeout=_OAUTH_TIMEOUT_SECONDS)
         if resp.status_code != 200:
             raise HTTPException(status_code=502, detail="Failed to exchange token with Microsoft")
         data = resp.json()
@@ -247,43 +252,18 @@ async def oauth_callback(
 
 
 async def _get_access_token(provider: CloudProvider, db: AsyncSession) -> str:
-    """Get a valid access token, refreshing if expired."""
-    now = datetime.now(timezone.utc)
+    """Get a valid access token, refreshing if expired.
 
-    if provider.token_expiry and provider.token_expiry.replace(tzinfo=timezone.utc) < now:
-        if not provider.refresh_token_encrypted:
-            raise HTTPException(
-                status_code=401,
-                detail="Token expired and no refresh token available. Please reconnect.",
-            )
-
-        if provider.provider == "gdrive":
-            client_id = await get_setting(db, "gdrive_client_id")
-            client_secret = await get_setting(db, "gdrive_client_secret")
-            new_token, expiry = await cloud_service.refresh_gdrive_token(
-                provider.refresh_token_encrypted, client_id, client_secret
-            )
-        elif provider.provider == "dropbox":
-            app_key = await get_setting(db, "dropbox_app_key")
-            app_secret = await get_setting(db, "dropbox_app_secret")
-            new_token, expiry = await cloud_service.refresh_dropbox_token(
-                provider.refresh_token_encrypted, app_key, app_secret
-            )
-        elif provider.provider == "onedrive":
-            client_id = await get_setting(db, "onedrive_client_id")
-            client_secret = await get_setting(db, "onedrive_client_secret")
-            new_token, expiry = await cloud_service.refresh_onedrive_token(
-                provider.refresh_token_encrypted, client_id, client_secret
-            )
-        else:
-            raise HTTPException(status_code=400, detail="Unknown provider")
-
-        provider.access_token_encrypted = encrypt_value(new_token)
-        provider.token_expiry = expiry
-        await db.commit()
-        return new_token
-
-    return decrypt_value(provider.access_token_encrypted)
+    Thin HTTP-layer wrapper around `cloud_service.get_valid_access_token`
+    (F14): the actual expiry-check/refresh logic now lives there, shared
+    with the upload paths, and this just keeps browse/download's existing
+    401 status code for "expired with no refresh token" instead of that
+    helper's generic `CloudError` (502).
+    """
+    try:
+        return await cloud_service.get_valid_access_token(db, provider)
+    except CloudError as exc:
+        raise HTTPException(status_code=401, detail=exc.detail) from exc
 
 
 @router.get("/files/{provider_id}", response_model=list[CloudFileEntry])
@@ -355,20 +335,35 @@ async def download_file(
     tmp_name = f"papyrus_cloud_{secrets.token_hex(8)}"
     local_path = os.path.join(tmp_dir, tmp_name)
 
-    if provider.provider == "gdrive":
-        if not file_id:
-            raise HTTPException(status_code=400, detail="file_id is required for Google Drive")
-        await cloud_service.download_gdrive_file(access_token, file_id, local_path)
-    elif provider.provider == "dropbox":
-        if not path:
-            raise HTTPException(status_code=400, detail="path is required for Dropbox")
-        await cloud_service.download_dropbox_file(access_token, path, local_path)
-    elif provider.provider == "onedrive":
-        if not file_id:
-            raise HTTPException(status_code=400, detail="file_id is required for OneDrive")
-        await cloud_service.download_onedrive_file(access_token, file_id, local_path)
-    else:
-        raise HTTPException(status_code=400, detail="Unknown provider")
+    # F120: a download that fails partway through (revoked token mid-transfer,
+    # provider error, ...) used to leave a partial file behind with no
+    # cleanup registered -- background_tasks only ran on the success path.
+    # Cleaning up here on any failure covers that; the BackgroundTask below
+    # still covers the success path (FastAPI runs it only after the response
+    # is sent, so it can't double up with this).
+    try:
+        if provider.provider == "gdrive":
+            if not file_id:
+                raise HTTPException(
+                    status_code=400, detail="file_id is required for Google Drive"
+                )
+            await cloud_service.download_gdrive_file(access_token, file_id, local_path)
+        elif provider.provider == "dropbox":
+            if not path:
+                raise HTTPException(status_code=400, detail="path is required for Dropbox")
+            await cloud_service.download_dropbox_file(access_token, path, local_path)
+        elif provider.provider == "onedrive":
+            if not file_id:
+                raise HTTPException(status_code=400, detail="file_id is required for OneDrive")
+            await cloud_service.download_onedrive_file(access_token, file_id, local_path)
+        else:
+            raise HTTPException(status_code=400, detail="Unknown provider")
+    except Exception:
+        try:
+            os.unlink(local_path)
+        except OSError:
+            pass
+        raise
 
     background_tasks.add_task(_cleanup_temp_file, local_path)
 
@@ -379,19 +374,23 @@ async def download_file(
         "application/vnd.google-apps.presentation",
     }
 
+    # F61: content type is derived only from the *filename*, never from the
+    # client-supplied `mime_type` query param verbatim -- that let a crafted
+    # link (?filename=x.html) serve arbitrary bytes as text/html inline on
+    # the app's own origin. `mime_type` now only selects between our own
+    # fixed choices (the Google-export PDF case), never passes through.
     display_name = filename or (os.path.basename(path) if path else f"cloud_file_{file_id}")
     content_type, _ = mimetypes.guess_type(display_name)
     if not content_type:
-        if mime_type and mime_type in google_export_types:
-            content_type = "application/pdf"
-        elif mime_type:
-            content_type = mime_type
-        else:
-            content_type = "application/octet-stream"
+        content_type = "application/pdf" if mime_type in google_export_types else (
+            "application/octet-stream"
+        )
+
+    inline = content_type == "application/pdf" or content_type.startswith("image/")
 
     return FileResponse(
         local_path,
         filename=display_name,
         media_type=content_type,
-        content_disposition_type="inline",
+        content_disposition_type="inline" if inline else "attachment",
     )

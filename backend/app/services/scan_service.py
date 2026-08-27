@@ -592,17 +592,24 @@ async def run_post_scan_actions(
             )
             provider = result.scalar_one_or_none()
             if provider:
+                if provider.provider in ("gdrive", "dropbox"):
+                    # F14: refresh the token first if it's expired, rather
+                    # than handing the (possibly stale) stored token
+                    # straight to the provider SDK -- this path's errors
+                    # are best-effort/swallowed below, so a silently-401ing
+                    # stale token used to mean the scan just never arrived.
+                    access_token = await cloud_service.get_valid_access_token(db, provider)
                 if provider.provider == "gdrive":
                     await cloud_service.upload_to_gdrive(
                         filepath=scan_job.filepath,
                         filename=filename,
-                        access_token_encrypted=provider.access_token_encrypted,
+                        access_token=access_token,
                     )
                 elif provider.provider == "dropbox":
                     await cloud_service.upload_to_dropbox(
                         filepath=scan_job.filepath,
                         filename=filename,
-                        access_token_encrypted=provider.access_token_encrypted,
+                        access_token=access_token,
                     )
                 elif provider.provider == "webdav":
                     from app.services.crypto import decrypt_value
@@ -645,8 +652,14 @@ async def run_post_scan_actions(
             remote_dir = config.get("ftp_remote_dir", "/")
             protocol = config.get("ftp_protocol", "ftp")
             if protocol == "sftp":
+                from app.routers.settings import get_setting
+                # F58: an admin-pinned SHA256 fingerprint of the expected
+                # SFTP host key. Global (not per-scanner) setting -- see
+                # FtpCard.
+                host_key_fingerprint = await get_setting(db, "sftp_host_key_fingerprint")
                 await ftp_service.upload_sftp(
-                    host, port, user, pwd_enc, scan_job.filepath, filename, remote_dir
+                    host, port, user, pwd_enc, scan_job.filepath, filename, remote_dir,
+                    host_key_fingerprint=host_key_fingerprint,
                 )
             else:
                 await ftp_service.upload_ftp(

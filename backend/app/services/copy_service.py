@@ -1,6 +1,10 @@
+import logging
+
 from app.exceptions import PapyrusError
 from app.services.cups_service import CupsService
 from app.services.scan_service import ScanError, scan_service
+
+logger = logging.getLogger(__name__)
 
 
 class CopyError(PapyrusError):
@@ -45,7 +49,8 @@ class CopyService:
                 scan_dir=scan_dir,
             )
         except ScanError as e:
-            raise CopyError(f"Scan failed: {e}")
+            logger.warning("Copy: scan step failed: %s", e)
+            raise CopyError("Scan failed while making a copy")
 
         # Step 2: Print the scanned image
         try:
@@ -58,7 +63,8 @@ class CopyService:
             )
             await cups.release_job(cups_job_id)
         except Exception as e:
-            raise CopyError(f"Print failed: {e}")
+            logger.warning("Copy: print step failed: %s", e)
+            raise CopyError("Print failed while making a copy")
 
         return {
             "scan_id": scan_id,

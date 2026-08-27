@@ -328,6 +328,25 @@ class WebhookCreate(BaseModel):
     enabled: bool = True
 
 
+class WebhookUpdate(BaseModel):
+    """PATCH-shaped body for `PUT /api/webhooks/{id}` (F18).
+
+    Every field is optional and, when omitted, leaves the stored value
+    unchanged — a toggle-enabled request can send just `{"enabled": ...}`
+    without having to round-trip (and risk clobbering) the name/url/events
+    it can't see. `secret` is additionally never cleared by omission *or* by
+    an explicit `null` — only a non-null value (including `""`, which
+    clears it) changes what's stored, since `WebhookResponse` never returns
+    the secret for the client to echo back.
+    """
+
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    url: str | None = Field(default=None, min_length=1, max_length=500)
+    secret: str | None = None
+    events: list[str] | None = Field(default=None, min_length=1)
+    enabled: bool | None = None
+
+
 class WebhookResponse(BaseModel):
     id: int
     name: str

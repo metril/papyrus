@@ -6,6 +6,13 @@ known vector (not just round-tripped through the function under test).
 row, with the shared HTTP client swapped for an ``httpx.MockTransport`` that
 captures the outgoing request — the same pattern test_ipp_client.py uses for
 ``app.services.ipp_client``.
+
+F60: ``dispatch_webhook`` only queries subscribers and schedules the actual
+HTTP fan-out as a background task (so a request handler is never blocked on
+a slow/dead subscriber) rather than awaiting delivery itself. Every test
+below that asserts on a delivered request therefore awaits
+``wait_for_pending_dispatches()`` right after ``dispatch_webhook`` to let
+that background task actually run before checking its effects.
 """
 import hashlib
 import hmac
@@ -17,7 +24,11 @@ import pytest
 
 import app.services.http_client as http_client_module
 from app.models import Webhook
-from app.services.webhook_service import _sign_payload, dispatch_webhook
+from app.services.webhook_service import (
+    _sign_payload,
+    dispatch_webhook,
+    wait_for_pending_dispatches,
+)
 
 _KNOWN_SECRET = "whsec_test123"
 _KNOWN_PAYLOAD = b'{"event":"print.release","data":{"id":42}}'
@@ -80,6 +91,7 @@ async def test_dispatch_sends_event_and_signature_headers(db, admin_user):
     _install_transport(handler)
 
     await dispatch_webhook(db, "print.release", {"id": 42})
+    await wait_for_pending_dispatches()
 
     request = captured["request"]
     assert request.headers["X-Papyrus-Event"] == "print.release"
@@ -104,6 +116,7 @@ async def test_dispatch_without_secret_sends_no_signature_header(db, admin_user)
     _install_transport(handler)
 
     await dispatch_webhook(db, "print.release", {"id": 1})
+    await wait_for_pending_dispatches()
 
     request = captured["request"]
     assert request.headers["X-Papyrus-Event"] == "print.release"
@@ -127,6 +140,7 @@ async def test_dispatch_skips_disabled_and_non_matching_webhooks(db, admin_user)
     _install_transport(handler)
 
     await dispatch_webhook(db, "print.release", {"id": 1})
+    await wait_for_pending_dispatches()
 
     assert calls == []
 
@@ -137,6 +151,7 @@ async def test_dispatch_with_no_matching_webhooks_never_touches_http_client(db, 
     # No transport installed at all — if dispatch_webhook fetched the shared
     # client and tried a real network call, this would hang/fail loudly.
     await dispatch_webhook(db, "print.release", {"id": 1})
+    await wait_for_pending_dispatches()
 
 
 # --------------------------------------------------------------------------- #
@@ -152,6 +167,7 @@ async def test_dispatch_error_response_is_logged_not_raised(db, admin_user, capl
 
     with caplog.at_level(logging.WARNING):
         await dispatch_webhook(db, "print.release", {"id": 1})
+        await wait_for_pending_dispatches()
 
     assert any("500" in record.message for record in caplog.records)
 
@@ -166,5 +182,6 @@ async def test_dispatch_transport_exception_is_logged_not_raised(db, admin_user,
 
     with caplog.at_level(logging.WARNING):
         await dispatch_webhook(db, "print.release", {"id": 1})  # must not raise
+        await wait_for_pending_dispatches()
 
     assert any("connection refused" in record.message for record in caplog.records)
