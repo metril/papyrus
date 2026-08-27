@@ -269,6 +269,44 @@ async def test_list_files_subfolder_listing_excludes_the_collection_itself():
     assert [e["name"] for e in entries] == ["notes.txt"]
 
 
+async def test_list_files_handles_full_url_hrefs_not_just_path_only():
+    """RFC 4918 permits a server to emit either a path-only href or a full
+    absolute URL (Apache mod_dav does) -- the collection-self-skip and the
+    relative-path stripping must both normalize to the path component first,
+    or a full-URL href never matches (the collection lists itself as its own
+    child) and the stripped "path" comes out as "/http://host/..." instead
+    of "/Documents"."""
+    body = """<?xml version="1.0"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>http://nextcloud.local/remote.php/dav/files/alice/Documents/</d:href>
+    <d:propstat><d:prop>
+      <d:displayname>Documents</d:displayname>
+      <d:resourcetype><d:collection/></d:resourcetype>
+    </d:prop></d:propstat>
+  </d:response>
+  <d:response>
+    <d:href>http://nextcloud.local/remote.php/dav/files/alice/Documents/notes.txt</d:href>
+    <d:propstat><d:prop>
+      <d:displayname>notes.txt</d:displayname>
+      <d:getcontentlength>12</d:getcontentlength>
+      <d:resourcetype/>
+    </d:prop></d:propstat>
+  </d:response>
+</d:multistatus>"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(207, text=body)
+
+    _install_transport(handler)
+    entries = await webdav_service.list_files(
+        _ALICE_BASE, "user", encrypt_value("pw"), "/Documents"
+    )
+
+    assert [e["name"] for e in entries] == ["notes.txt"]
+    assert entries[0]["path"] == "/Documents/notes.txt"
+
+
 async def test_list_files_entry_paths_are_relative_to_base_and_round_trip_through_safe_join():
     body = """<?xml version="1.0"?>
 <d:multistatus xmlns:d="DAV:">

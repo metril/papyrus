@@ -157,7 +157,15 @@ class WebDAVService:
             href_el = response.find("d:href", ns)
             if href_el is None or href_el.text is None:
                 continue
-            href = href_el.text.rstrip("/")
+            # RFC 4918 permits a server to emit either a path-only href or a
+            # full absolute URL (Apache mod_dav does) -- normalize to just
+            # the path component before comparing/stripping, or a full-URL
+            # href never matches `requested_path`/`base_path` (both already
+            # scheme+host-free), so the collection would list itself as its
+            # own child and _relative_to_base would fail to strip anything,
+            # yielding a "path" like "/http://host/.../Documents" that
+            # double-prefixes on the next round trip.
+            href = urlsplit(href_el.text).path.rstrip("/")
 
             # Skip the entry for the requested collection itself.
             if href == requested_path:
