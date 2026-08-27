@@ -22,21 +22,21 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Template Naming**: Configurable filename templates for delivered scans using variables ({date}, {time}, {id}, etc.)
 - **Network Printer**: Appears as an AirPrint/IPP printer on the LAN; network print jobs enter the hold-release queue. A built-in zero-config **Papyrus** printer works out of the box — jobs sent to it are held and routed to your default printer — and each configured printer is also advertised under its own name. All managed queues use CUPS's `abort-job` error policy, so a single failed job is dropped rather than disabling the queue for everyone.
 - **Printer Discovery**: mDNS scan pick-list to add printers, IP probe with IPP auto-enrichment (model/location), and a one-page test print to confirm which physical device a configured printer maps to
-- **Network Scanner**: Appears as an eSCL/AirScan scanner on the LAN; devices can scan directly via the eSCL protocol
+- **Network Scanner**: Appears as an eSCL/AirScan scanner on the LAN; devices can scan directly via the eSCL protocol. The protocol has no authentication of its own, so requests are restricted to LAN source addresses — behind a same-host reverse proxy, the rightmost `X-Forwarded-For` entry is what's checked
 - **Webhooks**: Outgoing HTTP notifications with HMAC-SHA256 signing for print/scan events
 - **Printer Status**: Live toner/ink levels and state display from CUPS marker attributes, pushed to clients over WebSocket as changes are detected (no polling)
 - **Supply & Error Alerts**: Background poller watches toner/ink levels and printer error/offline state; fires a webhook (`printer.supply_low` / `printer.error`) and an optional email the moment a condition starts, with hysteresis so it doesn't repeat while the condition persists and a quiet (webhook-only) notice when it clears
 - **Audit Log**: Tracks print releases, scan completions, deletions, and settings changes (admin view)
 - **Usage Dashboard**: Print/scan counts by status, a 30-day activity trend chart, per-user breakdown, and the default printer's supply levels (admin view)
 - **Real-time Updates**: WebSocket-based live updates — job/scan events push the full object so the UI applies them incrementally, plus scan progress and eSCL scan toast notifications
-- **Release PIN**: Optional PIN-protected print release for secure shared environments
+- **Release PIN**: Optional PIN-protected print release for secure shared environments — a set PIN also gates viewing, downloading, and reprinting that job's file for anyone but its owner or an admin; only an admin can delete or cancel another user's job
 - **Reprint**: Re-submit completed, failed, or cancelled print jobs from history
 - **Retention Policies**: Automatic cleanup of old scans and print jobs with configurable retention periods
 - **Backup / Restore**: Export and import all application settings as JSON (admin)
 - **Detailed Health Check**: System health endpoint with CUPS, scanner, database, disk, and uptime status
 - **Structured Logging**: JSON (or plain dev-mode) logs with a per-request `X-Request-ID`, echoed to the client and included in every log line and error response for easy correlation
 - **PWA Support**: Installable as a Progressive Web App on mobile and desktop; share files into Papyrus directly from the OS share sheet (Android/Chromium only — iOS Safari ignores the manifest's `share_target`, so iPhone users use the in-app upload flow instead). Shared files are held without a release PIN even when `require_release_pin` is on — the share flow has no way to display a generated PIN
-- **Responsive Design**: Works on phones, tablets, and desktops, with light and dark themes
+- **Responsive Design**: Works on phones, tablets, and desktops, with light and dark themes; the mobile nav bar shows the most-used sections plus a "More" sheet for the rest
 - **Authentication**: OIDC (Authentik/Keycloak) with group-based role mapping, API tokens with fine-grained permissions
 - **User Management**: Admin user list with role management, user profile display with logout
 - **Login Screen**: Clean SSO login page for unauthenticated users
@@ -122,6 +122,7 @@ See [.env.example](.env.example) for the full list.
 
 | Variable | Description |
 |----------|-------------|
+| `POSTGRES_PASSWORD` | Password for the bundled Postgres container (interpolated into the default `PAPYRUS_DB_URL`) |
 | `PAPYRUS_DB_URL` | PostgreSQL connection URL |
 | `PAPYRUS_ENCRYPTION_KEY` | Fernet key for encrypting secrets at rest |
 | `PAPYRUS_SESSION_SECRET` | Session cookie encryption key |
@@ -129,6 +130,8 @@ See [.env.example](.env.example) for the full list.
 | `PAPYRUS_OIDC_ISSUER` | OIDC provider issuer URL |
 | `PAPYRUS_OIDC_CLIENT_ID` | OIDC client ID |
 | `PAPYRUS_OIDC_CLIENT_SECRET` | OIDC client secret |
+
+`POSTGRES_PASSWORD` and `PAPYRUS_SESSION_SECRET` need real values, not placeholders — `docker/compose.yaml` refuses to start the containers without them, and the app itself hard-fails at startup on a blank or default session secret even outside Docker. Generate all three secrets with the commands already in [.env.example](.env.example): `openssl rand -hex 32` for `POSTGRES_PASSWORD` and `PAPYRUS_SESSION_SECRET`, and the `cryptography` one-liner there for `PAPYRUS_ENCRYPTION_KEY`. Once you're running behind TLS, set `PAPYRUS_BASE_URL` to an `https://` URL — the session cookie is only marked `Secure` when the base URL starts with `https://`.
 
 ### Settings UI
 
