@@ -368,17 +368,31 @@ async def update_printer(
     if body.auto_release is not None:
         printer.auto_release = body.auto_release
 
-    await db.commit()
-    await db.refresh(printer)
-
     display_changed = printer.display_name != old_display_name
     uri_changed = body.uri is not None
 
-    if not printer.is_network_queue and (uri_changed or display_changed):
-        await cups_admin.update_physical_printer(old_cups_name, printer.display_name, printer.uri)
-    elif printer.is_network_queue and display_changed:
-        # Just update Avahi service name
-        await cups_admin.update_physical_printer(old_cups_name, printer.display_name, "")
+    # F33: apply the CUPS/Avahi side before committing -- a failure rolls
+    # back the uncommitted row instead of leaving the DB and CUPS disagreeing
+    # about the printer's URI/display name.
+    try:
+        if printer.is_network_queue:
+            # Network (hold-only) queues have no `_release` sibling for
+            # update_physical_printer's lpadmin call to target -- it would
+            # always fail (F33 made that failure raise instead of just
+            # logging). Only the Avahi advert can change for these.
+            if display_changed:
+                await cups_admin.rename_network_queue(old_cups_name, printer.display_name)
+        elif uri_changed or display_changed:
+            await cups_admin.update_physical_printer(
+                old_cups_name, printer.display_name, printer.uri
+            )
+    except RuntimeError as exc:
+        logger.warning("Failed to update CUPS queue '%s': %s", old_cups_name, exc)
+        await db.rollback()
+        raise ExternalServiceError("Could not update the CUPS queue.") from exc
+
+    await db.commit()
+    await db.refresh(printer)
 
     return await _printer_response(printer)
 
@@ -425,13 +439,23 @@ async def set_default_printer(
     if printer.is_network_queue:
         raise HTTPException(status_code=400, detail="Network queue cannot be set as default")
 
-    # F11: clear-and-set in a single statement (rather than a separate clear
-    # UPDATE followed by setting this row) closes the race where two
-    # concurrent calls could both commit is_default=true for different
-    # printers -- the partial unique index (migration 014) now also rejects
-    # that outright, but a single statement removes the window entirely.
+    # F11 (coordinator ruling): two statements in one transaction, not a
+    # single `SET is_default = (id = :id)` -- Postgres checks the partial
+    # unique index per row as the UPDATE walks the heap (it can't be
+    # deferred, since partial indexes aren't deferrable), so if the promoted
+    # row happens to be visited before the currently-default row, the
+    # single-statement form conflicts with the still-live old default and
+    # 500s. Clearing every other default first removes that heap-order
+    # dependency; the partial unique index still closes the concurrent-
+    # writer race -- a losing concurrent UPDATE hits the constraint instead
+    # of leaving two defaults.
     await db.execute(
-        update(Printer).values(is_default=(Printer.id == printer_id))
+        update(Printer)
+        .where(Printer.is_default.is_(True), Printer.id != printer_id)
+        .values(is_default=False)
+    )
+    await db.execute(
+        update(Printer).where(Printer.id == printer_id).values(is_default=True)
     )
     await db.commit()
     await db.refresh(printer)

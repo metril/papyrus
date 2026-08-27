@@ -223,11 +223,14 @@ async def get_default_printer(db: AsyncSession):
 async def get_default_printer_name(db: AsyncSession) -> str:
     """Return the CUPS queue name of the default physical printer.
 
-    This is the *hold-queue* name (`papyrus:/` backend) — used for read-only
-    status/options queries, never as a release target. Releasing a job into
-    this queue instead of its `_release` sibling re-enters the CUPS backend
-    script and ingest pipeline (F9); use ``get_default_release_queue_name``
-    for anything that submits/cancels an actual print.
+    This is the *hold-queue* name (`papyrus:/` backend) -- a fake device with
+    no PPD-backed markers/state, so it must never be used for a status/
+    capability query (F34) or as a release target: releasing into it instead
+    of its `_release` sibling re-enters the CUPS backend script and ingest
+    pipeline (F9). Use ``get_default_release_queue_name`` for status,
+    capability, submit, and cancel calls alike -- this hold-queue name is
+    only meaningful for enable/resume-style CUPS admin calls that target the
+    queue object itself.
 
     Raises:
         PrinterUnavailableError: if no default physical printer is configured.

@@ -614,9 +614,16 @@ async def set_default_scanner(
     if not scanner:
         raise HTTPException(status_code=404, detail="Scanner not found")
 
-    # F11: clear-and-set in a single statement -- see printers.set_default_printer.
+    # F11 (coordinator ruling): two statements in one transaction -- see
+    # printers.set_default_printer for why the single-statement
+    # `SET is_default = (id = :id)` violates the partial unique index.
     await db.execute(
-        update(Scanner).values(is_default=(Scanner.id == scanner_id))
+        update(Scanner)
+        .where(Scanner.is_default.is_(True), Scanner.id != scanner_id)
+        .values(is_default=False)
+    )
+    await db.execute(
+        update(Scanner).where(Scanner.id == scanner_id).values(is_default=True)
     )
     await db.commit()
     await db.refresh(scanner)

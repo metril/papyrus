@@ -111,6 +111,74 @@ async def test_update_printer_calls_cups_admin_on_uri_change(db, admin_client, m
     assert calls == [("brother", "Brother", "ipp://new/ipp")]
 
 
+async def test_update_printer_cups_failure_rolls_back_and_returns_502(
+    db, admin_client, monkeypatch
+):
+    """Regression (F33 review finding, IMPORTANT): update_physical_printer
+    now raises RuntimeError on an lpadmin rejection (F33) -- update_printer
+    must catch it, roll back the uncommitted row, and return a curated 502
+    instead of a bare 500 with the DB updated and CUPS not."""
+    _patch_cups_status(monkeypatch)
+    printer = Printer(display_name="Brother", cups_name="brother", uri="ipp://old/ipp")
+    db.add(printer)
+    await db.commit()
+    await db.refresh(printer)
+
+    async def fake_update(cups_name, display_name, new_uri):
+        raise RuntimeError("lpadmin 'brother_release' failed (rc=1): unknown scheme")
+
+    monkeypatch.setattr(printers_router.cups_admin, "update_physical_printer", fake_update)
+
+    resp = await admin_client.patch(f"/api/printers/{printer.id}", json={"uri": "garbage://uri"})
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "Could not update the CUPS queue."
+    assert "lpadmin" not in resp.json()["detail"]
+
+    # The URI change must not have been persisted.
+    reread = await admin_client.get("/api/printers")
+    body = next(p for p in reread.json() if p["id"] == printer.id)
+    assert body["uri"] == "ipp://old/ipp"
+
+
+async def test_update_network_queue_rename_rewrites_avahi_not_release_queue(
+    db, admin_client, monkeypatch
+):
+    """Regression (F34/F33 review finding, IMPORTANT): renaming a network
+    (hold-only) queue must not call update_physical_printer -- that targets
+    '{cups_name}_release', a queue that never exists for a network queue, so
+    the call would always raise post-F33 and the Avahi advert would never be
+    rewritten. It must go through rename_network_queue instead."""
+    _patch_cups_status(monkeypatch)
+    printer = Printer(
+        display_name="Lobby", cups_name="lobby", uri="", is_network_queue=True
+    )
+    db.add(printer)
+    await db.commit()
+    await db.refresh(printer)
+
+    update_physical_calls = []
+    rename_calls = []
+
+    async def fake_update_physical(cups_name, display_name, new_uri):
+        update_physical_calls.append((cups_name, display_name, new_uri))
+
+    async def fake_rename(cups_name, display_name):
+        rename_calls.append((cups_name, display_name))
+
+    monkeypatch.setattr(
+        printers_router.cups_admin, "update_physical_printer", fake_update_physical
+    )
+    monkeypatch.setattr(printers_router.cups_admin, "rename_network_queue", fake_rename)
+
+    resp = await admin_client.patch(
+        f"/api/printers/{printer.id}", json={"display_name": "Front Desk"}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["display_name"] == "Front Desk"
+    assert rename_calls == [("lobby", "Front Desk")]
+    assert update_physical_calls == []
+
+
 async def test_set_default_enforces_single_default(db, admin_client, monkeypatch):
     _patch_cups_status(monkeypatch)
     p1 = Printer(display_name="One", cups_name="one", uri="", is_default=True)
@@ -133,6 +201,37 @@ async def test_set_default_enforces_single_default(db, admin_client, monkeypatch
     await db.rollback()
     refreshed_p1 = await db.get(Printer, p1_id)
     assert refreshed_p1.is_default is False
+
+
+async def test_set_default_swap_back_to_earlier_printer_does_not_500(db, admin_client, monkeypatch):
+    """Regression (F11 review finding, CRITICAL): a single-statement
+    `SET is_default = (id = :id)` violates the partial unique index
+    (ux_printers_default) when Postgres visits the promoted row before the
+    still-default row while walking the heap -- reproduced by toggling the
+    default forward (id 1 -> id 2, which happens to hit the safe heap order)
+    and then back (id 2 -> id 1, which hits the unsafe order). Runs against
+    the real test Postgres so the actual partial unique index is exercised,
+    not a fake DB stand-in."""
+    _patch_cups_status(monkeypatch)
+    p1 = Printer(display_name="One", cups_name="one", uri="", is_default=True)
+    p2 = Printer(display_name="Two", cups_name="two", uri="")
+    db.add_all([p1, p2])
+    await db.commit()
+    await db.refresh(p1)
+    await db.refresh(p2)
+
+    forward = await admin_client.post(f"/api/printers/{p2.id}/default")
+    assert forward.status_code == 200
+    assert forward.json()["is_default"] is True
+
+    back = await admin_client.post(f"/api/printers/{p1.id}/default")
+    assert back.status_code == 200
+    assert back.json()["is_default"] is True
+
+    listing = (await admin_client.get("/api/printers")).json()
+    by_name = {p["display_name"]: p for p in listing}
+    assert by_name["One"]["is_default"] is True
+    assert by_name["Two"]["is_default"] is False
 
 
 async def test_delete_printer_removes_row_and_calls_remove_printer(db, admin_client, monkeypatch):

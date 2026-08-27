@@ -109,6 +109,7 @@ async def test_printer_response_includes_device_info_fields(monkeypatch):
     assert resp["cups_status"] == status
     assert resp["id"] == 1
     assert resp["display_name"] == "Brother"
+    assert resp["uri"] == "ipp://192.168.1.50/ipp/print"
 
 
 async def test_printer_response_network_queue_uses_own_cups_name(monkeypatch):

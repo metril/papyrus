@@ -161,10 +161,28 @@ async def add_physical_printer(cups_name: str, display_name: str, uri: str) -> N
 
 
 async def update_physical_printer(cups_name: str, display_name: str, new_uri: str) -> None:
-    """Update the release queue URI and Avahi service name."""
+    """Update the release queue URI and Avahi service name.
+
+    Raises RuntimeError (via ``_run``, F33) if lpadmin rejects the new URI --
+    callers must not treat this as a silent no-op.
+    """
     release = f"{cups_name}_release"
     await _run(["lpadmin", "-p", release, "-v", new_uri])
     # Re-write Avahi service (display_name may have changed)
+    await _write_avahi_service(display_name, cups_name)
+
+
+async def rename_network_queue(cups_name: str, display_name: str) -> None:
+    """Update a network (hold-only) queue's Avahi advert after a display-name
+    change.
+
+    Unlike ``update_physical_printer``, there is no ``_release`` sibling and
+    no URI to update -- ``add_network_queue`` creates only ``cups_name``
+    itself, so an lpadmin call against ``{cups_name}_release`` would always
+    fail. ``_write_avahi_service`` never raises (it logs and swallows its own
+    errors), matching the historical "best-effort rename" behavior for the
+    Avahi side.
+    """
     await _write_avahi_service(display_name, cups_name)
 
 

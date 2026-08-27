@@ -69,8 +69,10 @@ async def test_deleting_non_default_scanner_does_not_touch_default(db, admin_cli
     assert one["is_default"] is True
 
 
-async def test_set_default_scanner_single_statement_swap(db, admin_client):
-    """F11: set_default_scanner does a single clear-and-set UPDATE."""
+async def test_set_default_scanner_clears_previous_default(db, admin_client):
+    """F11: set_default_scanner clears the previous default in the same
+    transaction it sets the new one (two statements -- see the F11
+    coordinator ruling in printers.set_default_printer)."""
     p1 = Scanner(name="One", device="test:device:1", is_default=True)
     p2 = Scanner(name="Two", device="test:device:2")
     db.add_all([p1, p2])
@@ -86,6 +88,32 @@ async def test_set_default_scanner_single_statement_swap(db, admin_client):
     await db.rollback()
     refreshed_p1 = await db.get(Scanner, p1_id)
     assert refreshed_p1.is_default is False
+
+
+async def test_set_default_scanner_swap_back_to_earlier_scanner_does_not_500(db, admin_client):
+    """Regression (F11 review finding, CRITICAL): mirrors the printers-side
+    regression -- a single-statement `SET is_default = (id = :id)` violates
+    the partial unique index (ux_scanners_default) depending on heap-scan
+    order. Toggle forward then back against the real test Postgres."""
+    p1 = Scanner(name="One", device="test:device:1", is_default=True)
+    p2 = Scanner(name="Two", device="test:device:2")
+    db.add_all([p1, p2])
+    await db.commit()
+    await db.refresh(p1)
+    await db.refresh(p2)
+
+    forward = await admin_client.post(f"/api/scanners/{p2.id}/default")
+    assert forward.status_code == 200
+    assert forward.json()["is_default"] is True
+
+    back = await admin_client.post(f"/api/scanners/{p1.id}/default")
+    assert back.status_code == 200
+    assert back.json()["is_default"] is True
+
+    listing = (await admin_client.get("/api/scanners")).json()
+    by_name = {s["name"]: s for s in listing}
+    assert by_name["One"]["is_default"] is True
+    assert by_name["Two"]["is_default"] is False
 
 
 # --------------------------------------------------------------------------- #
