@@ -133,6 +133,8 @@ See [.env.example](.env.example) for the full list.
 
 `POSTGRES_PASSWORD` and `PAPYRUS_SESSION_SECRET` need real values, not placeholders — `docker/compose.yaml` refuses to start the containers without them, and the app itself hard-fails at startup on a blank or default session secret even outside Docker (downgraded to a warning only when `PAPYRUS_DEV_MODE` is set). Generate all three secrets with the commands already in [.env.example](.env.example): `openssl rand -hex 32` for `POSTGRES_PASSWORD` and `PAPYRUS_SESSION_SECRET`, and the `cryptography` one-liner there for `PAPYRUS_ENCRYPTION_KEY`. Once you're running behind TLS, set `PAPYRUS_BASE_URL` to an `https://` URL — the session cookie is only marked `Secure` when the base URL starts with `https://`.
 
+**Upgrading an existing deployment**: Postgres only applies `POSTGRES_PASSWORD` when it initializes a fresh data volume — it has no effect against a volume that's already been through `docker compose up` at least once. If your `papyrus` role was created before `POSTGRES_PASSWORD` was required here, its password is still whatever it was then (the old default was literally `secret`), and simply setting `POSTGRES_PASSWORD` to a new value will not change it — `PAPYRUS_DB_URL` will fail auth on every restart from then on. Before changing `POSTGRES_PASSWORD` on an existing deployment, either set it to the value already baked into the volume (`secret`, if you never set it explicitly before), or connect to the running database first and change the role's password to match: `docker compose exec db psql -U papyrus -c "ALTER USER papyrus WITH PASSWORD '<new-password>'"`, then set `POSTGRES_PASSWORD` to that same value.
+
 ### Settings UI
 
 After first login, configure everything else via **Settings**:

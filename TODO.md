@@ -45,13 +45,11 @@ Lower-severity findings confirmed during the 2026-08-26 audit remediation but no
 - No test that `lifespan` itself refuses to start on a default session secret (only the validation helper is tested)
 - The CUPS leg of the health probe has no timeout and now runs inside the health-check lock
 - `system.py`'s `shutil.disk_usage` call runs inline on the async handler (pre-existing, unauthenticated path)
-- Login/PIN throttle is a fixed window anchored at the first failure (not sliding); its sweep only bounds stale entries (O(n) every 1000 failures); behind Traefik (no `--proxy-headers`) the login lockout key collapses to per-username since `request.client.host` is always the proxy
+- Login/PIN throttle is a fixed window anchored at the first failure (not sliding); its sweep only bounds stale entries (O(n) every 1000 failures); the login lockout key only collapses to per-username when Traefik isn't on loopback — uvicorn's `proxy_headers` defaults to trusting XFF from `127.0.0.1`, so a loopback Traefik already gives `request.client.host` the real client IP
 - `auth.py` only catches `VerifyMismatchError` — other argon2 exceptions 500 without recording a failure
-- Release PIN `.encode()` raises `UnicodeEncodeError` (→ 500) on a lone UTF-16 surrogate instead of a clean 403
 
 ### Print pipeline
 - `convert_service` cleanup doesn't catch `CancelledError`, so a client disconnect mid-LibreOffice-conversion leaks the temp dir
-- `release_job` still throttles on a *missing* PIN (unlike the file/reprint gates) — repeated no-PIN releases by any print user can lock the job's owner out for 5 minutes
 - Reprint's PIN gate is checked after the "file no longer available" 400, letting an unauthorized requester distinguish file-gone from PIN-needed; `reprint_job` has no status check, so a held job can be reprinted
 - `HistoryRow` still renders the delete control and selection checkbox for a PIN-locked item (backend still enforces the 403/skip)
 - `os.makedirs` runs on the event loop in reprint/copy right next to an otherwise-offloaded `copy2`
@@ -59,7 +57,6 @@ Lower-severity findings confirmed during the 2026-08-26 audit remediation but no
 
 ### Ingest / CUPS / printers
 - Network-ingest `ingest_key` dedupe is TOCTOU — two in-flight requests with the same key can hit the unique index and 500 with an orphaned upload file instead of returning the existing job
-- The ingest-token comparison (`secrets.compare_digest`) can raise `TypeError` on a non-ASCII header, 500ing instead of 403ing
 - `ingest_key` (`boot_id:printer:job_id`) can collide if cupsd's job counter resets without a reboot, silently re-serving a stale job
 - `_validate_probe_ip` is duplicated verbatim in `printers.py`/`scanners.py` and misses IPv4-mapped IPv6 addresses, leaving a residual localhost port-oracle path
 - `models.py`'s `ingest_key` unique constraint is unnamed, unlike the migration's named index — a future autogenerate would show drift
@@ -117,4 +114,12 @@ Lower-severity findings confirmed during the 2026-08-26 audit remediation but no
 - `release.yml`'s `package.json`/`main.py` version extraction is unanchored (unlike the `pyproject.toml` one)
 - `config.py`'s `db_url` default still embeds `papyrus:secret@localhost` (non-compose deployments only)
 - A `set -e` abort (e.g. a failed Alembic migration) still exits `entrypoint.sh` with cupsd/avahi running, relying on namespace teardown to SIGKILL them
-- `.env.example` still prefills a weak default admin password, and `PAPYRUS_ENCRYPTION_KEY` has no `:?` guard in compose
+- `PAPYRUS_ENCRYPTION_KEY` has no `:?` guard in compose
+
+### From the final-review fix wave (2026-08-27)
+(`ftp_service.test_sftp`, the `ingest_key` unnamed-constraint drift, `crypto.py`'s unsalted log identifier, and `_validate_probe_ip` duplication/IPv4-mapped-IPv6 gap were already tracked above and were re-confirmed, not newly found — not re-listed here.)
+- OCR/scan/image `PapyrusError` details still carry upstream stderr text (`ocr_service.py`, `scan_service.py`, `image_service.py`)
+- `cupsd.conf`'s `Require user @OWNER @SYSTEM` means an AirPrint client that omits `requesting-user-name` on Send-Document gets a 401, with no automated cupsd coverage for this
+- Consider an explicit `--forwarded-allow-ips` in `entrypoint.sh` rather than relying on uvicorn's `127.0.0.1` default
+- `bulk_delete_jobs` has no `skipped` count in its response
+- Migration convention going forward: any new partial/unique index needs a data-cleanup step ahead of it (see migration 014's fix) — worth calling out explicitly wherever migrations are documented
