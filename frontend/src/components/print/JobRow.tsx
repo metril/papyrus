@@ -1,9 +1,10 @@
 import { memo, useState } from 'react';
-import { Printer } from 'lucide-react';
+import { Lock, Printer } from 'lucide-react';
 import { getJobThumbnailUrl } from '../../api/scanner';
+import { useAuthStore } from '../../store/authStore';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
-import type { PrintJob, ManagedPrinter } from '../../types';
+import type { PrintJob, ManagedPrinter, User } from '../../types';
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -106,6 +107,30 @@ function JobThumbnailComponent({ jobId }: JobThumbnailProps) {
 // re-triggers this row's own thumbnail <img>.
 export const JobThumbnail = memo(JobThumbnailComponent);
 
+// F27: a PIN-protected job owned by someone else 403s on /thumbnail and
+// /preview (no PIN to supply), so JobRow must not even issue that request —
+// show a static lock glyph instead of a broken-then-fallback thumbnail.
+function LockedThumbnail() {
+  return (
+    <div
+      className="flex h-12 w-12 shrink-0 items-center justify-center rounded border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800"
+      title="PIN-protected — owned by another user"
+    >
+      <Lock className="h-4 w-4 text-ink-400 dark:text-ink-500" strokeWidth={1.75} aria-hidden="true" />
+    </div>
+  );
+}
+
+/** True when `job` is PIN-protected and belongs to neither the viewer nor
+ * an admin — the file endpoints (download/preview/thumbnail) 403 those
+ * requests without a PIN, so the UI must not attempt them (F27). A job with
+ * no owner (network jobs) is never locked. */
+function isLockedForViewer(job: PrintJob, viewer: User | null): boolean {
+  if (!job.has_pin || job.user_id == null) return false;
+  if (viewer?.role === 'admin') return false;
+  return job.user_id !== viewer?.id;
+}
+
 export interface JobRowProps {
   job: PrintJob;
   printers: ManagedPrinter[];
@@ -138,26 +163,39 @@ export function JobRowComponent({
   onDelete,
   onAssign,
 }: JobRowProps) {
+  const viewer = useAuthStore((s) => s.user);
+  const locked = isLockedForViewer(job, viewer);
+
   return (
     <div className="flex flex-col gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-gray-700 dark:bg-gray-900 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 flex-1 items-center gap-3">
         {(job.status === 'held' || job.status === 'completed') && (
-          <button
-            onClick={() => onPreview(job)}
-            aria-label={`Preview ${job.filename}`}
-            className="shrink-0"
-          >
-            <JobThumbnail jobId={job.id} />
-          </button>
+          locked ? (
+            <LockedThumbnail />
+          ) : (
+            <button
+              onClick={() => onPreview(job)}
+              aria-label={`Preview ${job.filename}`}
+              className="shrink-0"
+            >
+              <JobThumbnail jobId={job.id} />
+            </button>
+          )
         )}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => onPreview(job)}
-              className="truncate text-left text-sm font-medium text-ink-600 hover:underline dark:text-ink-400"
-            >
-              {job.filename}
-            </button>
+            {locked ? (
+              <span className="truncate text-sm font-medium text-gray-500 dark:text-gray-400">
+                {job.filename}
+              </span>
+            ) : (
+              <button
+                onClick={() => onPreview(job)}
+                className="truncate text-left text-sm font-medium text-ink-600 hover:underline dark:text-ink-400"
+              >
+                {job.filename}
+              </button>
+            )}
             <StatusBadge status={job.status} />
             {job.source_type && job.source_type !== 'upload' && (
               <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${sourceColors[job.source_type] || 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}>

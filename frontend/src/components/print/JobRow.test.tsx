@@ -1,13 +1,15 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { memo, useState } from 'react';
 import { JobRowComponent } from './JobRow';
 import type { JobRowProps } from './JobRow';
-import type { PrintJob, ManagedPrinter } from '../../types';
+import type { PrintJob, ManagedPrinter, User } from '../../types';
+import { useAuthStore } from '../../store/authStore';
 
 const heldJob: PrintJob = {
   id: 1,
+  user_id: null,
   cups_job_id: null,
   title: 'Doc',
   filename: 'doc.pdf',
@@ -128,5 +130,75 @@ describe('JobRow thumbnail', () => {
     await user.click(container.querySelector('img')!);
 
     expect(onPreview).toHaveBeenCalledWith(heldJob);
+  });
+});
+
+describe('JobRow PIN lock placeholder (F27)', () => {
+  const owner: User = { id: 'user-owner', email: 'o@example.com', display_name: 'Owner', role: 'user' };
+  const otherUser: User = { id: 'user-other', email: 'x@example.com', display_name: 'Other', role: 'user' };
+  const admin: User = { id: 'user-admin', email: 'a@example.com', display_name: 'Admin', role: 'admin' };
+
+  const pinJobOwnedByOwner: PrintJob = {
+    ...heldJob,
+    id: 2,
+    user_id: owner.id,
+    has_pin: true,
+  };
+
+  afterEach(() => {
+    // JobRowComponent reads the viewer from the real zustand authStore
+    // singleton — reset it so a test's viewer doesn't leak into the next.
+    useAuthStore.setState({ user: null });
+  });
+
+  it('does not request the thumbnail for a PIN-protected job owned by another user — shows a lock placeholder instead', () => {
+    useAuthStore.setState({ user: otherUser });
+    const { container } = render(
+      <JobRowComponent {...makeProps({ job: pinJobOwnedByOwner })} />
+    );
+
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('svg.lucide-lock')).not.toBeNull();
+    // The filename is plain text, not a clickable preview trigger.
+    expect(screen.queryByRole('button', { name: /preview doc\.pdf/i })).toBeNull();
+  });
+
+  it('renders the real thumbnail for the job owner, no lock', () => {
+    useAuthStore.setState({ user: owner });
+    const { container } = render(
+      <JobRowComponent {...makeProps({ job: pinJobOwnedByOwner })} />
+    );
+
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/jobs/2/thumbnail');
+    expect(container.querySelector('svg.lucide-lock')).toBeNull();
+  });
+
+  it('renders the real thumbnail for an admin, no lock', () => {
+    useAuthStore.setState({ user: admin });
+    const { container } = render(
+      <JobRowComponent {...makeProps({ job: pinJobOwnedByOwner })} />
+    );
+
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/jobs/2/thumbnail');
+    expect(container.querySelector('svg.lucide-lock')).toBeNull();
+  });
+
+  it('never locks a job with no owner (network job), even with an unrelated viewer', () => {
+    useAuthStore.setState({ user: otherUser });
+    const networkJob: PrintJob = { ...heldJob, id: 3, user_id: null, has_pin: true };
+    const { container } = render(<JobRowComponent {...makeProps({ job: networkJob })} />);
+
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/jobs/3/thumbnail');
+    expect(container.querySelector('svg.lucide-lock')).toBeNull();
+  });
+
+  it('locks a PIN job for a signed-out viewer (no session)', () => {
+    useAuthStore.setState({ user: null });
+    const { container } = render(
+      <JobRowComponent {...makeProps({ job: pinJobOwnedByOwner })} />
+    );
+
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('svg.lucide-lock')).not.toBeNull();
   });
 });

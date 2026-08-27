@@ -12,6 +12,7 @@ real AppConfig rows (committed via the ``db`` fixture, with
 ``settings_cache.invalidate_all()`` after each seed) rather than monkeypatched
 — the same mechanism test_api_settings.py uses for settings reads/writes.
 """
+import asyncio
 import io
 import os
 import shutil
@@ -44,6 +45,39 @@ async def _seed_setting(db, key: str, value: str) -> None:
 
 async def _seed_upload_dir(db, tmp_path) -> None:
     await _seed_setting(db, "upload_dir", str(tmp_path))
+
+
+async def _seed_default_printer(db, *, cups_name: str = "printer1") -> Printer:
+    printer = Printer(
+        display_name="Printer 1", cups_name=cups_name, uri="",
+        is_default=True, is_network_queue=False,
+    )
+    db.add(printer)
+    await db.commit()
+    await db.refresh(printer)
+    return printer
+
+
+async def _make_user_with_token(
+    db, name: str, *, role: str = "user", permissions=("print",)
+) -> tuple[User, str]:
+    """A committed User plus a real Bearer token for it — used for F27's
+    cross-user tests, where two different identities must act in the same
+    test (dependency_overrides only supports one "current user" at a time)."""
+    user = User(
+        email=f"{name}@example.com", display_name=name.title(),
+        role=role, is_local=True, username=name,
+    )
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    plaintext = f"pprs_test_{name}"
+    db.add(APIToken(
+        user_id=user.id, name=f"{name}-token",
+        token_hash=hash_token(plaintext), permissions=list(permissions),
+    ))
+    await db.commit()
+    return user, plaintext
 
 
 def _pdf_file(name: str = "test.pdf", data: bytes = _MINIMAL_PDF) -> dict:
@@ -241,6 +275,7 @@ async def test_release_pin_locks_out_after_five_failed_attempts(
 async def test_release_with_correct_pin_prints_job(db, user_client, tmp_path, monkeypatch):
     await _seed_upload_dir(db, tmp_path)
     monkeypatch.setattr(jobs_router, "CupsService", _FakeCupsService)
+    await _seed_default_printer(db)
 
     upload_resp = await user_client.post(
         "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"}
@@ -257,6 +292,122 @@ async def test_release_with_correct_pin_prints_job(db, user_client, tmp_path, mo
     assert fake is not None
     assert fake.created  # create_held_job was invoked
     assert fake.released == [777]
+
+
+async def test_release_with_no_printer_id_targets_default_release_queue(
+    db, user_client, tmp_path, monkeypatch
+):
+    """Regression (F9): a job with no printer_id used to fall back to
+    get_default_printer_name(), the hold-queue name — releasing into it
+    re-enters the CUPS backend script instead of printing. It must target
+    the default printer's `<cups_name>_release` queue, same as every other
+    release site."""
+    await _seed_upload_dir(db, tmp_path)
+    monkeypatch.setattr(jobs_router, "CupsService", _FakeCupsService)
+    printer = await _seed_default_printer(db, cups_name="lobby")
+
+    upload_resp = await user_client.post("/api/jobs/upload", files=_pdf_file())
+    job_id = upload_resp.json()["id"]
+    # The job was assigned this default printer at upload time; clear it so
+    # release falls through the printer_id-is-None branch under test.
+    job_row = await db.get(PrintJob, job_id)
+    job_row.printer_id = None
+    await db.commit()
+
+    release_resp = await user_client.post(f"/api/jobs/{job_id}/release")
+    assert release_resp.status_code == 200
+
+    fake = _FakeCupsService.last_instance
+    assert fake is not None
+    assert fake.printer_name == f"{printer.cups_name}_release"
+
+
+async def test_release_with_no_default_printer_configured_fails_cleanly(db, user_client, tmp_path):
+    """get_default_release_queue_name raises PrinterUnavailableError when no
+    default printer exists at all — release_job's existing catch-all wraps
+    it (like any other release failure) into a curated 502, not a silent
+    print into an empty queue name and not a raw exception leaking to the
+    client or the WS broadcast (F132)."""
+    await _seed_upload_dir(db, tmp_path)
+
+    upload_resp = await user_client.post("/api/jobs/upload", files=_pdf_file())
+    job_id = upload_resp.json()["id"]
+
+    release_resp = await user_client.post(f"/api/jobs/{job_id}/release")
+    assert release_resp.status_code == 502
+
+    # The job is left in a terminal "failed" state, not stuck "held" forever
+    # with no recourse — F132's curated message, not the raw exception text.
+    get_resp = await user_client.get(f"/api/jobs/{job_id}")
+    assert get_resp.json()["status"] == "failed"
+    assert get_resp.json()["error_message"] == (
+        "Printing failed — check the printer connection and file format."
+    )
+
+
+async def test_concurrent_release_only_prints_once(db, user_client, tmp_path, monkeypatch):
+    """Regression (F28): two concurrent releases of the same held job used to
+    both pass the status=='held' guard and both submit to CUPS, printing the
+    document twice. A `.with_for_update()` row lock must serialize them so
+    only one succeeds and CUPS is only asked to create/release the job once.
+    The loser gets 400 (it lost the race before even reaching the lock — the
+    other request had already finished and flipped the status) or 409 (it
+    lost at the row lock itself) depending on exactly how the two requests
+    interleave; either way it must not be 200."""
+    await _seed_upload_dir(db, tmp_path)
+    monkeypatch.setattr(jobs_router, "CupsService", _FakeCupsService)
+    await _seed_default_printer(db)
+
+    upload_resp = await user_client.post("/api/jobs/upload", files=_pdf_file())
+    job_id = upload_resp.json()["id"]
+
+    resp1, resp2 = await asyncio.gather(
+        user_client.post(f"/api/jobs/{job_id}/release"),
+        user_client.post(f"/api/jobs/{job_id}/release"),
+    )
+
+    statuses = [resp1.status_code, resp2.status_code]
+    assert statuses.count(200) == 1
+    assert set(statuses) - {200} <= {400, 409}
+
+    fake = _FakeCupsService.last_instance
+    assert fake is not None
+    assert len(fake.created) == 1
+    assert len(fake.released) == 1
+
+
+async def test_release_of_office_doc_cleans_up_conversion_temp_dir(
+    db, user_client, tmp_path, monkeypatch
+):
+    """F30/F31: convert_to_pdf now writes into a unique per-call temp dir
+    rather than deterministically alongside the original; release_job must
+    remove that temp dir once CUPS has copied the file into its own spool,
+    or every released office-doc job leaks an orphan PDF forever."""
+    await _seed_upload_dir(db, tmp_path)
+    monkeypatch.setattr(jobs_router, "CupsService", _FakeCupsService)
+    await _seed_default_printer(db)
+
+    convert_tmpdir = tmp_path / "convert_fake"
+    convert_tmpdir.mkdir()
+    converted_pdf = convert_tmpdir / "x.pdf"
+    converted_pdf.write_bytes(b"%PDF-fake%")
+
+    async def _fake_convert(input_path, output_dir):
+        return str(converted_pdf)
+
+    monkeypatch.setattr(jobs_router, "convert_to_pdf", _fake_convert)
+
+    upload_resp = await user_client.post(
+        "/api/jobs/upload",
+        files={"file": ("x.docx", io.BytesIO(b"fake docx"),
+                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document")},
+    )
+    job_id = upload_resp.json()["id"]
+
+    release_resp = await user_client.post(f"/api/jobs/{job_id}/release")
+    assert release_resp.status_code == 200
+
+    assert not convert_tmpdir.exists()
 
 
 # --------------------------------------------------------------------------- #
@@ -377,6 +528,236 @@ async def test_bulk_delete_token_without_print_permission_is_403(db, client, tmp
         f"/api/jobs/{job_id}", headers={"Authorization": f"Bearer {upload_token}"}
     )
     assert get_resp.status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# F27 — ownership gate on delete_job / cancel_job / bulk_delete_jobs
+#
+# Every job endpoint used to filter only on PrintJob.id, so any authenticated
+# print user could delete or cancel another user's job. Owner ok, other user
+# 403, admin ok, and a NULL-owner (network) job is fair game for anyone.
+# --------------------------------------------------------------------------- #
+async def _upload_as(client, token: str, filename: str = "test.pdf") -> int:
+    resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(filename),
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+async def test_delete_job_other_user_is_403_owner_survives(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownerdel")
+    _, other_token = await _make_user_with_token(db, "otherdel")
+    job_id = await _upload_as(client, owner_token)
+
+    resp = await client.delete(
+        f"/api/jobs/{job_id}", headers={"Authorization": f"Bearer {other_token}"}
+    )
+    assert resp.status_code == 403
+
+    get_resp = await client.get(
+        f"/api/jobs/{job_id}", headers={"Authorization": f"Bearer {owner_token}"}
+    )
+    assert get_resp.status_code == 200
+
+
+async def test_delete_job_admin_can_delete_others_job(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownerdel2")
+    _, admin_token = await _make_user_with_token(db, "admindel", role="admin")
+    job_id = await _upload_as(client, owner_token)
+
+    resp = await client.delete(
+        f"/api/jobs/{job_id}", headers={"Authorization": f"Bearer {admin_token}"}
+    )
+    assert resp.status_code == 204
+
+
+async def test_delete_network_job_null_owner_is_deletable_by_any_print_user(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, token = await _make_user_with_token(db, "anyonedel")
+
+    ingest_resp = await client.post(
+        "/api/jobs/internal/ingest", files=_pdf_file("network.pdf"),
+    )
+    assert ingest_resp.status_code == 201
+    job_id = ingest_resp.json()["id"]
+
+    resp = await client.delete(
+        f"/api/jobs/{job_id}", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 204
+
+
+async def test_cancel_job_other_user_is_403(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownercancel")
+    _, other_token = await _make_user_with_token(db, "othercancel")
+    job_id = await _upload_as(client, owner_token)
+
+    resp = await client.post(
+        f"/api/jobs/{job_id}/cancel", headers={"Authorization": f"Bearer {other_token}"}
+    )
+    assert resp.status_code == 403
+
+    get_resp = await client.get(
+        f"/api/jobs/{job_id}", headers={"Authorization": f"Bearer {owner_token}"}
+    )
+    assert get_resp.json()["status"] == "held"  # untouched by the rejected cancel
+
+
+async def test_bulk_delete_skips_other_users_jobs_but_deletes_own(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownerbulk")
+    _, other_token = await _make_user_with_token(db, "otherbulk")
+    own_id = await _upload_as(client, owner_token, "mine.pdf")
+    others_id = await _upload_as(client, other_token, "theirs.pdf")
+
+    resp = await client.post(
+        "/api/jobs/bulk-delete",
+        json={"ids": [own_id, others_id]},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["deleted"] == 1  # only the caller's own job
+
+    mine_resp = await client.get(
+        f"/api/jobs/{own_id}", headers={"Authorization": f"Bearer {owner_token}"}
+    )
+    assert mine_resp.status_code == 404
+
+    theirs_resp = await client.get(
+        f"/api/jobs/{others_id}", headers={"Authorization": f"Bearer {other_token}"}
+    )
+    assert theirs_resp.status_code == 200  # survived the unauthorized bulk-delete attempt
+
+
+# --------------------------------------------------------------------------- #
+# F27 — PIN gate on download_job_file / preview_job_file / get_job_thumbnail
+#
+# release_pin used to protect only the paper output: /download, /preview and
+# /thumbnail ignored it entirely, so any print user could fetch another
+# user's confidential file by id with no PIN check.
+# --------------------------------------------------------------------------- #
+async def test_download_pin_protected_job_owner_needs_no_pin(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownerdl")
+
+    upload_resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    job_id = upload_resp.json()["id"]
+
+    resp = await client.get(
+        f"/api/jobs/{job_id}/download", headers={"Authorization": f"Bearer {owner_token}"}
+    )
+    assert resp.status_code == 200
+
+
+async def test_download_pin_protected_job_other_user_is_403_without_pin(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownerdl2")
+    _, other_token = await _make_user_with_token(db, "otherdl")
+
+    upload_resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    job_id = upload_resp.json()["id"]
+
+    resp = await client.get(
+        f"/api/jobs/{job_id}/download", headers={"Authorization": f"Bearer {other_token}"}
+    )
+    assert resp.status_code == 403
+
+    # Supplying the correct PIN via the query param grants access.
+    resp2 = await client.get(
+        f"/api/jobs/{job_id}/download?pin=1234", headers={"Authorization": f"Bearer {other_token}"}
+    )
+    assert resp2.status_code == 200
+
+
+async def test_download_pin_protected_job_admin_needs_no_pin(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownerdl3")
+    _, admin_token = await _make_user_with_token(db, "admindl", role="admin")
+
+    upload_resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    job_id = upload_resp.json()["id"]
+
+    resp = await client.get(
+        f"/api/jobs/{job_id}/download", headers={"Authorization": f"Bearer {admin_token}"}
+    )
+    assert resp.status_code == 200
+
+
+async def test_download_network_job_has_no_pin_to_begin_with(db, client, tmp_path):
+    """Network-ingest jobs have no user_id and never carry a release_pin (the
+    internal ingest endpoint accepts no pin field), so they're never gated."""
+    await _seed_upload_dir(db, tmp_path)
+    _, token = await _make_user_with_token(db, "anyonedl")
+
+    ingest_resp = await client.post("/api/jobs/internal/ingest", files=_pdf_file("network.pdf"))
+    job_id = ingest_resp.json()["id"]
+
+    resp = await client.get(
+        f"/api/jobs/{job_id}/download", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert resp.status_code == 200
+
+
+async def test_preview_pin_protected_job_other_user_is_403(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownerpv")
+    _, other_token = await _make_user_with_token(db, "otherpv")
+
+    upload_resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    job_id = upload_resp.json()["id"]
+
+    resp = await client.get(
+        f"/api/jobs/{job_id}/preview", headers={"Authorization": f"Bearer {other_token}"}
+    )
+    assert resp.status_code == 403
+
+
+async def test_thumbnail_pin_protected_job_other_user_is_403(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownerth")
+    _, other_token = await _make_user_with_token(db, "otherth")
+
+    upload_resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    job_id = upload_resp.json()["id"]
+
+    resp = await client.get(
+        f"/api/jobs/{job_id}/thumbnail", headers={"Authorization": f"Bearer {other_token}"}
+    )
+    assert resp.status_code == 403
+
+
+async def test_download_non_pin_job_stays_open_to_any_print_user(db, client, tmp_path):
+    """The shared print queue is unaffected for jobs without a PIN — F27
+    only gates PIN-protected files."""
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownernopin")
+    _, other_token = await _make_user_with_token(db, "othernopin")
+    job_id = await _upload_as(client, owner_token)
+
+    resp = await client.get(
+        f"/api/jobs/{job_id}/download", headers={"Authorization": f"Bearer {other_token}"}
+    )
+    assert resp.status_code == 200
 
 
 # --------------------------------------------------------------------------- #
@@ -568,7 +949,12 @@ async def test_office_job_thumbnail_converts_and_caches_preview_pdf(
     await db.commit()
     await db.refresh(job)
 
-    converted_path = tmp_path / "converted_output.pdf"
+    # convert_to_pdf now writes into its own unique temp subdir (F30), never
+    # directly into output_dir — mirror that here so _ensure_preview_pdf's
+    # post-rename cleanup rmtree()s only that subdir, not tmp_path itself.
+    convert_tmpdir = tmp_path / "convert_fake"
+    convert_tmpdir.mkdir()
+    converted_path = convert_tmpdir / "converted_output.pdf"
     converted_path.write_bytes(_real_pdf_bytes())
 
     calls = []
@@ -589,6 +975,7 @@ async def test_office_job_thumbnail_converts_and_caches_preview_pdf(
     assert os.path.exists(preview_path)  # cached for reuse by /preview too
     assert os.path.exists(preview_path + ".thumb.jpg")
     assert not os.path.exists(converted_path)  # renamed into the cache, not copied
+    assert not convert_tmpdir.exists()  # F31: convert_to_pdf's temp dir is cleaned up
 
 
 # --------------------------------------------------------------------------- #
@@ -625,7 +1012,12 @@ async def test_ensure_preview_pdf_passes_through_image_unchanged(tmp_path, monke
 async def test_ensure_preview_pdf_converts_office_doc_and_caches_result(tmp_path, monkeypatch):
     src = tmp_path / "doc.docx"
     src.write_bytes(b"fake docx")
-    converted = tmp_path / "doc.pdf"
+    # convert_to_pdf now writes into its own unique temp subdir (F30), never
+    # directly into output_dir — mirror that here so the post-rename cleanup
+    # rmtree()s only that subdir, not tmp_path itself.
+    convert_tmpdir = tmp_path / "convert_fake"
+    convert_tmpdir.mkdir()
+    converted = convert_tmpdir / "doc.pdf"
     converted.write_bytes(b"%PDF-fake-converted%")
 
     calls = []
@@ -646,6 +1038,7 @@ async def test_ensure_preview_pdf_converts_office_doc_and_caches_result(tmp_path
     assert result == expected_preview
     assert os.path.exists(expected_preview)
     assert not os.path.exists(converted)  # renamed, not copied
+    assert not convert_tmpdir.exists()  # F31: convert_to_pdf's temp dir is cleaned up
     assert calls == [(str(src), str(tmp_path))]
 
 
@@ -762,7 +1155,11 @@ async def test_share_target_unauthenticated_redirects_to_login(client, tmp_path)
     assert resp.headers["location"] == "/api/auth/login"
 
 
-async def test_share_target_oversize_file_is_413(db, client, tmp_path):
+async def test_share_target_oversize_file_redirects_with_share_failed_count(db, client, tmp_path):
+    """Regression (F133): a per-file failure (413 here) used to abort the
+    whole share-target loop with a raw JSON error page instead of the usual
+    303 redirect. It must be caught, counted, and surfaced via
+    `?share_failed=<n>` instead."""
     await _seed_upload_dir(db, tmp_path)
     await _seed_setting(db, "max_upload_size_mb", "1")
     plaintext = await _seed_share_user_and_token(db)
@@ -773,7 +1170,35 @@ async def test_share_target_oversize_file_is_413(db, client, tmp_path):
         files={"file": ("big.pdf", io.BytesIO(oversized), "application/pdf")},
         headers={"Authorization": f"Bearer {plaintext}"},
     )
-    assert resp.status_code == 413
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/print?share_failed=1"
+
+    list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
+    assert list_resp.json()["jobs"] == []
+
+
+async def test_share_target_mixed_valid_and_invalid_files_creates_the_valid_one(
+    db, client, tmp_path
+):
+    """A share with one good file and one bad one must still create the good
+    job (F133) — the old code aborted the whole loop on the first failure."""
+    await _seed_upload_dir(db, tmp_path)
+    plaintext = await _seed_share_user_and_token(db)
+
+    resp = await client.post(
+        "/api/share-target",
+        files=[
+            ("file", ("good.pdf", io.BytesIO(_MINIMAL_PDF), "application/pdf")),
+            ("file", ("notes.txt", io.BytesIO(b"plain text"), "text/plain")),
+        ],
+        headers={"Authorization": f"Bearer {plaintext}"},
+    )
+    assert resp.status_code == 303
+    assert resp.headers["location"] == "/print?share_failed=1"
+
+    list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
+    jobs = list_resp.json()["jobs"]
+    assert [j["filename"] for j in jobs] == ["good.pdf"]
 
 
 async def test_share_target_skips_auto_pin_under_require_release_pin(db, client, tmp_path):
@@ -824,3 +1249,66 @@ async def test_share_target_token_without_print_permission_redirects_to_login(db
     assert resp.status_code == 303
     assert resp.headers["location"] == "/api/auth/login"
     assert list(tmp_path.iterdir()) == []
+
+
+# --------------------------------------------------------------------------- #
+# Reprint (F29)
+# --------------------------------------------------------------------------- #
+async def test_reprint_copies_file_independently_of_original(db, user_client, tmp_path):
+    """Regression (F29): reprint_job used to alias original.filepath onto the
+    new row instead of copying the file, so deleting either job's row would
+    unlink the file out from under the other one."""
+    await _seed_upload_dir(db, tmp_path)
+    upload_resp = await user_client.post("/api/jobs/upload", files=_pdf_file())
+    original_id = upload_resp.json()["id"]
+
+    reprint_resp = await user_client.post(f"/api/jobs/{original_id}/reprint")
+    assert reprint_resp.status_code == 201
+    reprint_id = reprint_resp.json()["id"]
+
+    # Two distinct files must exist on disk now, not one shared path.
+    assert len(list(tmp_path.iterdir())) == 2
+
+    delete_resp = await user_client.delete(f"/api/jobs/{original_id}")
+    assert delete_resp.status_code == 204
+
+    # The reprint's own file must survive the original's deletion.
+    download_resp = await user_client.get(f"/api/jobs/{reprint_id}/download")
+    assert download_resp.status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# print.upload webhook dispatch (F137)
+# --------------------------------------------------------------------------- #
+async def test_upload_dispatches_print_upload_webhook(db, user_client, tmp_path, monkeypatch):
+    await _seed_upload_dir(db, tmp_path)
+    events = _capture_held(monkeypatch)
+
+    resp = await user_client.post("/api/jobs/upload", files=_pdf_file())
+    assert resp.status_code == 201
+
+    uploads = [d for e, d in events if e == "print.upload"]
+    assert len(uploads) == 1
+    assert uploads[0]["id"] == resp.json()["id"]
+    assert uploads[0]["title"] == "test.pdf"
+    assert uploads[0]["source_type"] == "upload"
+    assert "user_id" in uploads[0]
+
+    # A held upload dispatches both print.upload and print.held.
+    assert [e for e, _ in events if e == "print.held"] == ["print.held"]
+
+
+async def test_upload_dispatches_print_upload_even_when_not_held(
+    db, user_client, tmp_path, monkeypatch
+):
+    """print.upload fires for every upload regardless of hold/auto-print —
+    print.held is the narrower "landed in the hold queue" signal."""
+    await _seed_upload_dir(db, tmp_path)
+    monkeypatch.setattr(jobs_router, "CupsService", _FakeCupsService)
+    events = _capture_held(monkeypatch)
+
+    resp = await user_client.post("/api/jobs/upload", files=_pdf_file(), data={"hold": "false"})
+    assert resp.status_code == 201
+
+    assert [e for e, _ in events if e == "print.upload"] != []
+    assert [e for e, _ in events if e == "print.held"] == []

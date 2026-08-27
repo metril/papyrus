@@ -1,3 +1,6 @@
+import asyncio
+import os
+import shutil
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
@@ -8,6 +11,9 @@ from app.database import get_db
 from app.models import PrintJob, ScanJob, User
 from app.schemas import CopyRequest, serialize_print_job, serialize_scan_job
 from app.services.copy_service import copy_service
+from app.services.cups_service import CupsService, get_default_release_queue_name
+from app.services.file_service import get_upload_path
+from app.services.scan_service import get_default_scanner_device
 from app.services.ws_manager import ws_manager
 
 router = APIRouter()
@@ -19,21 +25,28 @@ async def create_copy(
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Scan a document and immediately print it (copy workflow)."""
-    async def progress_callback(scan_id: str, percent: float):
-        await ws_manager.broadcast("jobs", {
-            "type": "copy_progress",
-            "data": {"scan_id": scan_id, "progress": percent},
-        })
+    """Scan a document and immediately print it (copy workflow).
+
+    Resolves the default printer's release queue and default scanner device
+    from the DB (F10) — the service used to fall back to never-configured
+    module singletons (empty printer name, empty scanner device), so every
+    copy failed. No progress broadcast (F139): nothing consumed the old
+    `copy_progress` jobs-channel frames, which also violated the
+    full-serialized-object WS contract.
+    """
+    queue = await get_default_release_queue_name(db)
+    device = await get_default_scanner_device(db)
+    cups = CupsService(printer_name=queue)
 
     result = await copy_service.copy(
+        cups=cups,
+        device=device,
         resolution=request.resolution,
         mode=request.mode,
         source=request.source,
         copies=request.copies,
         duplex=request.duplex,
         media=request.media,
-        progress_callback=progress_callback,
     )
 
     # Record both the scan and print jobs
@@ -50,12 +63,22 @@ async def create_copy(
     )
     db.add(scan_job)
 
+    # The print job gets its own copy of the scanned file rather than
+    # aliasing the scan's path (F29) — deleting either row's file must not
+    # take the other row's file with it.
+    from app.routers.settings import get_setting
+    upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
+    print_filename = f"copy_{result['scan_id']}.tiff"
+    print_filepath = get_upload_path(print_filename, upload_dir=upload_dir)
+    os.makedirs(os.path.dirname(print_filepath), exist_ok=True)
+    await asyncio.to_thread(shutil.copy2, result["filepath"], print_filepath)
+
     print_job = PrintJob(
         user_id=user.id,
         cups_job_id=result["cups_job_id"],
         title=f"Copy_{result['scan_id']}",
-        filename=f"copy_{result['scan_id']}.tiff",
-        filepath=result["filepath"],
+        filename=print_filename,
+        filepath=print_filepath,
         file_size=0,
         mime_type="image/tiff",
         status="printing",
@@ -67,9 +90,8 @@ async def create_copy(
     db.add(print_job)
     await db.commit()
 
-    # Surface both records to connected clients incrementally. The copy flow only
-    # emitted transient copy_progress before, so without these the new scan/job
-    # rows wouldn't appear until a manual refetch.
+    # Surface both records to connected clients incrementally, or they
+    # wouldn't appear until a manual refetch.
     await db.refresh(scan_job)
     await db.refresh(print_job)
     await ws_manager.broadcast("scans", {

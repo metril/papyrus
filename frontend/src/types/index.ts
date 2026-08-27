@@ -24,6 +24,7 @@ export interface APITokenCreated extends APIToken {
 
 export interface PrintJob {
   id: number;
+  user_id: string | null;
   cups_job_id: number | null;
   title: string;
   filename: string;

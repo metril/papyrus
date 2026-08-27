@@ -5,6 +5,7 @@ Proves the write path invalidates the in-process settings_cache (settings.py
 immediately after a PUT, not the stale cached one.
 """
 from app.models import AppConfig
+from app.routers import settings as settings_router
 from app.routers.settings import get_setting
 from app.services.crypto import encrypt_value
 
@@ -63,3 +64,41 @@ async def test_put_accepts_new_alert_settings(db, admin_client):
     assert body["alert_toner_threshold"] == 15
     assert body["alert_email"] == "ops@example.com"
     assert body["alert_poll_minutes"] == 10
+
+
+async def test_put_settings_dispatches_settings_update_webhook(db, admin_client, monkeypatch):
+    """Regression (F137): settings.update was listed in WEBHOOK_EVENTS and
+    offered by GET /api/webhooks/events, but dispatch_webhook was never
+    called with it — a subscriber saved as enabled and never received a
+    request."""
+    events: list = []
+
+    async def fake_dispatch(_db, event, data):
+        events.append((event, data))
+
+    monkeypatch.setattr(settings_router, "dispatch_webhook", fake_dispatch)
+
+    resp = await admin_client.put("/api/settings", json={"ocr_language": "deu"})
+    assert resp.status_code == 200
+
+    assert events == [("settings.update", {"keys": ["ocr_language"]})]
+
+
+async def test_put_settings_no_changed_keys_does_not_dispatch_webhook(
+    db, admin_client, monkeypatch
+):
+    """An all-placeholder PUT (no real change) must not fire a spurious
+    settings.update — mirrors the existing changed_keys/log_event guard."""
+    db.add(AppConfig(key="smtp_password_encrypted", value=encrypt_value("hunter2")))
+    await db.commit()
+
+    events: list = []
+
+    async def fake_dispatch(_db, event, data):
+        events.append((event, data))
+
+    monkeypatch.setattr(settings_router, "dispatch_webhook", fake_dispatch)
+
+    resp = await admin_client.put("/api/settings", json={"smtp_password": "*set*"})
+    assert resp.status_code == 200
+    assert events == []

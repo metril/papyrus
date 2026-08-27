@@ -60,6 +60,7 @@ class PrintJobUpload(BaseModel):
 
 class PrintJobResponse(BaseModel):
     id: int
+    user_id: uuid.UUID | None = None
     cups_job_id: int | None
     title: str
     filename: str

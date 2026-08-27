@@ -8,6 +8,7 @@ import type { PrintJob, ScanJob } from '../../types';
 
 const rawJob: PrintJob = {
   id: 1,
+  user_id: null,
   cups_job_id: null,
   title: 'Doc',
   filename: 'doc.pdf',

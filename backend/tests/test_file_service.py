@@ -35,6 +35,46 @@ def test_sanitize_filename_long_name():
     assert len(result) <= 200
 
 
+# --------------------------------------------------------------------------- #
+# F72 — mis-truncation of long / multibyte filenames
+# --------------------------------------------------------------------------- #
+def test_sanitize_filename_300_char_name_is_trimmed_and_keeps_extension():
+    result = sanitize_filename("a" * 300 + ".pdf")
+    assert result.endswith(".pdf")
+    assert len(result.encode("utf-8")) <= 180
+
+
+def test_sanitize_filename_250_e_acute_chars_trims_on_a_byte_boundary():
+    """A multibyte (2-byte UTF-8) stem must never be cut mid-codepoint. The
+    3-byte ".ab" extension makes the byte budget (180 - 3 = 177) odd, which —
+    since every 'é' is exactly 2 bytes — forces a naive byte slice to land
+    mid-character; the walk-back-on-decode-error must correct it."""
+    result = sanitize_filename("é" * 250 + ".ab")
+    assert result.endswith(".ab")
+    encoded = result.encode("utf-8")
+    assert len(encoded) <= 180
+    # Decodes cleanly with no replacement/error — proves no codepoint was
+    # split by the byte-boundary trim.
+    assert encoded.decode("utf-8") == result
+    assert "é" in result  # some of the stem survived, not just the extension
+
+
+def test_sanitize_filename_degenerate_stem_with_huge_extension_does_not_crash():
+    """Regression (F72): the old `name[:200 - len(ext)]` went negative for an
+    extension longer than 200 chars (`sanitize_filename('x.' + 'a' * 300)`
+    returned 301 chars — silently keeping the *whole* name instead of
+    clamping it). `max(1, ...)` guarantees the char-level clamp never goes
+    negative. The extension alone (301 bytes) still exceeds the 180-byte
+    cap, so the byte-level trim can't honor both "≤180 bytes" and "keep the
+    extension" here — it keeps the extension intact rather than truncating
+    it, which is the important thing: no crash, and never longer than the
+    original input."""
+    original = "x." + "a" * 300
+    result = sanitize_filename(original)
+    assert result.endswith("a" * 300)  # extension preserved verbatim
+    assert len(result) <= len(original)  # never grows past the input
+
+
 def test_detect_mime_type_pdf():
     assert detect_mime_type("document.pdf") == "application/pdf"
 

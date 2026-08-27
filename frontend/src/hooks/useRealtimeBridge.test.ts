@@ -7,6 +7,7 @@ import type { PrintJob, ScanJob, WSMessage } from '../types';
 function makeJob(id: number, overrides: Partial<PrintJob> = {}): PrintJob {
   return {
     id,
+    user_id: null,
     cups_job_id: null,
     title: `Job ${id}`,
     filename: `job-${id}.pdf`,

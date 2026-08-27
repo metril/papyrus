@@ -5,6 +5,8 @@ import cups
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.exceptions import PrinterUnavailableError
+
 
 class CupsService:
     """Async wrapper around pycups.
@@ -215,6 +217,27 @@ async def get_default_printer(db: AsyncSession):
 
 
 async def get_default_printer_name(db: AsyncSession) -> str:
-    """Return the CUPS queue name of the default physical printer."""
+    """Return the CUPS queue name of the default physical printer.
+
+    This is the *hold-queue* name (`papyrus:/` backend) — used for read-only
+    status/options queries, never as a release target. Releasing a job into
+    this queue instead of its `_release` sibling re-enters the CUPS backend
+    script and ingest pipeline (F9); use ``get_default_release_queue_name``
+    for anything that submits/cancels an actual print.
+    """
     printer = await get_default_printer(db)
     return printer.cups_name if printer else ""
+
+
+async def get_default_release_queue_name(db: AsyncSession) -> str:
+    """Return the CUPS *release* queue name (`{cups_name}_release`) of the
+    default physical printer — the real IPP target print jobs are submitted
+    to and cancelled on.
+
+    Raises:
+        PrinterUnavailableError: if no default physical printer is configured.
+    """
+    printer = await get_default_printer(db)
+    if printer is None:
+        raise PrinterUnavailableError("No default printer configured")
+    return f"{printer.cups_name}_release"

@@ -1,6 +1,9 @@
+import asyncio
+import logging
 import os
 import re
 import secrets
+import shutil
 import sys
 from datetime import datetime, timezone
 
@@ -13,7 +16,7 @@ from starlette.responses import FileResponse
 
 from app.auth.dependencies import get_current_user, require_permission
 from app.database import get_db
-from app.exceptions import ExternalServiceError
+from app.exceptions import ExternalServiceError, PrinterUnavailableError
 from app.models import Printer, PrintJob, User
 from app.schemas import (
     BulkDeleteJobsRequest,
@@ -29,7 +32,7 @@ from app.services.convert_service import (
     is_printable,
     needs_conversion,
 )
-from app.services.cups_service import CupsService, get_default_printer_name
+from app.services.cups_service import CupsService, get_default_release_queue_name
 from app.services.file_service import (
     cleanup_file,
     detect_mime_type,
@@ -41,6 +44,8 @@ from app.services.throttle import Throttle
 from app.services.thumbnail_service import THUMBNAIL_CACHE_CONTROL, get_or_create_thumbnail
 from app.services.webhook_service import dispatch_webhook
 from app.services.ws_manager import ws_manager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -151,6 +156,15 @@ async def _create_print_job_from_upload(
         "data": serialize_print_job(job),
     })
 
+    # Every upload fires print.upload, regardless of hold/auto-print (F137) —
+    # print.held below is the narrower "landed in the hold queue" signal.
+    await dispatch_webhook(db, "print.upload", {
+        "id": job.id,
+        "title": job.title,
+        "user_id": str(user.id),
+        "source_type": job.source_type,
+    })
+
     if hold:
         # The job landed in the hold queue — notify subscribers so they can
         # surface a "waiting for release" prompt. Auto-printed jobs (not hold)
@@ -232,15 +246,25 @@ async def share_target(
         return RedirectResponse("/api/auth/login", status_code=303)
 
     form = await request.form()
+    failed = 0
     for shared_file in form.getlist("file"):
         if isinstance(shared_file, str):
             continue  # not a file part; ignore a stray non-file "file" field
         # auto_pin=False: this flow redirects immediately and can never show a
         # generated PIN, which would leave the job unreleasable under
         # require_release_pin. Shared jobs are held without a PIN instead.
-        await _create_print_job_from_upload(db, user, shared_file, auto_pin=False)
+        try:
+            await _create_print_job_from_upload(db, user, shared_file, auto_pin=False)
+        except Exception as e:
+            # One bad file (unsupported type, oversize, ...) must not abort
+            # the rest of the share — accumulate failures and keep going
+            # (F133), or the browser lands on a raw JSON error page instead
+            # of the print queue, and every later file is silently dropped.
+            logger.warning("share-target: failed to add %r: %s", shared_file.filename, e)
+            failed += 1
 
-    return RedirectResponse("/print", status_code=303)
+    redirect_url = "/print" if not failed else f"/print?share_failed={failed}"
+    return RedirectResponse(redirect_url, status_code=303)
 
 
 async def get_default_printer(db: AsyncSession):
@@ -254,18 +278,24 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
     """Convert (if needed) and send job to the designated CUPS release queue."""
     print_path = job.filepath
 
-    # Resolve which CUPS queue to print to
-    release_queue = None
-    if printer is None and job.printer_id:
-        printer = await db.get(Printer, job.printer_id)
-    if printer and not printer.is_network_queue:
-        release_queue = f"{printer.cups_name}_release"
-    else:
-        release_queue = await get_default_printer_name(db)
-
-    svc = CupsService(printer_name=release_queue)
-
     try:
+        # Resolve which CUPS queue to print to. Done inside the try (not
+        # before it) so a missing default printer — or any other failure
+        # here — lands the job in "failed" with a curated message and a
+        # broadcast, the same as a downstream CUPS failure, rather than
+        # propagating as an unhandled 503 with the job stuck mid-state.
+        release_queue = None
+        if printer is None and job.printer_id:
+            printer = await db.get(Printer, job.printer_id)
+        if printer and not printer.is_network_queue:
+            release_queue = f"{printer.cups_name}_release"
+        else:
+            # F9: the hold-queue name (get_default_printer_name) re-enters the
+            # CUPS backend script and ingest pipeline instead of printing.
+            release_queue = await get_default_release_queue_name(db)
+
+        svc = CupsService(printer_name=release_queue)
+
         if needs_conversion(job.mime_type):
             job.status = "converting"
             await db.commit()
@@ -303,14 +333,22 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
             "type": "job_updated", "data": serialize_print_job(job)
         })
 
-    except Exception as e:
+    except Exception:
+        logger.exception("Print job %s failed during processing", job.id)
         job.status = "failed"
-        job.error_message = str(e)
+        job.error_message = "Printing failed — check the printer connection and file format."
         await db.commit()
         await db.refresh(job)
         await ws_manager.broadcast("jobs", {
             "type": "job_updated", "data": serialize_print_job(job)
         })
+    finally:
+        # F31: convert_to_pdf's temp dir is only ours to clean up once CUPS
+        # has copied the file into its own spool (or we're giving up on it) —
+        # print_path only differs from job.filepath when conversion produced
+        # one.
+        if print_path != job.filepath:
+            await asyncio.to_thread(shutil.rmtree, os.path.dirname(print_path), ignore_errors=True)
 
 
 @router.post("/internal/ingest", response_model=PrintJobResponse, status_code=201)
@@ -432,9 +470,55 @@ async def get_job(
     return job
 
 
+def _pin_grants_access(provided_pin: str | None, stored_pin: str) -> bool:
+    """Constant-time compare of a query-param `pin` against a job's
+    release_pin — the same byte-wise `secrets.compare_digest` pattern
+    `release_job` uses, guarding the same non-ASCII edge case so a malformed
+    pin param 403s instead of 500ing."""
+    if not provided_pin:
+        return False
+    try:
+        return secrets.compare_digest(provided_pin.encode(), stored_pin.encode())
+    except (UnicodeEncodeError, AttributeError, TypeError):
+        return False
+
+
+def _require_job_owner_or_admin(job: PrintJob, user: User) -> None:
+    """Guard destructive actions (cancel/delete) on another user's job (F27).
+
+    A job with no owner (`user_id` NULL — network jobs) is fair game for any
+    print user, matching the existing shared-queue policy for those. A job
+    someone else owns requires the requester to be an admin.
+    """
+    if job.user_id is not None and job.user_id != user.id and user.role != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to modify this job")
+
+
+def _require_file_access(job: PrintJob, user: User, pin: str | None) -> None:
+    """Guard access to a print job's underlying file — download, preview, and
+    thumbnail all share this (F27). Without it, `release_pin` protected only
+    the paper output: any authenticated print user could fetch another
+    user's confidential PDF by id with no PIN check at all.
+
+    Allowed: the job's owner, an admin, or anyone supplying the correct
+    release PIN via the `pin` query param. Jobs without a PIN are unaffected
+    — the shared print queue's file access stays open to any print user.
+    """
+    if not job.release_pin:
+        return
+    if job.user_id is not None and job.user_id == user.id:
+        return
+    if user.role == "admin":
+        return
+    if _pin_grants_access(pin, job.release_pin):
+        return
+    raise HTTPException(status_code=403, detail="PIN required to access this file")
+
+
 @router.get("/{job_id}/download")
 async def download_job_file(
     job_id: int,
+    pin: str | None = None,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -443,6 +527,7 @@ async def download_job_file(
     job = result.scalar_one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    _require_file_access(job, user, pin)
     if not job.filepath or not os.path.exists(job.filepath):
         raise HTTPException(status_code=404, detail="File not found on disk")
     return FileResponse(
@@ -473,6 +558,11 @@ async def _ensure_preview_pdf(job: PrintJob) -> str:
             output_dir = os.path.dirname(job.filepath)
             converted = await convert_to_pdf(job.filepath, output_dir)
             os.rename(converted, preview_path)
+            # convert_to_pdf wrote `converted` into its own unique temp dir
+            # (F30); now that the PDF has been moved out of it into the
+            # `.preview.pdf` cache, the (now-empty) temp dir is ours to clean
+            # up (F31) or it leaks on every first-time office-doc preview.
+            await asyncio.to_thread(shutil.rmtree, os.path.dirname(converted), ignore_errors=True)
         except RuntimeError as e:
             raise ExternalServiceError(
                 "Converting the document for preview failed."
@@ -483,6 +573,7 @@ async def _ensure_preview_pdf(job: PrintJob) -> str:
 @router.get("/{job_id}/preview")
 async def preview_job_file(
     job_id: int,
+    pin: str | None = None,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -491,6 +582,7 @@ async def preview_job_file(
     job = result.scalar_one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    _require_file_access(job, user, pin)
     if not job.filepath or not os.path.exists(job.filepath):
         raise HTTPException(status_code=404, detail="File not found on disk")
 
@@ -518,6 +610,7 @@ async def preview_job_file(
 @router.get("/{job_id}/thumbnail")
 async def get_job_thumbnail(
     job_id: int,
+    pin: str | None = None,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -532,6 +625,7 @@ async def get_job_thumbnail(
     job = result.scalar_one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    _require_file_access(job, user, pin)
     if not job.filepath or not os.path.exists(job.filepath):
         raise HTTPException(status_code=404, detail="File not found on disk")
 
@@ -607,20 +701,13 @@ async def release_job(
     # Validate release PIN if one is set on the job. Throttled (F68) — the
     # PIN space is only 10,000 4-digit values, easily swept by an
     # authenticated printer user without a per-job attempt cap — and compared
-    # with a constant-time function rather than `!=` so a timing side channel
-    # can't narrow the guess.
+    # with the same constant-time helper the file-access endpoints use, so a
+    # timing side channel can't narrow the guess.
     if job.release_pin:
         throttle_key = f"pin:{job_id}"
         _release_pin_throttle.check(throttle_key)
         provided_pin = body.pin if body else None
-        # Encode to bytes: secrets.compare_digest raises TypeError on a
-        # non-ASCII str operand, and provided_pin is user input that isn't
-        # regex-constrained here (only at upload time, and only going
-        # forward — a PIN stored before that validation existed could still
-        # be non-ASCII). Comparing bytes sidesteps both.
-        if not provided_pin or not secrets.compare_digest(
-            provided_pin.encode(), job.release_pin.encode()
-        ):
+        if not _pin_grants_access(provided_pin, job.release_pin):
             _release_pin_throttle.record_failure(throttle_key)
             raise HTTPException(status_code=403, detail="Invalid or missing release PIN")
         _release_pin_throttle.reset(throttle_key)
@@ -634,9 +721,20 @@ async def release_job(
     job_title = job.title
     job_copies = job.copies
     user_id = user.id
+    print_path = job.filepath
+
+    # F28: lock the row for the actual release, immediately before any CUPS
+    # work. A second concurrent release blocks here until the first commits,
+    # then observes status != "held" and gets 409 instead of both requests
+    # passing the plain status check above and printing the job twice.
+    locked_result = await db.execute(
+        select(PrintJob).where(PrintJob.id == job_id).with_for_update()
+    )
+    job = locked_result.scalar_one_or_none()
+    if job is None or job.status != "held":
+        raise HTTPException(status_code=409, detail="Job is already being released")
 
     try:
-        print_path = job.filepath
         if needs_conversion(job.mime_type):
             job.status = "converting"
             await db.commit()
@@ -653,7 +751,9 @@ async def release_job(
         if printer and not printer.is_network_queue:
             queue = f"{printer.cups_name}_release"
         else:
-            queue = await get_default_printer_name(db)
+            # F9: the hold-queue name (get_default_printer_name) re-enters the
+            # CUPS backend script and ingest pipeline instead of printing.
+            queue = await get_default_release_queue_name(db)
 
         svc = CupsService(printer_name=queue)
         cups_job_id = await svc.create_held_job(
@@ -680,10 +780,11 @@ async def release_job(
         })
 
     except Exception as e:
+        logger.exception("Releasing print job %s failed", job_id)
         try:
             await db.rollback()
             job.status = "failed"
-            job.error_message = str(e)
+            job.error_message = "Printing failed — check the printer connection and file format."
             await db.commit()
             # rollback expired the ORM object; reload before serializing so the
             # broadcast carries a fully-populated job.
@@ -698,6 +799,13 @@ async def release_job(
         raise ExternalServiceError(
             "Releasing the job failed. Check the printer connection."
         ) from e
+    finally:
+        # F31: convert_to_pdf's temp dir is only ours to clean up once CUPS
+        # has copied the file into its own spool (or we're giving up on it) —
+        # print_path only differs from job.filepath when conversion produced
+        # one.
+        if print_path != job.filepath:
+            await asyncio.to_thread(shutil.rmtree, os.path.dirname(print_path), ignore_errors=True)
 
     return job
 
@@ -713,6 +821,7 @@ async def cancel_job(
     job = result.scalar_one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    _require_job_owner_or_admin(job, user)
 
     if job.cups_job_id:
         # Try to cancel via CUPS — use the job's printer or default
@@ -721,7 +830,9 @@ async def cancel_job(
             queue = (
                 f"{printer.cups_name}_release"
                 if printer and not printer.is_network_queue
-                else await get_default_printer_name(db)
+                # F9: the hold-queue name re-enters the CUPS backend script
+                # and ingest pipeline instead of targeting the release queue.
+                else await get_default_release_queue_name(db)
             )
             await CupsService(printer_name=queue).cancel_job(job.cups_job_id)
         except Exception:
@@ -767,10 +878,22 @@ async def bulk_delete_jobs(
 
     default_printer_name = None
     if any(job.cups_job_id and job.status in ("held", "printing") for job in jobs):
-        default_printer_name = await get_default_printer_name(db)
+        try:
+            # F9: the hold-queue name re-enters the CUPS backend script and
+            # ingest pipeline instead of targeting the release queue. This
+            # cancel is best-effort (matching the per-job try/except below),
+            # so a missing default printer must not block deleting the rows.
+            default_printer_name = await get_default_release_queue_name(db)
+        except PrinterUnavailableError:
+            default_printer_name = None
 
-    deleted = 0
+    deleted_ids: list[int] = []
     for job in jobs:
+        # F27: another user's job requires admin; a NULL-owner (network) job
+        # is fair game for any print user. Silently skip rather than fail
+        # the whole batch over one unauthorized id.
+        if job.user_id is not None and job.user_id != user.id and user.role != "admin":
+            continue
         if job.cups_job_id and job.status in ("held", "printing"):
             try:
                 printer = printers_by_id.get(job.printer_id) if job.printer_id else None
@@ -784,16 +907,16 @@ async def bulk_delete_jobs(
                 pass
         cleanup_file(job.filepath)
         await db.delete(job)
-        deleted += 1
+        deleted_ids.append(job.id)
 
     await db.commit()
 
-    for job_id in body.ids:
+    for job_id in deleted_ids:
         await ws_manager.broadcast("jobs", {
             "type": "job_deleted", "data": {"id": job_id}
         })
 
-    return BulkDeleteResponse(deleted=deleted)
+    return BulkDeleteResponse(deleted=len(deleted_ids))
 
 
 @router.delete("/{job_id}", status_code=204)
@@ -807,6 +930,7 @@ async def delete_job(
     job = result.scalar_one_or_none()
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
+    _require_job_owner_or_admin(job, user)
 
     if job.cups_job_id and job.status in ("held", "printing"):
         try:
@@ -814,7 +938,9 @@ async def delete_job(
             queue = (
                 f"{printer.cups_name}_release"
                 if printer and not printer.is_network_queue
-                else await get_default_printer_name(db)
+                # F9: the hold-queue name re-enters the CUPS backend script
+                # and ingest pipeline instead of targeting the release queue.
+                else await get_default_release_queue_name(db)
             )
             await CupsService(printer_name=queue).cancel_job(job.cups_job_id)
         except Exception:
@@ -864,11 +990,20 @@ async def reprint_job(
     if not reprint_printer_id and default_printer:
         reprint_printer_id = default_printer.id
 
+    # F29: copy the file to a fresh upload path instead of aliasing
+    # original.filepath — deleting either job's row (or retention doing it
+    # unattended) must not unlink the file out from under the other one.
+    from app.routers.settings import get_setting
+    upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
+    new_path = get_upload_path(original.filename, upload_dir=upload_dir)
+    os.makedirs(os.path.dirname(new_path), exist_ok=True)
+    await asyncio.to_thread(shutil.copy2, original.filepath, new_path)
+
     new_job = PrintJob(
         user_id=user.id,
         title=original.title,
         filename=original.filename,
-        filepath=original.filepath,
+        filepath=new_path,
         file_size=original.file_size,
         mime_type=original.mime_type,
         status="held",

@@ -1,5 +1,5 @@
 from app.exceptions import PapyrusError
-from app.services.cups_service import cups_service
+from app.services.cups_service import CupsService
 from app.services.scan_service import ScanError, scan_service
 
 
@@ -10,6 +10,8 @@ class CopyError(PapyrusError):
 class CopyService:
     async def copy(
         self,
+        cups: CupsService,
+        device: str,
         resolution: int = 300,
         mode: str = "Color",
         source: str = "Flatbed",
@@ -19,6 +21,11 @@ class CopyService:
         progress_callback=None,
     ) -> dict:
         """Perform a copy: scan a page then print it.
+
+        `cups` and `device` are resolved by the caller (routers/copy.py) from
+        the DB's default printer/scanner — the module-level singletons used
+        to have an empty printer name and never-configured scanner device, so
+        every copy failed (F10).
 
         Returns dict with scan_id and cups_job_id.
         """
@@ -30,20 +37,21 @@ class CopyService:
                 fmt="tiff",  # Use TIFF for best print quality
                 source=source,
                 progress_callback=progress_callback,
+                device=device,
             )
         except ScanError as e:
             raise CopyError(f"Scan failed: {e}")
 
         # Step 2: Print the scanned image
         try:
-            cups_job_id = await cups_service.create_held_job(
+            cups_job_id = await cups.create_held_job(
                 filepath=filepath,
                 title=f"Copy_{scan_id}",
                 copies=copies,
                 duplex=duplex,
                 media=media,
             )
-            await cups_service.release_job(cups_job_id)
+            await cups.release_job(cups_job_id)
         except Exception as e:
             raise CopyError(f"Print failed: {e}")
 

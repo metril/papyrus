@@ -12,6 +12,7 @@ from app.models import AppConfig, User
 from app.services import settings_cache
 from app.services.audit_service import log_event
 from app.services.crypto import decrypt_value, encrypt_value
+from app.services.webhook_service import dispatch_webhook
 
 logger = logging.getLogger(__name__)
 
@@ -241,5 +242,6 @@ async def update_settings(
             "keys": changed_keys,
         }, user_id=_user.id)
         await db.commit()
+        await dispatch_webhook(db, "settings.update", {"keys": changed_keys})
 
     return {"ok": True}

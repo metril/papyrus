@@ -43,17 +43,55 @@ async def save_upload_streaming(upload_file: UploadFile, dest_path: str, max_byt
     return total
 
 
+_MAX_FILENAME_BYTES = 180
+
+
 def sanitize_filename(filename: str) -> str:
-    """Sanitize a filename to prevent path traversal and other issues."""
+    """Sanitize a filename to prevent path traversal and other issues.
+
+    Two length guards, in order (F72):
+      1. Character clamp: keep at most `max(1, 200 - len(ext))` name
+         characters before reattaching the extension. `max(1, ...)` matters
+         because a pathological "extension" longer than 200 chars used to
+         drive the slice negative (`name[:-101]`), silently keeping the
+         *whole* name and returning something longer than the 200-char cap
+         it was meant to enforce.
+      2. Byte clamp: the character clamp alone doesn't bound encoded size for
+         multibyte (e.g. CJK) names, and `get_upload_path` prefixes a 33-char
+         uuid — so the reassembled name is trimmed to at most
+         `_MAX_FILENAME_BYTES` UTF-8 bytes, cutting the stem on a character
+         boundary (never splitting a multibyte codepoint) and always
+         preserving the extension.
+    """
     # Remove path components
     filename = os.path.basename(filename)
     # Remove non-alphanumeric characters except dots, hyphens, underscores
     filename = re.sub(r"[^\w.\-]", "_", filename)
-    # Limit length
+    # Limit length (characters)
     if len(filename) > 200:
         name, ext = os.path.splitext(filename)
-        filename = name[:200 - len(ext)] + ext
-    return filename
+        keep = max(1, 200 - len(ext))
+        filename = name[:keep] + ext
+    return _trim_to_byte_limit(filename, _MAX_FILENAME_BYTES)
+
+
+def _trim_to_byte_limit(filename: str, max_bytes: int) -> str:
+    """Trim `filename` to at most `max_bytes` UTF-8 bytes, preserving the
+    extension and cutting the stem on a character boundary."""
+    if len(filename.encode("utf-8")) <= max_bytes:
+        return filename
+
+    name, ext = os.path.splitext(filename)
+    budget = max(0, max_bytes - len(ext.encode("utf-8")))
+    stem_bytes = name.encode("utf-8")[:budget]
+    # Dropping trailing bytes one at a time until the slice decodes cleanly
+    # guarantees we never split a multibyte codepoint in half.
+    while stem_bytes:
+        try:
+            return stem_bytes.decode("utf-8") + ext
+        except UnicodeDecodeError:
+            stem_bytes = stem_bytes[:-1]
+    return ext
 
 
 def get_upload_path(filename: str, upload_dir: str = "/app/data/uploads") -> str:
