@@ -123,6 +123,19 @@ def harness(monkeypatch):
 
     monkeypatch.setattr(alert_service.email_service, "send_alert", fake_send_alert)
 
+    # _cups_reachable() calls the real cups.Connection().getPrinters() (F126's
+    # health probe). Locally that's a no-op MagicMock (tests/conftest.py
+    # stubs the `cups` module when pycups isn't installed), so it always
+    # "succeeds" -- but CI installs real pycups with no cupsd listening, so
+    # the real call would raise and make every test below with a configured
+    # printer see a false CUPS outage and return before evaluating anything.
+    # Default it to reachable; the one test that exercises the outage path
+    # overrides this back to False itself.
+    async def fake_cups_reachable() -> bool:
+        return True
+
+    monkeypatch.setattr(alert_service, "_cups_reachable", fake_cups_reachable)
+
     return SimpleNamespace(
         settings=settings,
         status_by_queue=status_by_queue,

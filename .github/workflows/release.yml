@@ -11,8 +11,12 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
   build-and-release:
     runs-on: ubuntu-latest
+    needs: test
     permissions:
       contents: write
       packages: write
@@ -34,6 +38,19 @@ jobs:
       - name: Extract version from tag
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches project version
+        run: |
+          set -e
+          TAG_VERSION="${{ steps.version.outputs.version }}"
+          PYPROJECT_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' backend/pyproject.toml)
+          PACKAGE_VERSION=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' frontend/package.json)
+          MAIN_VERSION=$(sed -n 's/.*version="\([^"]*\)".*/\1/p' backend/app/main.py)
+          echo "tag=$TAG_VERSION pyproject.toml=$PYPROJECT_VERSION package.json=$PACKAGE_VERSION main.py=$MAIN_VERSION"
+          if [ "$TAG_VERSION" != "$PYPROJECT_VERSION" ] || [ "$TAG_VERSION" != "$PACKAGE_VERSION" ] || [ "$TAG_VERSION" != "$MAIN_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match backend/pyproject.toml ($PYPROJECT_VERSION), frontend/package.json ($PACKAGE_VERSION), and/or backend/app/main.py ($MAIN_VERSION)"
+            exit 1
+          fi
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6

@@ -14,7 +14,27 @@ prove it gets `kill()`ed and `wait()`ed rather than leaked.
 """
 import asyncio
 
+import cups
+import pytest
+
 from app.routers import system as system_router
+
+
+@pytest.fixture(autouse=True)
+def _fake_cups_connection(monkeypatch):
+    """``_probe_subsystems()`` calls the real ``cups.Connection().getPrinters()``.
+    Locally that's a no-op MagicMock (``cups`` is stubbed by conftest.py when
+    pycups isn't installed) so it always "succeeds" -- but CI installs real
+    pycups with no cupsd listening, where ``Connection()`` itself raises.
+    Patch it so ``cups_ok`` is deterministically True everywhere, matching
+    what every test below asserts (none of them are testing the CUPS-down
+    path itself, only the caching/locking/subprocess behavior around it)."""
+
+    class _FakeConnection:
+        def getPrinters(self):  # noqa: N802 -- matches pycups' real method name
+            return {}
+
+    monkeypatch.setattr(cups, "Connection", _FakeConnection)
 
 
 class _FakeProcess:

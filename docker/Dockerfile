@@ -22,6 +22,10 @@ RUN mkdir -p app && touch app/__init__.py \
 # Stage 3: Runtime (no build tools, no -dev packages)
 FROM python:3.12-slim-bookworm
 
+# Automatic buildx platform arg; must be re-declared inside this stage to be
+# usable here (it's only in scope pre-FROM otherwise).
+ARG TARGETARCH
+
 # Install runtime-only system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cups \
@@ -46,15 +50,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Brother brscan4 network scanner driver (amd64 only)
-RUN curl -fsSL "https://download.brother.com/welcome/dlf105200/brscan4-0.4.11-1.amd64.deb" \
-      -o /tmp/brscan4.deb \
-    && dpkg -i /tmp/brscan4.deb \
-    && rm /tmp/brscan4.deb
+# Brother brscan4 network scanner driver. Brother ships no arm64 build, so
+# this is a no-op on other architectures; the .deb is pinned by checksum
+# since it's fetched with no signature (F98).
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+      curl -fsSL "https://download.brother.com/welcome/dlf105200/brscan4-0.4.11-1.amd64.deb" \
+        -o /tmp/brscan4.deb \
+      && echo "027b73648722ac8c8eb1a9c419d284a6562cc763feac9740a2b75a683b092972  /tmp/brscan4.deb" | sha256sum -c \
+      && dpkg -i /tmp/brscan4.deb \
+      && rm /tmp/brscan4.deb; \
+    else \
+      echo "Skipping brscan4 (amd64-only) on TARGETARCH=$TARGETARCH"; \
+    fi
 
-# Install pre-built Python wheels (no compilation needed)
+# Install pre-built Python wheels (no compilation needed), then uninstall the
+# papyrus wheel itself -- it exists only to pull in its dependency list and
+# contains nothing but an empty app/__init__.py stub (F99). Leaving that stub
+# in site-packages would silently shadow the real /app/backend/app tree for
+# any process started from a cwd other than /app/backend (a `docker exec`,
+# a maintenance script). The real app code is added below via COPY.
 COPY --from=python-build /wheels /wheels
-RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
+RUN pip install --no-cache-dir /wheels/*.whl \
+    && pip uninstall -y papyrus \
+    && rm -rf /wheels
 
 # Copy backend code
 WORKDIR /app/backend

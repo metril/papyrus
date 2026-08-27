@@ -76,25 +76,34 @@ async def test_default_queue_name_matches_self_advert_marker():
 
 
 async def test_add_network_queue_sets_abort_job(run_calls, avahi_writes):
-    await cups_admin.add_network_queue("Office", "Office")
+    # cups_name and display_name are deliberately distinct (F155) -- a swap
+    # inside add_network_queue would make lpadmin create a queue named after
+    # the free-text display name (spaces and all) and point the Avahi advert
+    # at the wrong queue, and identical strings would hide that.
+    await cups_admin.add_network_queue("Office_Brother", "Office Brother")
 
-    argv = _lpadmin_for(run_calls, "Office")
+    argv = _lpadmin_for(run_calls, "Office_Brother")
     assert argv[argv.index("-v") + 1] == "papyrus:/"
     assert "printer-error-policy=abort-job" in argv
-    assert avahi_writes == [("Office", "Office")]
+    assert avahi_writes == [("Office Brother", "Office_Brother")]
 
 
 async def test_add_physical_printer_sets_abort_job_on_both_queues(run_calls, avahi_writes):
-    await cups_admin.add_physical_printer("Office", "Office", "ipp://printer/ipp")
+    # Same rationale as above: distinct cups_name/display_name so a swap in
+    # add_physical_printer's argument order is caught rather than hidden by
+    # both queue names happening to match the advert name.
+    await cups_admin.add_physical_printer("Office_Brother", "Office Brother", "ipp://printer/ipp")
 
-    hold = _lpadmin_for(run_calls, "Office")
+    hold = _lpadmin_for(run_calls, "Office_Brother")
     assert hold[hold.index("-v") + 1] == "papyrus:/"
     assert "printer-error-policy=abort-job" in hold
 
-    release = _lpadmin_for(run_calls, "Office_release")
+    release = _lpadmin_for(run_calls, "Office_Brother_release")
     assert release[release.index("-v") + 1] == "ipp://printer/ipp"
     assert "everywhere" in release
     assert "printer-error-policy=abort-job" in release
+
+    assert avahi_writes == [("Office Brother", "Office_Brother")]
 
 
 # --------------------------------------------------------------------------- #
