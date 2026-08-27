@@ -73,6 +73,11 @@ export interface ScanRequest {
   mode: string;
   format: string;
   source: string;
+  // F26: generated client-side (crypto.randomUUID()) before the scan starts
+  // so the progress WebSocket can be opened on this id *before* POSTing —
+  // otherwise every scan_progress frame fires before any subscriber exists,
+  // since POST /api/scanner/scan only returns once the scan has finished.
+  scan_id?: string;
 }
 
 // --- Copy ---

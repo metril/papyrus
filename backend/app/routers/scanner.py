@@ -1,5 +1,6 @@
 import asyncio
 import os
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
@@ -27,7 +28,7 @@ from app.schemas import (
 from app.services.audit_service import log_event
 from app.services.cloud_service import cloud_service
 from app.services.email_service import email_service
-from app.services.file_service import cleanup_file
+from app.services.file_service import cleanup_file, sanitize_filename
 from app.services.scan_service import (
     ScanError,
     get_default_scanner,
@@ -48,9 +49,20 @@ router = APIRouter()
 
 
 @router.get("/status")
-async def get_scanner_status(user: User = Depends(get_current_user)):
-    """Check if the scanner device is available."""
-    return await scan_service.check_device()
+async def get_scanner_status(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Check if the scanner device is available.
+
+    F42: resolves the configured device from the DB first -- previously this
+    never called configure(), so the singleton's device stayed "" and
+    check_device's old ``"" in output`` check reported every device as
+    available unconditionally.
+    """
+    scanner = await get_default_scanner(db)
+    device = scanner.device if scanner else await get_default_scanner_device(db)
+    return await scan_service.check_device(device=device)
 
 
 @router.get("/options")
@@ -70,18 +82,26 @@ async def initiate_scan(
     scanner = await get_default_scanner(db)
     device = scanner.device if scanner else await get_default_scanner_device(db)
 
-    # Configure scan service from DB settings
-    scan_service.configure(
-        scan_dir=await get_setting(db, "scan_dir") or "/app/data/scans",
-        scanner_device=device or "",
-        filename_template=(
-            await get_setting(db, "scan_filename_template") or "scan_{date}_{time}_{id}"
-        ),
+    # F43: resolved fresh per request and passed straight into scan()/
+    # run_post_scan_actions instead of mutating the shared scan_service
+    # singleton -- a concurrent request's configure() used to be able to
+    # change another in-flight scan's output directory/filename template
+    # mid-run.
+    scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
+    filename_template = (
+        await get_setting(db, "scan_filename_template") or "scan_{date}_{time}_{id}"
     )
+
+    # F26: honor a client-supplied scan_id (so it can open the progress
+    # WebSocket before POSTing) or generate one -- either way this is the id
+    # used for the DB row *and* every progress broadcast, so the two can
+    # never disagree.
+    scan_job_id = str(request.scan_id) if request.scan_id else str(uuid.uuid4())
 
     # Create scan job record
     job = ScanJob(
         user_id=user.id,
+        scan_id=scan_job_id,
         resolution=request.resolution,
         mode=request.mode,
         format=request.format,
@@ -93,23 +113,24 @@ async def initiate_scan(
     await db.commit()
     await db.refresh(job)
 
-    async def progress_callback(scan_id: str, percent: float):
+    async def progress_callback(_scan_id: str, percent: float):
         await ws_manager.broadcast(f"scan:{job.scan_id}", {
             "type": "scan_progress",
             "data": {"scan_id": job.scan_id, "progress": percent},
         })
 
     try:
-        scan_id, filepath = await scan_service.scan(
+        _, filepath = await scan_service.scan(
             resolution=request.resolution,
             mode=request.mode,
             fmt=request.format,
             source=request.source,
             progress_callback=progress_callback,
             device=device,
+            scan_dir=scan_dir,
+            filename_template=filename_template,
         )
 
-        job.scan_id = scan_id
         job.filepath = filepath
         job.file_size = os.path.getsize(filepath)
         job.status = "completed"
@@ -128,12 +149,15 @@ async def initiate_scan(
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
                         detail={"format": request.format, "resolution": request.resolution})
+        await db.commit()
         await dispatch_webhook(
             db, "scan.complete", {"scan_id": job.scan_id, "format": request.format}
         )
 
         if scanner and scanner.auto_deliver:
-            await run_post_scan_actions(job, scanner, db)
+            await run_post_scan_actions(
+                job, scanner, db, default_filename_template=filename_template
+            )
 
     except ScanError as e:
         job.status = "failed"
@@ -165,11 +189,22 @@ async def initiate_batch_scan(
     db: AsyncSession = Depends(get_db),
 ):
     """Initiate a multi-page ADF batch scan into a single PDF."""
+    from app.routers.settings import get_setting
     scanner = await get_default_scanner(db)
     device = scanner.device if scanner else await get_default_scanner_device(db)
 
+    # F43: see initiate_scan's identical comment.
+    scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
+    filename_template = (
+        await get_setting(db, "scan_filename_template") or "scan_{date}_{time}_{id}"
+    )
+
+    # F26: see initiate_scan's identical comment.
+    scan_job_id = str(request.scan_id) if request.scan_id else str(uuid.uuid4())
+
     job = ScanJob(
         user_id=user.id,
+        scan_id=scan_job_id,
         resolution=request.resolution,
         mode=request.mode,
         format="pdf",
@@ -181,21 +216,21 @@ async def initiate_batch_scan(
     await db.commit()
     await db.refresh(job)
 
-    async def progress_callback(scan_id: str, percent: float):
+    async def progress_callback(_scan_id: str, percent: float):
         await ws_manager.broadcast(f"scan:{job.scan_id}", {
             "type": "scan_progress",
             "data": {"scan_id": job.scan_id, "progress": percent},
         })
 
     try:
-        scan_id, filepath, page_count = await scan_service.scan_batch(
+        _, filepath, page_count = await scan_service.scan_batch(
             resolution=request.resolution,
             mode=request.mode,
             progress_callback=progress_callback,
             device=device,
+            scan_dir=scan_dir,
         )
 
-        job.scan_id = scan_id
         job.filepath = filepath
         job.file_size = os.path.getsize(filepath)
         job.page_count = page_count
@@ -215,13 +250,16 @@ async def initiate_batch_scan(
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
                         detail={"format": request.format, "pages": page_count})
+        await db.commit()
         await dispatch_webhook(
             db, "scan.complete",
             {"scan_id": job.scan_id, "format": request.format, "pages": page_count},
         )
 
         if scanner and scanner.auto_deliver:
-            await run_post_scan_actions(job, scanner, db)
+            await run_post_scan_actions(
+                job, scanner, db, default_filename_template=filename_template
+            )
 
     except ScanError as e:
         job.status = "failed"
@@ -586,30 +624,45 @@ def _collate_pdfs_sync(page_specs: list[tuple[str, int]], out_path: str) -> None
     ``page_specs`` is a list of (filepath, resolution) tuples in output order.
     CPU-bound PIL image->PDF conversion + PdfWriter merge — run via
     ``asyncio.to_thread`` so it doesn't block the event loop.
+
+    F46: each non-PDF page's intermediate single-page PDF used to be written
+    next to its *source* scan file (``filepath + ".tmp.pdf"``) with no
+    per-invocation uniqueness — two concurrent collates sharing a source
+    image could unlink the file the other was still reading, and any
+    mid-loop failure leaked it permanently. A fresh ``tempfile.mkdtemp()``
+    work directory (removed in ``finally``, on success or failure alike)
+    isolates every call from every other and from the source files.
     """
+    import shutil
+    import tempfile
+
     from PIL import Image
     from pypdf import PdfWriter
 
-    writer = PdfWriter()
+    work_dir = tempfile.mkdtemp(prefix="papyrus_collate_")
+    try:
+        writer = PdfWriter()
+        try:
+            for i, (filepath, resolution) in enumerate(page_specs):
+                ext = os.path.splitext(filepath)[1].lower()
+                if ext == ".pdf":
+                    writer.append(filepath)
+                else:
+                    # Convert image to a single-page PDF in the work dir
+                    img = Image.open(filepath)
+                    if img.mode not in ("RGB", "L", "RGBA"):
+                        img = img.convert("RGB")
+                    tmp_pdf = os.path.join(work_dir, f"page_{i}.pdf")
+                    img.save(tmp_pdf, format="PDF", resolution=resolution)
+                    img.close()
+                    writer.append(tmp_pdf)
 
-    for filepath, resolution in page_specs:
-        ext = os.path.splitext(filepath)[1].lower()
-        if ext == ".pdf":
-            writer.append(filepath)
-        else:
-            # Convert image to single-page PDF in memory
-            img = Image.open(filepath)
-            if img.mode not in ("RGB", "L", "RGBA"):
-                img = img.convert("RGB")
-            tmp_pdf = filepath + ".tmp.pdf"
-            img.save(tmp_pdf, format="PDF", resolution=resolution)
-            img.close()
-            writer.append(tmp_pdf)
-            os.unlink(tmp_pdf)
-
-    with open(out_path, "wb") as f:
-        writer.write(f)
-    writer.close()
+            with open(out_path, "wb") as f:
+                writer.write(f)
+        finally:
+            writer.close()
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 @router.post("/collate", response_model=ScanResponse, status_code=201)
@@ -639,7 +692,16 @@ async def collate_scans(
     scan_id = str(_uuid.uuid4())
     from app.routers.settings import get_setting
     _scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
-    out_path = os.path.join(_scan_dir, f"{scan_id}.pdf")
+
+    # F136: honor the requested output_filename for the stored file (it used
+    # to be silently ignored -- the merged file was always named `{uuid}.pdf`
+    # with no trace the request had asked for something else). Sanitized and
+    # scan_id-prefixed so it stays collision-safe and traversal-safe while
+    # still reflecting what the client asked for.
+    safe_name = sanitize_filename(body.output_filename) or "merged.pdf"
+    if not safe_name.lower().endswith(".pdf"):
+        safe_name += ".pdf"
+    out_path = os.path.join(_scan_dir, f"{scan_id}_{safe_name}")
 
     page_specs = [(job.filepath, job.resolution) for job in ordered_jobs]
     await asyncio.to_thread(_collate_pdfs_sync, page_specs, out_path)
@@ -688,6 +750,7 @@ async def delete_scan(
     await db.commit()
 
     await log_event(db, "scan.delete", "scan_job", scan_id_copy, user_id=user.id)
+    await db.commit()
     await dispatch_webhook(db, "scan.delete", {"scan_id": scan_id_copy})
 
     await ws_manager.broadcast("scans", {

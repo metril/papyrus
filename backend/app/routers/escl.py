@@ -5,6 +5,8 @@ the scanner via Apple AirScan, Mopria, and Windows WSD-eSCL.
 """
 
 import asyncio
+import contextlib
+import ipaddress
 import logging
 import os
 import time
@@ -17,6 +19,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import async_session, get_db
+from app.exceptions import ScannerBusyError
 from app.models import ScanJob
 from app.routers.settings import get_setting
 from app.schemas import serialize_scan_job
@@ -25,10 +28,38 @@ from app.services.ws_manager import ws_manager
 
 _log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/eSCL")
+
+def _require_lan_client(request: Request) -> None:
+    """Reject any request whose source address isn't a plausible LAN host
+    (F3). The eSCL router has no auth of its own by design — real AirScan
+    clients (Apple/Mopria/WSD-eSCL) hit it directly with no credentials — so
+    without this, anyone who can reach the app's URL at all could drive a
+    scan and read back whatever's on the platen. An unparseable/missing
+    client address is rejected the same way as a public one: fail closed.
+    """
+    host = request.client.host if request.client else None
+    if host is None:
+        raise HTTPException(status_code=403, detail="Forbidden")
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        raise HTTPException(status_code=403, detail="Forbidden") from None
+    if not (addr.is_private or addr.is_loopback or addr.is_link_local):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+
+router = APIRouter(prefix="/eSCL", dependencies=[Depends(_require_lan_client)])
 
 ESCL_NS = "http://schemas.hp.com/imaging/escl/2011/05/03"
 PWG_NS = "http://www.pwg.org/schemas/2010/12/sm"
+
+# F4: matches the DiscreteResolutions advertised in ScannerCapabilities.
+ESCL_RESOLUTIONS = (75, 100, 150, 200, 300, 600)
+# F4: matches the Max{Width,Height} advertised in ScannerCapabilities (A4 at
+# the caps' 300dpi coordinate system) -- the platen/ADF caps this module
+# advertises, in px at that same 300dpi basis.
+ESCL_MAX_WIDTH = 2550
+ESCL_MAX_HEIGHT = 3508
 
 
 def _find_local(root, local_name):
@@ -68,6 +99,37 @@ def _purge_stale_jobs() -> None:
     ]
     for job_id in stale_ids:
         _scan_jobs.pop(job_id, None)
+
+
+def _snap_resolution(value: int) -> int:
+    """Snap a client-requested XResolution to the nearest advertised
+    discrete resolution (F4) — an out-of-range value (e.g. a client sending
+    an arbitrary DPI) must never reach `scanimage --resolution` unclamped."""
+    return min(ESCL_RESOLUTIONS, key=lambda r: abs(r - value))
+
+
+def _clamp_scan_region(region: dict) -> dict:
+    """Validate/clamp a parsed ScanRegion.
+
+    Requires both width and height to be present and positive; if either is
+    missing or non-positive, falls back to a full-bed scan (F135 — a client
+    that sends only one of the two used to crash `_run_scan`'s mm
+    conversion). Otherwise offsets and size are clamped to the advertised
+    platen/ADF caps (F4), so an absurd region (e.g. a 200000x200000 request)
+    can't make `_trim` allocate an unbounded PIL canvas.
+    """
+    width = region.get("width")
+    height = region.get("height")
+    if not width or not height or width <= 0 or height <= 0:
+        return {"width": None, "height": None, "x_offset": 0, "y_offset": 0}
+
+    x_offset = max(0, min(region.get("x_offset") or 0, ESCL_MAX_WIDTH))
+    y_offset = max(0, min(region.get("y_offset") or 0, ESCL_MAX_HEIGHT))
+    width = max(1, min(width, ESCL_MAX_WIDTH - x_offset))
+    height = max(1, min(height, ESCL_MAX_HEIGHT - y_offset))
+
+    return {"width": width, "height": height, "x_offset": x_offset, "y_offset": y_offset}
+
 
 # eSCL color mode mapping to scanimage modes
 ESCL_COLOR_MAP = {
@@ -187,7 +249,7 @@ async def scanner_status(db: AsyncSession = Depends(get_db)):
     if not escl_enabled:
         raise HTTPException(status_code=503, detail="eSCL scanner disabled")
 
-    state = "Processing" if scan_service._lock.locked() else "Idle"
+    state = "Processing" if scan_service.is_busy() else "Idle"
 
     root = Element("scan:ScannerStatus")
     root.set("xmlns:scan", ESCL_NS)
@@ -225,6 +287,10 @@ async def _run_scan(job_id: str) -> None:
     try:
         async with async_session() as db:
             device = await get_default_scanner_device(db)
+            # F43: resolved fresh per job rather than read off the shared
+            # scan_service singleton, which is no longer kept in sync
+            # per-request.
+            scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
 
             # Create DB record so scan appears in web UI (user_id=None for network jobs)
             db_job = ScanJob(
@@ -262,12 +328,21 @@ async def _run_scan(job_id: str) -> None:
             req_w, req_h, width_mm or 0, height_mm or 0,
         )
 
+        def _capture_process(proc: asyncio.subprocess.Process) -> None:
+            # F110: keep a handle to the running scanimage subprocess so
+            # DELETE /ScanJobs/{id} has one available, alongside the task
+            # handle set on job creation, even though scan()'s own
+            # CancelledError handling is what actually kills it.
+            job["process"] = proc
+
         scan_id, filepath = await scan_service.scan(
             resolution=res,
             mode=job["color_mode"],
             fmt=job["format"],
             source=job["source"],
             device=device,
+            scan_dir=scan_dir,
+            on_process_start=_capture_process,
             left_mm=left_mm,
             top_mm=top_mm,
             width_mm=width_mm,
@@ -407,7 +482,22 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
     except Exception:
         pass  # Use defaults if XML parsing fails
 
+    # F4/F135: snap resolution to an advertised discrete value and
+    # validate/clamp the requested region against the advertised caps
+    # (or fall back to a full-bed scan) before anything is stored or acted on.
+    resolution = _snap_resolution(resolution)
+    scan_region = _clamp_scan_region(scan_region)
+
     _purge_stale_jobs()
+
+    # F3: reject a new job outright while the scanner is already busy (either
+    # a real scan in progress, or another eSCL job still Pending/Processing)
+    # instead of inserting a DB row and a job entry that's doomed to fail
+    # with "Scanner is busy" once _run_scan actually reaches scan_service.scan.
+    if scan_service.is_busy() or any(
+        j["state"] in ("Pending", "Processing") for j in _scan_jobs.values()
+    ):
+        raise ScannerBusyError("Scanner is busy. Try again later.")
 
     job_id = str(uuid.uuid4())
     _scan_jobs[job_id] = {
@@ -423,8 +513,12 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
         "terminal_at": None,
     }
 
-    # Start scan immediately in background — clients poll ScannerStatus for Completed
-    asyncio.create_task(_run_scan(job_id))
+    # Start scan immediately in background — clients poll ScannerStatus for
+    # Completed. The task handle is kept on the job entry (alongside the
+    # subprocess handle _run_scan captures once scanning starts) so
+    # DELETE /ScanJobs/{id} can actually cancel an in-flight scan (F110).
+    task = asyncio.create_task(_run_scan(job_id))
+    _scan_jobs[job_id]["task"] = task
 
     return Response(
         status_code=201,
@@ -457,11 +551,25 @@ async def get_next_document(job_id: str):
 
 @router.delete("/ScanJobs/{job_id}")
 async def cancel_scan_job(job_id: str):
-    """Cancel a scan job and clean up."""
+    """Cancel a scan job and clean up.
+
+    F110: a Pending/Processing job's background task is actually cancelled
+    (not just forgotten) — `scan_service.scan`'s own CancelledError handling
+    kills the scanimage subprocess and removes any partial output before the
+    cancellation propagates back here, so a client that cancels no longer
+    gets a 200 while the scan silently keeps running, holds the scanner
+    lock, and shows up in the web UI anyway.
+    """
     _purge_stale_jobs()
     job = _scan_jobs.pop(job_id, None)
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
+
+    task = job.get("task")
+    if task is not None and not task.done():
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
     # Only delete the file for canceled/failed scans; completed scans live in the web UI
     if job.get("state") != "Completed" and job.get("filepath") and os.path.exists(job["filepath"]):

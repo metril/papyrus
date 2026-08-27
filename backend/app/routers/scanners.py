@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_admin
 from app.database import get_db
+from app.exceptions import ScannerBusyError
 from app.models import Scanner, User
 
 logger = logging.getLogger(__name__)
@@ -19,11 +20,57 @@ router = APIRouter()
 AIRSCAN_PAPYRUS_CONF = "/etc/sane.d/airscan.d/papyrus.conf"
 DEFAULT_WSD_PATH = "/WebServices/ScannerService"
 
+# F108: an admin-supplied probe target could stream an endless or huge body
+# back from /ScannerCapabilities -- cap what's ever buffered in memory.
+_MAX_PROBE_RESPONSE_BYTES = 1024 * 1024  # 1 MiB
+
+# F5: post_scan_config keys matching one of these (case-insensitive
+# substring) hold a secret and must be encrypted at rest / redacted in API
+# responses -- currently just ftp_password, but matched generically in case
+# a future field (e.g. a webdav/API token) is added to the same dict.
+_SECRET_KEY_SUBSTRINGS = ("password", "secret", "token")
+_SECRET_SENTINEL = "*set*"
+
 
 def _extract_ip_from_device(device: str) -> str | None:
     """Try to extract an IP address from an airscan device string or name."""
     m = re.search(r"(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", device)
     return m.group(1) if m else None
+
+
+class _ProbeResponseTooLargeError(Exception):
+    """Raised by ``_fetch_capped`` when a probe target's response exceeds
+    ``_MAX_PROBE_RESPONSE_BYTES`` -- never propagated to the client verbatim,
+    callers fold it into their existing generic "probe failed" handling."""
+
+
+async def _fetch_capped(url: str) -> bytes:
+    """GET ``url`` and return its body, rejecting anything over
+    ``_MAX_PROBE_RESPONSE_BYTES`` (F108).
+
+    Probing is admin-triggered against an arbitrary LAN IP/URL the admin
+    typed in -- a misbehaving or hostile device answering on that address
+    must never be able to make the server buffer an unbounded (or just
+    very large) body in memory. Uses the shared pooled httpx client and
+    streams the response, checking both the declared Content-Length (fails
+    fast for an honest but oversized response) and the actual bytes read
+    (catches a response that lies about, or omits, Content-Length).
+    """
+    from app.services.http_client import get_http_client
+
+    client = get_http_client()
+    async with client.stream("GET", url, timeout=5) as resp:
+        resp.raise_for_status()
+        content_length = resp.headers.get("content-length")
+        if content_length is not None and int(content_length) > _MAX_PROBE_RESPONSE_BYTES:
+            raise _ProbeResponseTooLargeError(url)
+
+        chunks = bytearray()
+        async for chunk in resp.aiter_bytes():
+            chunks += chunk
+            if len(chunks) > _MAX_PROBE_RESPONSE_BYTES:
+                raise _ProbeResponseTooLargeError(url)
+        return bytes(chunks)
 
 
 def _ensure_airscan_config(scanner_name: str, device: str, post_scan_config: dict | None) -> None:
@@ -125,7 +172,66 @@ class ScannerUpdate(BaseModel):
     post_scan_config: dict | None = None
 
 
+def _is_secret_key(key: str) -> bool:
+    lowered = key.lower()
+    return any(s in lowered for s in _SECRET_KEY_SUBSTRINGS)
+
+
+def _redact_secrets(config: dict) -> dict:
+    """Recursively replace secret values in a post_scan_config dict with a
+    fixed sentinel before it's ever sent to a client (F5) -- e.g.
+    ``ftp_password``. Recurses into nested dicts in case a future field adds
+    one; today's schema is flat."""
+    result: dict = {}
+    for key, value in config.items():
+        if isinstance(value, dict):
+            result[key] = _redact_secrets(value)
+        elif _is_secret_key(key) and value:
+            result[key] = _SECRET_SENTINEL
+        else:
+            result[key] = value
+    return result
+
+
+def _encrypt_secrets(old_config: dict | None, new_config: dict) -> dict:
+    """Return `new_config` with every secret-looking value encrypted at
+    rest (F5).
+
+    A secret value equal to `_SECRET_SENTINEL` (what `_redact_secrets`
+    returns to the client -- it never sees the real value to resubmit) means
+    "keep the existing stored value": it's looked up in `old_config` (the
+    scanner's current, already-encrypted config) instead of being encrypted
+    literally. `old_config` is None on creation, where a submitted sentinel
+    has nothing to resolve to and is simply dropped. Recurses into nested
+    dicts, mirroring `_redact_secrets`.
+    """
+    from app.services.crypto import encrypt_value
+
+    old_config = old_config or {}
+    result: dict = {}
+    for key, value in new_config.items():
+        if isinstance(value, dict):
+            old_nested = old_config.get(key)
+            result[key] = _encrypt_secrets(
+                old_nested if isinstance(old_nested, dict) else None, value
+            )
+        elif _is_secret_key(key):
+            if value == _SECRET_SENTINEL:
+                if key in old_config:
+                    result[key] = old_config[key]
+                # else: sentinel with nothing stored to keep -- drop it
+                # rather than persist the literal placeholder string.
+            elif value:
+                result[key] = encrypt_value(value)
+            else:
+                result[key] = value  # falsy (empty/None) -- clears the secret
+        else:
+            result[key] = value
+    return result
+
+
 def _scanner_response(s: Scanner) -> dict:
+    config = _redact_secrets(s.post_scan_config) if s.post_scan_config else s.post_scan_config
     return {
         "id": s.id,
         "name": s.name,
@@ -133,7 +239,7 @@ def _scanner_response(s: Scanner) -> dict:
         "description": s.description,
         "is_default": s.is_default,
         "auto_deliver": s.auto_deliver,
-        "post_scan_config": s.post_scan_config,
+        "post_scan_config": config,
         "created_at": s.created_at,
     }
 
@@ -172,10 +278,11 @@ async def probe_scanner_ip(
     _validate_probe_ip(ip)
 
     import xml.etree.ElementTree as ET
-    from urllib.error import URLError
-    from urllib.request import urlopen
+
+    import httpx
 
     # --- 1. Try airscan-discover (finds both WSD and eSCL devices) ---
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "airscan-discover",
@@ -204,11 +311,17 @@ async def probe_scanner_ip(
                 "airscan_url": url,
                 "error": None,
             }
-    except (asyncio.TimeoutError, FileNotFoundError) as exc:
+    except asyncio.TimeoutError:
+        # F41: the coroutine gave up waiting, but the child process is still
+        # running until explicitly killed -- reap it before moving on.
+        if proc is not None:
+            proc.kill()
+            await proc.wait()
+        logger.warning("airscan-discover timed out")
+    except FileNotFoundError as exc:
         logger.warning("airscan-discover failed: %s", exc)
 
     # --- 2. Fallback: manual eSCL port probing ---
-    loop = asyncio.get_event_loop()
     last_error: str = "No scanner found via discovery or eSCL probe"
 
     for base_url in [
@@ -218,11 +331,7 @@ async def probe_scanner_ip(
     ]:
         capabilities_url = base_url + "/ScannerCapabilities"
         try:
-            def _fetch(u: str = capabilities_url) -> bytes:
-                with urlopen(u, timeout=5) as resp:
-                    return resp.read()
-
-            raw = await loop.run_in_executor(None, _fetch)
+            raw = await _fetch_capped(capabilities_url)
             make_model = None
             try:
                 root = ET.fromstring(raw)
@@ -243,14 +352,14 @@ async def probe_scanner_ip(
                 "airscan_url": base_url,
                 "error": None,
             }
-        except TimeoutError:
+        except httpx.TimeoutException:
             last_error = f"{base_url}: timed out"
-        except URLError:
+        except _ProbeResponseTooLargeError:
+            last_error = f"{base_url}: response too large"
+        except httpx.HTTPError:
             # F36: never echo the raw exception text back to the caller --
             # a per-URL connection-refused/timeout/no-route distinction is
             # exactly the "port oracle" signal an SSRF probe would want.
-            last_error = f"{base_url}: connection failed"
-        except OSError:
             last_error = f"{base_url}: connection failed"
         except Exception:
             last_error = f"{base_url}: probe failed"
@@ -270,7 +379,7 @@ async def probe_scanner_ip(
             finally:
                 s.close()
 
-        reachable = await loop.run_in_executor(None, _check_port)
+        reachable = await asyncio.get_event_loop().run_in_executor(None, _check_port)
         if reachable:
             label = f"Scanner {ip}"
             wsd_url = f"http://{ip}:80/WebServices/ScannerService"
@@ -320,6 +429,7 @@ async def scanner_diagnostics(
 
     # Run scanimage -L
     scanimage_list = ""
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "scanimage", "-L",
@@ -328,11 +438,17 @@ async def scanner_diagnostics(
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
         scanimage_list = (stdout.decode() + stderr.decode()).strip()
+    except asyncio.TimeoutError:
+        if proc is not None:
+            proc.kill()
+            await proc.wait()
+        scanimage_list = "Error: scanimage timed out"
     except Exception as exc:
         scanimage_list = f"Error: {exc}"
 
     # Run airscan-discover
     discover_output = ""
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "airscan-discover",
@@ -341,6 +457,11 @@ async def scanner_diagnostics(
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
         discover_output = (stdout.decode() + stderr.decode()).strip()
+    except asyncio.TimeoutError:
+        if proc is not None:
+            proc.kill()
+            await proc.wait()
+        discover_output = "Error: airscan-discover timed out"
     except Exception as exc:
         discover_output = f"Error: {exc}"
 
@@ -386,7 +507,12 @@ async def register_brscan4(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+    try:
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise ScannerBusyError("brsaneconfig4 timed out") from None
     if proc.returncode != 0:
         return {"device": None, "error": stderr.decode().strip() or "brsaneconfig4 failed"}
 
@@ -395,7 +521,12 @@ async def register_brscan4(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout2, _ = await asyncio.wait_for(proc2.communicate(), timeout=15)
+    try:
+        stdout2, _ = await asyncio.wait_for(proc2.communicate(), timeout=15)
+    except asyncio.TimeoutError:
+        proc2.kill()
+        await proc2.wait()
+        raise ScannerBusyError("Timed out listing scanner devices") from None
     output = stdout2.decode()
 
     device = None
@@ -419,7 +550,6 @@ async def test_scanner(
     """Test an already-saved scanner: eSCL HTTP check + SANE device check."""
     import re
     import xml.etree.ElementTree as ET
-    from urllib.request import urlopen
 
     scanner = await db.get(Scanner, scanner_id)
     if not scanner:
@@ -442,13 +572,7 @@ async def test_scanner(
     if m:
         capabilities_url = m.group(1) + "/ScannerCapabilities"
         try:
-            loop = asyncio.get_event_loop()
-
-            def _fetch() -> bytes:
-                with urlopen(capabilities_url, timeout=5) as r:
-                    return r.read()
-
-            raw = await loop.run_in_executor(None, _fetch)
+            raw = await _fetch_capped(capabilities_url)
             try:
                 root = ET.fromstring(raw)
                 for elem in root.iter():
@@ -462,6 +586,7 @@ async def test_scanner(
             escl_error = str(exc)
 
     # 2. SANE connectivity check via scanimage -d {device} -A (lists device options)
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "scanimage", "-d", device, "-A",
@@ -473,6 +598,9 @@ async def test_scanner(
         if not sane_ok:
             sane_error = stderr.decode().strip()[:400]
     except asyncio.TimeoutError:
+        if proc is not None:
+            proc.kill()
+            await proc.wait()
         sane_error = "scanimage timed out after 10s"
     except FileNotFoundError:
         sane_error = "scanimage not found — is SANE installed in the container?"
@@ -497,7 +625,12 @@ async def discover_scanners(_user: User = Depends(require_admin)) -> list[dict]:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate()
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise ScannerBusyError("Timed out listing scanner devices") from None
     output = (stdout.decode() + stderr.decode()).strip()
 
     devices = []
@@ -540,7 +673,11 @@ async def add_scanner(
         device=body.device,
         description=body.description,
         auto_deliver=body.auto_deliver,
-        post_scan_config=psc if psc else None,
+        # F5: encrypt any secret-looking field (e.g. ftp_password) before
+        # it's ever written to the DB -- there's no "old" config yet on
+        # creation, so a submitted "*set*" sentinel has nothing to resolve
+        # to and is simply dropped.
+        post_scan_config=_encrypt_secrets(None, psc) if psc else None,
         is_default=is_default,
     )
     db.add(scanner)
@@ -574,7 +711,13 @@ async def update_scanner(
     if body.auto_deliver is not None:
         scanner.auto_deliver = body.auto_deliver
     if body.post_scan_config is not None:
-        scanner.post_scan_config = body.post_scan_config
+        # F5: a "*set*" sentinel for a secret key means "keep the existing
+        # encrypted value" -- the client only ever sees that placeholder,
+        # never the real value, so it can't resubmit it. Anything else gets
+        # freshly encrypted.
+        scanner.post_scan_config = _encrypt_secrets(
+            scanner.post_scan_config, body.post_scan_config
+        )
 
     await db.commit()
     await db.refresh(scanner)

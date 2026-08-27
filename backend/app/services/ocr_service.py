@@ -2,9 +2,12 @@
 
 import asyncio
 import os
-import shutil
+from uuid import uuid4
 
 from app.exceptions import ExternalServiceError
+from app.services.file_locks import lock_for
+
+_OCR_TIMEOUT_SECONDS = 600
 
 
 class OCRError(ExternalServiceError):
@@ -24,6 +27,14 @@ class OCRService:
         (--skip-text flag).
 
         Returns the path to the OCR'd file (replaces original in-place).
+
+        The rewrite is serialized per-path (F12): manual "Apply OCR" and
+        auto-deliver OCR can otherwise overlap (the scan is broadcast
+        "completed" before auto-deliver runs), and two concurrent ocrmypdf
+        processes both targeting a shared, deterministic ``.ocr.pdf`` name
+        used to be able to stomp on each other. The output path is now
+        uuid-suffixed so even a caller that skipped the lock can't collide
+        with another in-flight OCR run.
         """
         if not os.path.exists(filepath):
             raise OCRError(f"File not found: {filepath}")
@@ -32,8 +43,13 @@ class OCRService:
         if ext != ".pdf":
             raise OCRError("OCR is only supported for PDF files")
 
-        # ocrmypdf writes to a separate output file, then we replace the original
-        out_path = filepath + ".ocr.pdf"
+        async with lock_for(filepath):
+            return await self._apply_ocr_locked(filepath, language=language, deskew=deskew)
+
+    async def _apply_ocr_locked(self, filepath: str, *, language: str, deskew: bool) -> str:
+        # ocrmypdf writes to a unique output file, then we replace the
+        # original with os.replace (atomic on the same filesystem).
+        out_path = f"{filepath}.{uuid4().hex}.ocr.pdf"
 
         cmd = [
             "ocrmypdf",
@@ -51,7 +67,16 @@ class OCRService:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=_OCR_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            if os.path.exists(out_path):
+                os.unlink(out_path)
+            raise OCRError("ocrmypdf timed out")
 
         if process.returncode != 0:
             # Clean up partial output
@@ -60,8 +85,11 @@ class OCRService:
             stderr_text = stderr.decode().strip()
             raise OCRError(f"ocrmypdf failed (code {process.returncode}): {stderr_text}")
 
-        # Replace original with OCR'd version
-        shutil.move(out_path, filepath)
+        # Replace original with OCR'd version. os.replace (not shutil.move) is
+        # an atomic rename on the same filesystem -- out_path was written
+        # alongside filepath, so this never leaves a half-written file visible
+        # at `filepath`.
+        os.replace(out_path, filepath)
         return filepath
 
     async def is_available(self) -> bool:

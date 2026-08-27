@@ -1,6 +1,8 @@
 import asyncio
+import logging
 import os
 import re
+import shutil
 import uuid
 from typing import Awaitable, Callable
 
@@ -9,7 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exceptions import PapyrusError, ScannerBusyError
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_SCAN_DIR = "/app/data/scans"
+
+# F41: scanimage -L (device listing) is expected to return almost instantly;
+# a full scan can legitimately take a while at high resolution.
+_LIST_TIMEOUT_SECONDS = 20
+_SCAN_TIMEOUT_SECONDS = 300
 
 
 class ScanError(PapyrusError):
@@ -24,25 +33,55 @@ class ScanService:
         self._filename_template = "scan_{date}_{time}_{id}"
 
     def configure(self, scan_dir: str, scanner_device: str, filename_template: str) -> None:
-        """Update runtime config from DB values."""
+        """Set the module singleton's fallback defaults.
+
+        F43: this is no longer called per-request -- routers/eSCL/copy each
+        resolve scan_dir/device/filename_template fresh from the DB and pass
+        them straight into scan()/scan_batch()/run_post_scan_actions instead,
+        so a concurrent settings change (or a second in-flight scan) can't
+        mutate another request's in-progress config out from under it. Kept
+        for the legacy settings-configured-device fallback in
+        get_default_scanner_device() below.
+        """
         self._scan_dir = scan_dir or _DEFAULT_SCAN_DIR
         self._scanner_device = scanner_device or ""
         self._filename_template = filename_template or "scan_{date}_{time}_{id}"
 
-    async def check_device(self) -> dict:
-        """Check if the scanner device is available."""
+    def is_busy(self) -> bool:
+        """Whether a scan is currently in progress (the scan lock is held)."""
+        return self._lock.locked()
+
+    async def check_device(self, device: str | None = None) -> dict:
+        """Check if the scanner device is available.
+
+        Availability is derived solely from the configured device name being
+        present in `scanimage -L`'s output (F42) -- `scanimage -L` exits 0
+        even when it finds no scanners at all, so a bare `returncode == 0`
+        check used to report "available" for every device, including an
+        empty/unconfigured one.
+        """
+        _device = device if device is not None else self._scanner_device
+
         process = await asyncio.create_subprocess_exec(
             "scanimage", "-L",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=_LIST_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise ScannerBusyError("Timed out listing scanner devices")
+
         output = stdout.decode() + stderr.decode()
-        device = self._scanner_device
+        device_name = _device.split(":")[-1].strip()
 
         return {
-            "available": device.split(":")[-1].strip() in output or process.returncode == 0,
-            "device": device,
+            "available": bool(device_name) and device_name in output,
+            "device": _device,
             "output": output.strip(),
         }
 
@@ -98,6 +137,9 @@ class ScanService:
         source: str = "Flatbed",
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
         device: str | None = None,
+        scan_dir: str | None = None,
+        filename_template: str | None = None,
+        on_process_start: Callable[[asyncio.subprocess.Process], None] | None = None,
         left_mm: float | None = None,
         top_mm: float | None = None,
         width_mm: float | None = None,
@@ -111,6 +153,18 @@ class ScanService:
             fmt: Output format (png, jpeg, tiff, pdf)
             source: Flatbed or ADF
             progress_callback: Async callback(scan_id, percent)
+            device: SANE device string (F43: per-call, snapshotted by the
+                caller from the DB rather than read off the shared singleton).
+            scan_dir: Output directory (F43: same rationale as `device`).
+            filename_template: accepted for interface symmetry with
+                `device`/`scan_dir` (F43's per-request settings snapshot) —
+                not consumed here, since the intermediate/output files are
+                always named from `scan_id`; callers use it for the
+                delivered filename (see `run_post_scan_actions`).
+            on_process_start: optional callback invoked with the running
+                `scanimage` subprocess as soon as it's spawned, so a caller
+                that tracks in-flight jobs (eSCL) can keep a handle to kill
+                it directly if needed (F110).
 
         Returns:
             Tuple of (scan_id, output_filepath)
@@ -120,6 +174,7 @@ class ScanService:
 
         async with self._lock:
             scan_id = str(uuid.uuid4())
+            _scan_dir = scan_dir or self._scan_dir
             _device = device or self._scanner_device
 
             # brscan4 uses "FlatBed" (capital B); map common "Flatbed" spelling
@@ -135,7 +190,7 @@ class ScanService:
                 }.get(mode, mode)
 
             # Scan to TIFF as intermediate format, then convert to requested output
-            tiff_file = os.path.join(self._scan_dir, f"{scan_id}.tiff")
+            tiff_file = os.path.join(_scan_dir, f"{scan_id}.tiff")
 
             cmd = [
                 "scanimage",
@@ -163,8 +218,62 @@ class ScanService:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
+            if on_process_start is not None:
+                on_process_start(process)
 
-            # Collect stderr lines and watch for progress updates
+            keep_tiff = False
+            try:
+                stderr_lines = await self._read_scan_output(
+                    process, scan_id, progress_callback
+                )
+
+                if process.returncode != 0:
+                    stderr_text = "; ".join(ln for ln in stderr_lines if ln)
+                    raise ScanError(
+                        f"scanimage exited with code {process.returncode}"
+                        + (f": {stderr_text}" if stderr_text else "")
+                    )
+
+                if not os.path.exists(tiff_file):
+                    raise ScanError("Scan produced no output file")
+
+                # Convert TIFF to the requested format using Pillow
+                # (Pillow handles JPEG-in-TIFF from airscan; img2pdf rejects lossy TIFF)
+                if fmt in ("pdf", "png", "jpeg"):
+                    ext = {"jpeg": "jpg"}.get(fmt, fmt)  # jpeg→jpg, pdf→pdf, png→png
+                    out_file = os.path.join(_scan_dir, f"{scan_id}.{ext}")
+                    await asyncio.to_thread(
+                        self._convert_scan_sync, tiff_file, out_file, fmt, resolution
+                    )
+                    os.unlink(tiff_file)
+                    return scan_id, out_file
+                else:
+                    # tiff — return as-is
+                    keep_tiff = True
+                    return scan_id, tiff_file
+            finally:
+                # F22: any non-success exit (scanimage failure, conversion
+                # failure, or a cancelled/timed-out scan) leaves the
+                # intermediate TIFF behind unless we clean it up here --
+                # nothing else references it, so retention could never
+                # reclaim it either.
+                if not keep_tiff and os.path.exists(tiff_file):
+                    os.unlink(tiff_file)
+
+    async def _read_scan_output(
+        self,
+        process: asyncio.subprocess.Process,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None,
+    ) -> list[str]:
+        """Read `process`'s stderr for progress lines and wait for exit,
+        bounded by `_SCAN_TIMEOUT_SECONDS` (F41) and cancellation-safe (F110):
+        on a timeout OR the caller's task being cancelled (e.g. an eSCL
+        client cancelling the job), the child is killed and reaped before the
+        exception propagates, instead of being left running unreaped.
+        """
+
+        async def _read() -> list[str]:
             stderr_lines: list[str] = []
             if process.stderr:
                 async for line in process.stderr:
@@ -173,32 +282,19 @@ class ScanService:
                     match = re.search(r"Progress: (\d+\.?\d*)%", text)
                     if match and progress_callback:
                         await progress_callback(scan_id, float(match.group(1)))
-
             await process.wait()
+            return stderr_lines
 
-            if process.returncode != 0:
-                stderr_text = "; ".join(ln for ln in stderr_lines if ln)
-                raise ScanError(
-                    f"scanimage exited with code {process.returncode}"
-                    + (f": {stderr_text}" if stderr_text else "")
-                )
-
-            if not os.path.exists(tiff_file):
-                raise ScanError("Scan produced no output file")
-
-            # Convert TIFF to the requested format using Pillow
-            # (Pillow handles JPEG-in-TIFF from airscan; img2pdf rejects lossy TIFF)
-            if fmt in ("pdf", "png", "jpeg"):
-                ext = {"jpeg": "jpg"}.get(fmt, fmt)  # jpeg→jpg, pdf→pdf, png→png
-                out_file = os.path.join(self._scan_dir, f"{scan_id}.{ext}")
-                await asyncio.to_thread(
-                    self._convert_scan_sync, tiff_file, out_file, fmt, resolution
-                )
-                os.unlink(tiff_file)
-                return scan_id, out_file
-            else:
-                # tiff — return as-is
-                return scan_id, tiff_file
+        try:
+            return await asyncio.wait_for(_read(), timeout=_SCAN_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise ScanError("Scan timed out")
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
 
     async def scan_batch(
         self,
@@ -206,6 +302,7 @@ class ScanService:
         mode: str = "Color",
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
         device: str | None = None,
+        scan_dir: str | None = None,
     ) -> tuple[str, str, int]:
         """Perform a multi-page ADF batch scan, merging pages into a single PDF.
 
@@ -217,7 +314,8 @@ class ScanService:
 
         async with self._lock:
             scan_id = str(uuid.uuid4())
-            page_dir = os.path.join(self._scan_dir, f"batch_{scan_id}")
+            _scan_dir = scan_dir or self._scan_dir
+            page_dir = os.path.join(_scan_dir, f"batch_{scan_id}")
             os.makedirs(page_dir, exist_ok=True)
 
             _device = device or self._scanner_device
@@ -239,44 +337,54 @@ class ScanService:
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            if process.stderr:
-                async for line in process.stderr:
-                    text = line.decode().strip()
-                    match = re.search(r"Progress: (\d+\.?\d*)%", text)
-                    if match and progress_callback:
-                        await progress_callback(scan_id, float(match.group(1)))
+            success = False
+            try:
+                if process.stderr:
+                    async for line in process.stderr:
+                        text = line.decode().strip()
+                        match = re.search(r"Progress: (\d+\.?\d*)%", text)
+                        if match and progress_callback:
+                            await progress_callback(scan_id, float(match.group(1)))
 
-            await process.wait()
+                await process.wait()
 
-            # scanimage returns non-zero when ADF runs out of paper, which is expected
-            # Check if we got any pages
-            pages = sorted(
-                f for f in os.listdir(page_dir) if f.endswith(".tiff")
-            )
+                # scanimage returns non-zero when ADF runs out of paper, which is expected
+                # Check if we got any pages
+                pages = sorted(
+                    f for f in os.listdir(page_dir) if f.endswith(".tiff")
+                )
 
-            if not pages:
-                raise ScanError("No pages scanned from ADF")
+                if not pages:
+                    raise ScanError("No pages scanned from ADF")
 
-            # Merge all pages into a single PDF
-            pdf_file = os.path.join(self._scan_dir, f"{scan_id}.pdf")
-            page_paths = [os.path.join(page_dir, p) for p in pages]
+                # Merge all pages into a single PDF
+                pdf_file = os.path.join(_scan_dir, f"{scan_id}.pdf")
+                page_paths = [os.path.join(page_dir, p) for p in pages]
 
-            pdf_process = await asyncio.create_subprocess_exec(
-                "img2pdf", *page_paths, "-o", pdf_file,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await pdf_process.wait()
+                pdf_process = await asyncio.create_subprocess_exec(
+                    "img2pdf", *page_paths, "-o", pdf_file,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await pdf_process.wait()
 
-            if pdf_process.returncode != 0:
-                raise ScanError("Failed to merge pages into PDF")
+                if pdf_process.returncode != 0:
+                    raise ScanError("Failed to merge pages into PDF")
 
-            # Clean up individual page files
-            for p in page_paths:
-                os.unlink(p)
-            os.rmdir(page_dir)
+                # Clean up individual page files
+                for p in page_paths:
+                    os.unlink(p)
+                os.rmdir(page_dir)
 
-            return scan_id, pdf_file, len(pages)
+                success = True
+                return scan_id, pdf_file, len(pages)
+            finally:
+                # F22: any non-success exit leaks page_dir and every page
+                # TIFF in it (up to hundreds of MB for a large ADF batch)
+                # unless cleaned up here -- nothing references page_dir from
+                # the DB, so retention can never reclaim it either.
+                if not success:
+                    shutil.rmtree(page_dir, ignore_errors=True)
 
 
 scan_service = ScanService()
@@ -350,31 +458,51 @@ def render_scan_filename(template: str, scan_job, fmt: str | None = None) -> str
     return f"{result}.{ext}"
 
 
-async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
-    """Run configured auto-deliver actions after a scan completes."""
-    import shutil
+async def run_post_scan_actions(
+    scan_job, scanner, db: AsyncSession, *, default_filename_template: str | None = None
+) -> None:
+    """Run configured auto-deliver actions after a scan completes.
 
+    Each action is independent and best-effort (F21): one delivery target
+    being down (bad SMTP password, unreachable FTP host, ...) must not stop
+    the others from running, and the scan itself always stays "completed" --
+    but a failure is no longer silent. It's logged at warning level and its
+    curated name is collected into `failed_actions`, which the caller writes
+    onto `scan_job.error_message` (still commits/broadcasts "completed";
+    error_message is informational, not a status change) so it's visible
+    from the UI/API instead of vanishing with no trace.
+    """
     from app.routers.email import _get_smtp_config
-    from app.services.cloud_service import CloudError, cloud_service
-    from app.services.email_service import EmailError, email_service
+    from app.services.cloud_service import cloud_service
+    from app.services.email_service import email_service
 
     if not scanner or not scanner.post_scan_config or not scan_job.filepath:
         return
 
     config = scanner.post_scan_config
+    failed_actions: list[str] = []
 
-    # Use template naming if configured, otherwise fall back to default
-    template = config.get("filename_template") or scan_service._filename_template
+    # Use template naming if configured, otherwise fall back to the
+    # per-request default the caller resolved from settings (F43) -- never
+    # the module singleton, which is no longer kept fresh per-request.
+    template = (
+        config.get("filename_template")
+        or default_filename_template
+        or "scan_{date}_{time}_{id}"
+    )
     filename = render_scan_filename(template, scan_job)
 
     # OCR — apply before other delivery actions so recipients get searchable PDF
     if config.get("ocr") and scan_job.format == "pdf" and scan_job.filepath:
         try:
-            from app.services.ocr_service import OCRError, ocr_service
+            from app.services.ocr_service import ocr_service
             language = config.get("ocr_language", "eng")
             await ocr_service.apply_ocr(scan_job.filepath, language=language)
-        except (OCRError, Exception):
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Post-scan action %s failed for scan %s: %s", "ocr", scan_job.scan_id, exc
+            )
+            failed_actions.append("ocr")
 
     if config.get("email"):
         try:
@@ -387,15 +515,21 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
                 filename=filename,
                 db_config=db_config,
             )
-        except (EmailError, Exception):
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Post-scan action %s failed for scan %s: %s", "email", scan_job.scan_id, exc
+            )
+            failed_actions.append("email")
 
     if config.get("folder"):
         try:
             dest = os.path.join(config["folder"], filename)
             await asyncio.to_thread(shutil.copy2, scan_job.filepath, dest)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Post-scan action %s failed for scan %s: %s", "folder", scan_job.scan_id, exc
+            )
+            failed_actions.append("folder")
 
     if config.get("cloud_provider_id"):
         try:
@@ -431,8 +565,11 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
                             webdav_url, webdav_user, provider.refresh_token_encrypted,
                             scan_job.filepath, filename, dest,
                         )
-        except (CloudError, Exception):
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Post-scan action %s failed for scan %s: %s", "cloud", scan_job.scan_id, exc
+            )
+            failed_actions.append("cloud")
 
     if config.get("ftp_host"):
         try:
@@ -441,7 +578,11 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
             host = config["ftp_host"]
             port = int(config.get("ftp_port", 21))
             user = config.get("ftp_username", "")
-            pwd_enc = encrypt_value(config.get("ftp_password", ""))
+            # ftp_password is stored encrypted at rest (F5) -- ftp_service's
+            # upload_* helpers expect an already-encrypted value and decrypt
+            # it themselves. An empty/absent password is encrypted here on
+            # the fly so decrypt_value() still gets a valid token.
+            pwd_enc = config.get("ftp_password") or encrypt_value("")
             remote_dir = config.get("ftp_remote_dir", "/")
             protocol = config.get("ftp_protocol", "ftp")
             if protocol == "sftp":
@@ -453,5 +594,12 @@ async def run_post_scan_actions(scan_job, scanner, db: AsyncSession) -> None:
                     host, port, user, pwd_enc, scan_job.filepath, filename, remote_dir,
                     use_tls=(protocol == "ftps"),
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "Post-scan action %s failed for scan %s: %s", "ftp", scan_job.scan_id, exc
+            )
+            failed_actions.append("ftp")
+
+    if failed_actions:
+        scan_job.error_message = f"Delivery failed: {', '.join(failed_actions)}"
+        await db.commit()

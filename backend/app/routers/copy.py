@@ -34,8 +34,13 @@ async def create_copy(
     `copy_progress` jobs-channel frames, which also violated the
     full-serialized-object WS contract.
     """
+    from app.routers.settings import get_setting
+
     queue = await get_default_release_queue_name(db)
     device = await get_default_scanner_device(db)
+    # F43: resolved fresh per request rather than relying on the
+    # scan_service singleton's default, which is no longer kept in sync.
+    scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
     cups = CupsService(printer_name=queue)
 
     result = await copy_service.copy(
@@ -47,6 +52,7 @@ async def create_copy(
         copies=request.copies,
         duplex=request.duplex,
         media=request.media,
+        scan_dir=scan_dir,
     )
 
     # Record both the scan and print jobs

@@ -19,13 +19,17 @@ class CopyService:
         duplex: bool = False,
         media: str = "A4",
         progress_callback=None,
+        scan_dir: str | None = None,
     ) -> dict:
         """Perform a copy: scan a page then print it.
 
-        `cups` and `device` are resolved by the caller (routers/copy.py) from
-        the DB's default printer/scanner — the module-level singletons used
-        to have an empty printer name and never-configured scanner device, so
-        every copy failed (F10).
+        `cups`, `device`, and `scan_dir` are resolved by the caller
+        (routers/copy.py) from the DB's default printer/scanner/scan_dir
+        setting — the module-level singletons used to have an empty printer
+        name and never-configured scanner device, so every copy failed
+        (F10), and `scan_dir` was silently ignored (falling back to the
+        `scan_service` singleton's default) since copy() never passed it
+        through (F43).
 
         Returns dict with scan_id and cups_job_id.
         """
@@ -38,6 +42,7 @@ class CopyService:
                 source=source,
                 progress_callback=progress_callback,
                 device=device,
+                scan_dir=scan_dir,
             )
         except ScanError as e:
             raise CopyError(f"Scan failed: {e}")

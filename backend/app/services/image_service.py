@@ -8,6 +8,7 @@ import numpy as np
 from PIL import Image, ImageEnhance
 
 from app.exceptions import PapyrusError
+from app.services.file_locks import lock_for
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,19 @@ def detect_skew_angle(img: Image.Image) -> float:
     return best_angle
 
 
+def _fill_color(img: Image.Image):
+    """Rotation fill color matching `img`'s mode (F15).
+
+    `Image.rotate(..., fillcolor=255)` is only correct for single-channel
+    modes (L/1); for a multi-band mode (RGB, RGBA, ...) PIL packs the bare
+    int as raw bytes, so 255 becomes (255, 0, 0) -- bright red -- instead of
+    white. A same-length white tuple is required for every other mode.
+    """
+    if img.mode in ("L", "1"):
+        return 255
+    return (255,) * len(img.getbands())
+
+
 class ImageService:
     """Apply image enhancements to scanned images."""
 
@@ -79,18 +93,26 @@ class ImageService:
         """Auto-deskew a scanned image using projection profiling.
 
         Detects the skew angle by analyzing horizontal line projections
-        of the binarized image and rotates to correct it.
+        of the binarized image and rotates to correct it. Serializes with
+        any other in-place rewrite of this same file (F12) -- see
+        `app.services.file_locks`.
         """
         ext = os.path.splitext(filepath)[1].lower()
         if ext not in (".png", ".jpg", ".jpeg", ".tiff", ".tif"):
             return filepath
+
+        async with lock_for(filepath):
+            return await self._deskew_locked(filepath)
+
+    async def _deskew_locked(self, filepath: str) -> str:
+        """Deskew body, assuming the caller already holds `lock_for(filepath)`."""
 
         def _deskew():
             img = Image.open(filepath)
             best_angle = detect_skew_angle(img)
 
             if abs(best_angle) > 0.1:
-                img = img.rotate(best_angle, expand=True, fillcolor=255)
+                img = img.rotate(best_angle, expand=True, fillcolor=_fill_color(img))
                 img.save(filepath)
 
         try:
@@ -109,7 +131,15 @@ class ImageService:
         auto_crop: bool = False,
         deskew: bool = False,
     ) -> str:
-        """Apply enhancements to an image file in-place."""
+        """Apply enhancements to an image file in-place.
+
+        Brightness/contrast/rotation/auto-crop (if any are non-default) are
+        applied first, then deskew runs against the already-processed image
+        (F52) -- deskew used to return immediately and silently discard every
+        other requested parameter. Both stages run under the same
+        `lock_for(filepath)` hold (F12) so this can't interleave with a
+        concurrent OCR/enhance rewrite of the same file.
+        """
         # Skip if no enhancements requested
         if brightness == 1.0 and contrast == 1.0 and rotation == 0 and not auto_crop and not deskew:
             return filepath
@@ -137,14 +167,18 @@ class ImageService:
 
             img.save(filepath)
 
-        if deskew:
-            await self.deskew(filepath)
-            return filepath
+        needs_process = brightness != 1.0 or contrast != 1.0 or rotation != 0 or auto_crop
 
-        try:
-            await asyncio.to_thread(_process)
-        except Exception as exc:
-            raise ImageError(f"Image enhancement failed: {exc}") from exc
+        async with lock_for(filepath):
+            try:
+                if needs_process:
+                    await asyncio.to_thread(_process)
+                if deskew:
+                    await self._deskew_locked(filepath)
+            except ImageError:
+                raise
+            except Exception as exc:
+                raise ImageError(f"Image enhancement failed: {exc}") from exc
 
         return filepath
 

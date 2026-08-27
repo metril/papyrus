@@ -41,10 +41,13 @@ class _FakeScanService:
         self.filepath = filepath
         self.scan_calls: list[dict] = []
 
-    async def scan(self, resolution, mode, fmt, source, progress_callback=None, device=None):
+    async def scan(
+        self, resolution, mode, fmt, source, progress_callback=None, device=None,
+        scan_dir=None,
+    ):
         self.scan_calls.append({
             "resolution": resolution, "mode": mode, "fmt": fmt,
-            "source": source, "device": device,
+            "source": source, "device": device, "scan_dir": scan_dir,
         })
         return "scan-123", self.filepath
 
@@ -61,11 +64,13 @@ async def test_copy_passes_device_through_to_scan_service(monkeypatch):
     svc = CopyService()
     fake_cups = _FakeCups()
 
-    result = await svc.copy(cups=fake_cups, device="airscan:e0:MyScanner")
+    result = await svc.copy(
+        cups=fake_cups, device="airscan:e0:MyScanner", scan_dir="/mnt/nas/scans"
+    )
 
     assert fake_scan.scan_calls == [{
         "resolution": 300, "mode": "Color", "fmt": "tiff",
-        "source": "Flatbed", "device": "airscan:e0:MyScanner",
+        "source": "Flatbed", "device": "airscan:e0:MyScanner", "scan_dir": "/mnt/nas/scans",
     }]
     assert result == {
         "scan_id": "scan-123",

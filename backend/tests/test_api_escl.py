@@ -23,8 +23,10 @@ the autouse fixture in test_escl_job_eviction.py, scoped to this file).
 import asyncio
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
+from app.main import app
 from app.models import AppConfig, ScanJob
 from app.routers import escl
 from app.services import settings_cache
@@ -87,6 +89,9 @@ class _FakeScanService:
         self._error = error
         self.calls: list[dict] = []
 
+    def is_busy(self) -> bool:
+        return self._lock.locked()
+
     async def scan(self, **kwargs):
         self.calls.append(kwargs)
         if self._error is not None:
@@ -103,6 +108,22 @@ def _patch_scan(monkeypatch, filepath: str, *, error: Exception | None = None) -
     monkeypatch.setattr(escl, "scan_service", fake)
     monkeypatch.setattr(escl, "get_default_scanner_device", _fake_get_default_scanner_device)
     return fake
+
+
+@pytest.fixture
+async def public_client():
+    """Same ASGI app as ``client``, but with a public (non-LAN) source
+    address — for exercising F3's ``_require_lan_client`` rejection. The
+    default ``client``/``ASGITransport`` fixture always presents
+    ``127.0.0.1`` (loopback), which F3 must allow, so a distinct transport
+    is needed to simulate a non-LAN caller. Uses a real, globally-routable
+    address (Google Public DNS) rather than an RFC 5737 documentation
+    address (e.g. 203.0.113.0/24) -- Python's ``ipaddress.is_private``
+    treats those reserved/non-routable ranges as private too, which would
+    make the test pass for the wrong reason."""
+    transport = ASGITransport(app=app, client=("8.8.8.8", 12345))
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c
 
 
 # --------------------------------------------------------------------------- #
@@ -202,3 +223,196 @@ async def test_create_scan_job_scan_failure_marks_job_canceled_and_db_row_failed
     assert len(jobs) == 1
     assert jobs[0].status == "failed"
     assert "scanner jammed" in jobs[0].error_message
+
+
+# --------------------------------------------------------------------------- #
+# F3: LAN-only source restriction + busy-reject
+# --------------------------------------------------------------------------- #
+async def test_public_source_ip_is_403_on_capabilities(public_client):
+    resp = await public_client.get("/eSCL/ScannerCapabilities")
+    assert resp.status_code == 403
+
+
+async def test_public_source_ip_is_403_on_create_scan_job(db, public_client):
+    await _enable_escl(db)
+    resp = await public_client.post("/eSCL/ScanJobs", content=_MINIMAL_SCAN_SETTINGS_XML)
+    assert resp.status_code == 403
+    assert escl._scan_jobs == {}
+
+
+async def test_loopback_source_ip_is_allowed(client):
+    # Sanity check: the default `client` fixture presents 127.0.0.1
+    # (loopback) and must NOT be rejected by F3.
+    resp = await client.get("/eSCL/ScannerCapabilities")
+    assert resp.status_code == 503  # disabled, not 403 -- LAN check passed
+
+
+async def test_second_concurrent_scan_job_is_503(db, client, monkeypatch, _captured_tasks):
+    await _enable_escl(db)
+
+    # Seed an already-in-flight eSCL job (Processing) so the busy check trips
+    # without needing a real overlapping scan.
+    escl._scan_jobs["already-running"] = {
+        "state": "Processing",
+        "resolution": 300,
+        "color_mode": "Color",
+        "format": "pdf",
+        "source": "Flatbed",
+        "scan_region": {},
+        "filepath": None,
+        "served": False,
+        "error": None,
+        "terminal_at": None,
+    }
+
+    resp = await client.post("/eSCL/ScanJobs", content=_MINIMAL_SCAN_SETTINGS_XML)
+    assert resp.status_code == 503
+    # No second job was created.
+    assert set(escl._scan_jobs.keys()) == {"already-running"}
+
+
+async def test_scan_service_busy_rejects_new_job(db, client, monkeypatch):
+    await _enable_escl(db)
+
+    class _BusyScanService:
+        def is_busy(self) -> bool:
+            return True
+
+    monkeypatch.setattr(escl, "scan_service", _BusyScanService())
+
+    resp = await client.post("/eSCL/ScanJobs", content=_MINIMAL_SCAN_SETTINGS_XML)
+    assert resp.status_code == 503
+    assert escl._scan_jobs == {}
+
+
+# --------------------------------------------------------------------------- #
+# F4/F135: resolution snapping + region clamping
+# --------------------------------------------------------------------------- #
+def test_snap_resolution_picks_nearest_advertised_value():
+    assert escl._snap_resolution(290) == 300
+    assert escl._snap_resolution(80) == 75
+    assert escl._snap_resolution(10_000) == 600
+
+
+def test_clamp_region_full_bed_when_height_missing():
+    """F135: Width without Height must fall back to a full-bed scan instead
+    of storing a half-filled region that crashes _run_scan's mm math."""
+    region = {"width": 1000, "height": None, "x_offset": 0, "y_offset": 0}
+    clamped = escl._clamp_scan_region(region)
+    assert clamped == {"width": None, "height": None, "x_offset": 0, "y_offset": 0}
+
+
+def test_clamp_region_full_bed_when_width_missing():
+    region = {"width": None, "height": 1000, "x_offset": 0, "y_offset": 0}
+    clamped = escl._clamp_scan_region(region)
+    assert clamped == {"width": None, "height": None, "x_offset": 0, "y_offset": 0}
+
+
+def test_clamp_region_absurd_size_is_clamped_to_advertised_caps():
+    region = {"width": 200_000, "height": 200_000, "x_offset": 0, "y_offset": 0}
+    clamped = escl._clamp_scan_region(region)
+    assert clamped["width"] == escl.ESCL_MAX_WIDTH
+    assert clamped["height"] == escl.ESCL_MAX_HEIGHT
+
+
+def test_clamp_region_offset_plus_size_clamped_within_bounds():
+    region = {"width": 2000, "height": 3000, "x_offset": 2000, "y_offset": 3000}
+    clamped = escl._clamp_scan_region(region)
+    assert clamped["x_offset"] + clamped["width"] <= escl.ESCL_MAX_WIDTH
+    assert clamped["y_offset"] + clamped["height"] <= escl.ESCL_MAX_HEIGHT
+
+
+async def test_create_scan_job_clamps_absurd_region_and_snaps_resolution(
+    db, client, _captured_tasks
+):
+    await _enable_escl(db)
+    xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03"
+                    xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <scan:XResolution>290</scan:XResolution>
+  <pwg:DocumentFormat>application/pdf</pwg:DocumentFormat>
+  <scan:ScanRegion>
+    <pwg:XOffset>0</pwg:XOffset>
+    <pwg:YOffset>0</pwg:YOffset>
+    <pwg:Width>200000</pwg:Width>
+    <pwg:Height>200000</pwg:Height>
+  </scan:ScanRegion>
+</scan:ScanSettings>
+"""
+    resp = await client.post("/eSCL/ScanJobs", content=xml)
+    assert resp.status_code == 201
+    job_id = resp.headers["location"].rsplit("/", 1)[-1]
+
+    job = escl._scan_jobs[job_id]
+    assert job["resolution"] == 300  # snapped from 290
+    assert job["scan_region"]["width"] == escl.ESCL_MAX_WIDTH
+    assert job["scan_region"]["height"] == escl.ESCL_MAX_HEIGHT
+
+    # Let the background task finish (it'll fail -- no scanner configured --
+    # but that's irrelevant to what this test checks).
+    await asyncio.gather(*_captured_tasks, return_exceptions=True)
+
+
+async def test_create_scan_job_width_only_falls_back_to_full_bed(db, client, _captured_tasks):
+    await _enable_escl(db)
+    xml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScanSettings xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03"
+                    xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+  <pwg:DocumentFormat>application/pdf</pwg:DocumentFormat>
+  <scan:ScanRegion>
+    <pwg:XOffset>0</pwg:XOffset>
+    <pwg:YOffset>0</pwg:YOffset>
+    <pwg:Width>1000</pwg:Width>
+  </scan:ScanRegion>
+</scan:ScanSettings>
+"""
+    resp = await client.post("/eSCL/ScanJobs", content=xml)
+    assert resp.status_code == 201
+    job_id = resp.headers["location"].rsplit("/", 1)[-1]
+
+    job = escl._scan_jobs[job_id]
+    assert job["scan_region"] == {"width": None, "height": None, "x_offset": 0, "y_offset": 0}
+
+    await asyncio.gather(*_captured_tasks, return_exceptions=True)
+
+
+# --------------------------------------------------------------------------- #
+# F110: DELETE actually cancels an in-flight eSCL scan
+# --------------------------------------------------------------------------- #
+async def test_delete_cancels_in_flight_scan_task(db, client, monkeypatch, _captured_tasks):
+    await _enable_escl(db)
+
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    class _HangingScanService:
+        def is_busy(self) -> bool:
+            return False
+
+        async def scan(self, **kwargs):
+            started.set()
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            raise AssertionError("should have been cancelled")  # pragma: no cover
+
+    monkeypatch.setattr(escl, "scan_service", _HangingScanService())
+    monkeypatch.setattr(escl, "get_default_scanner_device", _fake_get_default_scanner_device)
+
+    resp = await client.post("/eSCL/ScanJobs", content=_MINIMAL_SCAN_SETTINGS_XML)
+    assert resp.status_code == 201
+    job_id = resp.headers["location"].rsplit("/", 1)[-1]
+
+    await asyncio.wait_for(started.wait(), timeout=2)
+    assert escl._scan_jobs[job_id]["task"] is not None
+
+    del_resp = await client.delete(f"/eSCL/ScanJobs/{job_id}")
+    assert del_resp.status_code == 200
+    assert cancelled.is_set()
+    assert job_id not in escl._scan_jobs
+
+    # Let the (now-cancelled) background task actually finish unwinding so
+    # nothing leaks past the end of the test.
+    await asyncio.gather(*_captured_tasks, return_exceptions=True)

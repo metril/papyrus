@@ -13,6 +13,7 @@ from PIL import Image
 from app.services.image_service import (
     ImageService,
     _auto_crop,
+    _fill_color,
     detect_skew_angle,
 )
 
@@ -160,4 +161,97 @@ async def test_enhance_auto_crop_writes_cropped_file(tmp_path):
 
     await ImageService().enhance(str(p), auto_crop=True)
 
+    assert Image.open(p).size == (120, 100)
+
+
+# --------------------------------------------------------------------------- #
+# F15: rotation fill color matches the image's mode (no red wedges on RGB)
+# --------------------------------------------------------------------------- #
+def test_fill_color_is_plain_255_for_grayscale():
+    img = Image.fromarray(np.full((10, 10), 255, np.uint8), "L")
+    assert _fill_color(img) == 255
+
+
+def test_fill_color_is_white_tuple_for_rgb():
+    img = Image.new("RGB", (10, 10), (10, 20, 30))
+    assert _fill_color(img) == (255, 255, 255)
+
+
+def test_fill_color_is_white_tuple_for_rgba():
+    img = Image.new("RGBA", (10, 10), (10, 20, 30, 40))
+    assert _fill_color(img) == (255, 255, 255, 255)
+
+
+def _striped_rgb(w: int = 400, h: int = 300, period: int = 20, thickness: int = 8) -> Image.Image:
+    """Color equivalent of `_striped`: an RGB page with horizontal stripes,
+    tinted so it isn't just a grayscale image wearing an RGB label."""
+    arr = np.full((h, w, 3), 255, np.uint8)
+    for y in range(0, h, period):
+        arr[y : y + thickness, :, :] = (20, 60, 120)
+    return Image.fromarray(arr, "RGB")
+
+
+async def test_deskew_rgb_image_corners_are_white_not_red(tmp_path):
+    """Reproduces F15: rotating a color scan used to fill the expanded
+    corners with fillcolor=255, which PIL packs as raw RGB bytes -- (255, 0,
+    0), bright red -- instead of white."""
+    p = tmp_path / "tilted.png"
+    tilted = _striped_rgb().rotate(3.0, expand=False, fillcolor=(255, 255, 255))
+    tilted.save(p)
+
+    await ImageService().deskew(str(p))
+
+    out = np.asarray(Image.open(p).convert("RGB"))
+    corners = [
+        out[0, 0], out[0, -1], out[-1, 0], out[-1, -1],
+    ]
+    for corner in corners:
+        r, g, b = (int(c) for c in corner)
+        assert (r, g, b) == (255, 255, 255), f"corner pixel was {(r, g, b)}, expected white"
+        assert not (r > 200 and g < 50 and b < 50), "corner pixel is red"
+
+
+# --------------------------------------------------------------------------- #
+# F52: enhance() applies brightness/contrast/rotation/crop AND deskew,
+# instead of silently discarding the former whenever deskew is requested.
+#
+# `detect_skew_angle` is monkeypatched to a fixed no-op (0.0) angle in both
+# tests below, so what's under test is purely whether _process's effects
+# survive alongside a deskew request -- not the real skew-detection
+# algorithm's behavior on a rotated/cropped image, which is covered
+# separately (test_detect_skew_* above) and would make an exact-size
+# assertion here fragile.
+# --------------------------------------------------------------------------- #
+async def test_enhance_with_deskew_also_applies_rotation(tmp_path, monkeypatch):
+    """A 90-degree manual rotation must actually take effect even when
+    deskew=True is requested alongside it (F52 used to return immediately
+    after deskewing, dropping brightness/contrast/rotation/auto_crop)."""
+    import app.services.image_service as image_service_module
+
+    monkeypatch.setattr(image_service_module, "detect_skew_angle", lambda img: 0.0)
+
+    p = tmp_path / "scan.png"
+    _striped(w=400, h=300).save(p)
+    before_size = Image.open(p).size
+
+    await ImageService().enhance(str(p), rotation=90, deskew=True)
+
+    after_size = Image.open(p).size
+    assert after_size == (before_size[1], before_size[0])  # width/height swapped
+
+
+async def test_enhance_with_deskew_also_applies_auto_crop(tmp_path, monkeypatch):
+    import app.services.image_service as image_service_module
+
+    monkeypatch.setattr(image_service_module, "detect_skew_angle", lambda img: 0.0)
+
+    p = tmp_path / "scan.png"
+    arr = np.full((300, 400), 255, np.uint8)
+    arr[40:121, 50:151] = 0
+    Image.fromarray(arr, "L").save(p)
+
+    await ImageService().enhance(str(p), auto_crop=True, deskew=True)
+
+    # auto_crop's effect (a much smaller image) must be visible, not
+    # silently dropped in favor of only running deskew.
     assert Image.open(p).size == (120, 100)

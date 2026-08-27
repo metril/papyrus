@@ -117,6 +117,11 @@ class ScanRequest(BaseModel):
     mode: str = Field(default="Color", pattern="^(Color|Gray|Lineart)$")
     format: str = Field(default="pdf", pattern="^(png|jpeg|tiff|pdf)$")
     source: str = Field(default="Flatbed", pattern="^(Flatbed|ADF)$")
+    # F26: lets the client generate the id up front and subscribe to its
+    # progress WebSocket *before* POSTing, instead of only learning the id
+    # after the (synchronous) scan has already finished. Backend-generated
+    # when omitted.
+    scan_id: uuid.UUID | None = None
 
 
 class ScanBatchRequest(ScanRequest):

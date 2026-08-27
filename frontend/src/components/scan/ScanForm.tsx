@@ -23,6 +23,12 @@ export default function ScanForm() {
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ScanJob | null>(null);
+  // F26: the id the progress socket subscribes to. Set *before* the scan
+  // request is sent (see handleScan) so the socket is already open by the
+  // time the backend starts broadcasting progress, instead of deriving the
+  // url from `result?.scan_id`, which is only known once the (synchronous)
+  // scan has already finished.
+  const [scanId, setScanId] = useState<string | null>(null);
 
   const [selectedProfileId, setSelectedProfileId] = useState<number | ''>('');
   const [profileName, setProfileName] = useState('');
@@ -91,7 +97,7 @@ export default function ScanForm() {
   });
 
   useWebSocket({
-    url: result?.scan_id ? `/api/scanner/ws/scan/${result.scan_id}` : null,
+    url: scanId ? `/api/scanner/ws/scan/${scanId}` : null,
     onMessage: (msg) => {
       if (msg.type === 'scan_progress') {
         setProgress((msg.data as { progress: number }).progress);
@@ -108,9 +114,15 @@ export default function ScanForm() {
     setError(null);
     setResult(null);
     setProgress(0);
+    // Generate the id and open the progress socket on it *before* POSTing
+    // (F26) — the id is sent along with the request so the backend uses it
+    // for the row and every progress broadcast instead of generating its
+    // own, which the client would never learn until too late.
+    const id = crypto.randomUUID();
+    setScanId(id);
 
     try {
-      const request: ScanRequest = { resolution, mode, format, source };
+      const request: ScanRequest = { resolution, mode, format, source, scan_id: id };
       const job = await scanMutation.mutateAsync({ request, batch });
       setResult(job);
     } catch (err: unknown) {
@@ -122,6 +134,7 @@ export default function ScanForm() {
       setError(message);
     } finally {
       setScanning(false);
+      setScanId(null);
     }
   };
 

@@ -42,7 +42,8 @@ async def _reconcile_on_startup() -> None:
     from sqlalchemy import select
 
     from app.database import async_session
-    from app.models import Printer, Scanner
+    from app.models import Printer, ScanJob, Scanner
+    from app.routers import scanners as scanners_router
     from app.services import cups_admin
 
     async with async_session() as db:
@@ -86,9 +87,27 @@ async def _reconcile_on_startup() -> None:
                     "Failed to restore CUPS queue '%s': %s", printer_obj.cups_name, exc
                 )
 
-        # --- brscan4 registrations ---
+        # --- scanner configs ---
         result = await db.execute(select(Scanner))
         for scanner_obj in result.scalars():
+            # F23: /etc/sane.d/airscan.d/papyrus.conf is baked into the image
+            # (not a persisted volume), so every airscan: scanner's entry is
+            # lost on rebuild/recreate -- previously the only place this was
+            # rewritten was on UI-triggered probe/test/add, so a scan against
+            # a rebuilt container failed until an admin happened to hit the
+            # test endpoint. Reuses the same self-healing helper GET
+            # /scanners/{id}/test already calls.
+            if scanner_obj.device.startswith("airscan:"):
+                try:
+                    scanners_router._ensure_airscan_config(
+                        scanner_obj.name, scanner_obj.device, scanner_obj.post_scan_config
+                    )
+                    logger.info("Restored airscan config for scanner: %s", scanner_obj.name)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to restore airscan config for '%s': %s", scanner_obj.name, exc
+                    )
+
             cfg = scanner_obj.post_scan_config or {}
             model = cfg.get("brother_model")
             ip = cfg.get("brother_ip")
@@ -107,6 +126,21 @@ async def _reconcile_on_startup() -> None:
                 logger.warning(
                     "Failed to restore brscan4 '%s': %s", scanner_obj.name, exc
                 )
+
+        # --- F45: orphaned "scanning" rows from a crash/restart ---
+        # Only the in-flight request/task ever transitions a ScanJob out of
+        # "scanning", so a container crash/redeploy mid-scan strands the row
+        # there permanently: retention's status filter never selects it, and
+        # the UI shows a scan that will never finish. Mark any leftovers
+        # failed so they're visible and eligible for retention.
+        result = await db.execute(select(ScanJob).where(ScanJob.status == "scanning"))
+        stale_scans = list(result.scalars())
+        if stale_scans:
+            for scan in stale_scans:
+                scan.status = "failed"
+                scan.error_message = "Interrupted by server restart"
+            await db.commit()
+            logger.info("Marked %d stale scanning job(s) failed on startup", len(stale_scans))
 
 
 
