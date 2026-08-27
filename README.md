@@ -131,7 +131,7 @@ See [.env.example](.env.example) for the full list.
 | `PAPYRUS_OIDC_CLIENT_ID` | OIDC client ID |
 | `PAPYRUS_OIDC_CLIENT_SECRET` | OIDC client secret |
 
-`POSTGRES_PASSWORD` and `PAPYRUS_SESSION_SECRET` need real values, not placeholders — `docker/compose.yaml` refuses to start the containers without them, and the app itself hard-fails at startup on a blank or default session secret even outside Docker. Generate all three secrets with the commands already in [.env.example](.env.example): `openssl rand -hex 32` for `POSTGRES_PASSWORD` and `PAPYRUS_SESSION_SECRET`, and the `cryptography` one-liner there for `PAPYRUS_ENCRYPTION_KEY`. Once you're running behind TLS, set `PAPYRUS_BASE_URL` to an `https://` URL — the session cookie is only marked `Secure` when the base URL starts with `https://`.
+`POSTGRES_PASSWORD` and `PAPYRUS_SESSION_SECRET` need real values, not placeholders — `docker/compose.yaml` refuses to start the containers without them, and the app itself hard-fails at startup on a blank or default session secret even outside Docker (downgraded to a warning only when `PAPYRUS_DEV_MODE` is set). Generate all three secrets with the commands already in [.env.example](.env.example): `openssl rand -hex 32` for `POSTGRES_PASSWORD` and `PAPYRUS_SESSION_SECRET`, and the `cryptography` one-liner there for `PAPYRUS_ENCRYPTION_KEY`. Once you're running behind TLS, set `PAPYRUS_BASE_URL` to an `https://` URL — the session cookie is only marked `Secure` when the base URL starts with `https://`.
 
 ### Settings UI
 

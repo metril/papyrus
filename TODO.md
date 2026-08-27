@@ -21,7 +21,7 @@ Use ESP32 HomeKey + Home Assistant to auto-login users on a kiosk near the print
 
 ## Phase 4+ backlog (from Phase 3 final review)
 - Replace the as-unknown-as cast round-trip in JobQueue/UploadForm with typed upsertJobInCache/removeJobFromCache bridge helpers
-- Widen getPrinterStatus() return type (markers/state_reasons) and drop PrinterStatus.tsx cast — `/printer/status` (schemas.PrinterStatus) still doesn't send those fields today
+- Widen getPrinterStatus() return type (markers/state_reasons) and drop PrinterStatus.tsx's local cast — the backend already returns both fields (`schemas.PrinterStatus`), but the shared frontend `PrinterStatus` type doesn't model them yet
 - Add MutationCache-path assertion to queryClient.test.tsx
 
 ## Post-Phase-6 backlog (from P6 review)
@@ -87,7 +87,7 @@ Lower-severity findings confirmed during the 2026-08-26 audit remediation but no
 
 ### Integrations
 - `ftp_service.test_sftp` still connects with no host-key verification (currently unused by any caller)
-- Webhook background dispatch tasks aren't drained on shutdown (`wait_for_pending_dispatches()` exists but nothing calls it) — last-moment webhooks can be dropped
+- Webhook background dispatch tasks aren't drained on shutdown — `wait_for_pending_dispatches()` exists and is used by tests, but nothing calls it from the app's shutdown path — so last-moment webhooks can be dropped
 - Inbound email commits per attachment, so a mid-batch 413 leaves earlier attachments already committed while the response is 413 (a forwarder retry would duplicate them); zero-byte attachments are no longer skipped
 - `email_service.EmailError` still leaks raw SMTP relay text into the client-visible detail
 - `net_guard.py` exists but the older `_validate_probe_ip` copies in `printers.py`/`scanners.py` haven't been consolidated onto it
