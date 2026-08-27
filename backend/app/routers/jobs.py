@@ -6,7 +6,17 @@ import secrets
 import shutil
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -490,8 +500,8 @@ async def ingest_network_job(
 @router.get("", response_model=PrintJobList)
 async def list_jobs(
     status: str | None = None,
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -983,6 +993,7 @@ async def bulk_delete_jobs(
             default_printer_name = None
 
     deleted_ids: list[int] = []
+    filepaths: list[str] = []
     for job in jobs:
         # F27: another user's job requires admin; a NULL-owner (network) job
         # is fair game for any print user. Silently skip rather than fail
@@ -1000,11 +1011,18 @@ async def bulk_delete_jobs(
                 await CupsService(printer_name=queue).cancel_job(job.cups_job_id)
             except Exception:
                 pass
-        cleanup_file(job.filepath)
+        if job.filepath:
+            filepaths.append(job.filepath)
         await db.delete(job)
         deleted_ids.append(job.id)
 
+    # F44: rows are deleted and committed before their files are unlinked, so
+    # a slow/failing unlink can never leave a committed row pointing at a
+    # file that's already gone.
     await db.commit()
+
+    for filepath in filepaths:
+        await asyncio.to_thread(cleanup_file, filepath)
 
     for job_id in deleted_ids:
         await ws_manager.broadcast("jobs", {
@@ -1041,12 +1059,17 @@ async def delete_job(
         except Exception:
             pass
 
-    cleanup_file(job.filepath)
+    filepath = job.filepath
     job_id_copy = job.id
     title_copy = job.title
     user_id = user.id
     await db.delete(job)
+    # F44: commit before unlinking, so a slow/failing unlink can never leave
+    # a committed row pointing at a file that's already gone.
     await db.commit()
+
+    if filepath:
+        await asyncio.to_thread(cleanup_file, filepath)
 
     try:
         await log_event(db, "print.delete", "print_job", str(job_id_copy),

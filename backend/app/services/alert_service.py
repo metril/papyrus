@@ -27,6 +27,7 @@ the lifespan poller wraps the whole call in except-log-continue so it can
 never kill the loop.
 """
 
+import asyncio
 import json
 import logging
 from urllib.parse import urlparse
@@ -70,6 +71,35 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in ("true", "1", "yes")
 
 
+async def _cups_reachable() -> bool:
+    """Best-effort probe that cupsd itself is up, independent of any single
+    printer (F126).
+
+    ``CupsService.get_printer_status`` folds *any* failure (including cupsd
+    being completely down, not just one unreachable printer) into the same
+    printer-state-5 fallback, which ``_cups_status`` below also swallows into
+    ``_OFFLINE_FALLBACK`` -- so a cupsd restart mid-sweep used to make every
+    printer transition False->True on "offline" independently, firing a full
+    round of false alarms from one hiccup instead of carrying prior state
+    forward. Calling this once per sweep (mirrors the same
+    ``cups.Connection().getPrinters()`` health-probe idiom already used by
+    ``main._reconcile_on_startup`` and ``routers.system``) distinguishes
+    "CUPS itself is unreachable" from "this one printer reported an IPP
+    error", so ``check_alerts`` can skip the whole sweep on the former.
+    """
+    import cups
+
+    def _probe() -> None:
+        cups.Connection().getPrinters()
+
+    try:
+        await asyncio.to_thread(_probe)
+        return True
+    except Exception as exc:
+        logger.warning("Alert sweep: CUPS is unreachable, skipping this cycle: %s", exc)
+        return False
+
+
 async def _cups_status(cups_name: str) -> dict:
     """CUPS status via the cached helper; never raises (offline fallback).
 
@@ -100,18 +130,48 @@ async def _probe_if_ip(uri: str | None) -> dict | None:
         return None
 
 
+def _normalize_marker_name(name: object) -> str | None:
+    """Case/whitespace-insensitive key for deduping a marker name, or None
+    if `name` isn't a usable string."""
+    if not isinstance(name, str):
+        return None
+    normalized = name.strip().lower()
+    return normalized or None
+
+
 def _collect_marker_pairs(status: dict, ipp: dict | None) -> list[tuple[str | None, object]]:
-    """Merge (name, level) marker pairs from the CUPS status and IPP probe."""
-    pairs: list[tuple[str | None, object]] = []
+    """Merge (name, level) marker pairs from the CUPS status and IPP probe.
+
+    F127: both sources read the same underlying ``marker-names``/
+    ``marker-levels`` device attributes (CUPS via the queue's cached printer
+    object, IPP via a direct probe of the device), so a printer visible to
+    both used to be listed twice -- one physical cartridge showing up as two
+    "low supply" entries in the message and webhook payload. Pairs are
+    merged on a normalized (stripped, lowercased) name: CUPS entries are
+    added first, and an IPP entry is only kept when its normalized name
+    isn't already covered -- i.e. IPP only fills gaps CUPS didn't report.
+    """
+    merged: dict[str, tuple[str | None, object]] = {}
+    unnamed: list[tuple[str | None, object]] = []
+
+    def _add(name: str | None, level: object) -> None:
+        key = _normalize_marker_name(name)
+        if key is None:
+            unnamed.append((name, level))
+        elif key not in merged:
+            merged[key] = (name, level)
+
     for m in status.get("markers") or []:
-        pairs.append((m.get("name"), m.get("level")))
+        _add(m.get("name"), m.get("level"))
+
     if ipp:
         markers = ipp.get("markers") or {}
         names = markers.get("names") or []
         levels = markers.get("levels") or []
         for i, name in enumerate(names):
-            pairs.append((name, levels[i] if i < len(levels) else -1))
-    return pairs
+            _add(name, levels[i] if i < len(levels) else -1)
+
+    return list(merged.values()) + unnamed
 
 
 def _low_markers(
@@ -258,6 +318,13 @@ async def check_alerts(db: AsyncSession) -> None:
     result = await db.execute(select(Printer).where(Printer.is_network_queue.is_(False)))
     printers = list(result.scalars())
 
+    # F126: a cupsd hiccup makes CupsService.get_printer_status fail
+    # identically for every printer, each independently folded into the same
+    # offline fallback -- without this check that fires a false "offline"
+    # onset per printer instead of carrying prior state forward untouched.
+    if printers and not await _cups_reachable():
+        return
+
     prev_state = await _load_alert_state(db)
     new_state: dict[str, dict] = {}
 
@@ -273,6 +340,7 @@ async def check_alerts(db: AsyncSession) -> None:
             # "recover" a still-active condition.
             logger.warning("Alert evaluation failed for '%s': %s", printer.cups_name, exc)
             new_state[pid] = prev_state.get(pid, {})
+            await _save_alert_state(db, new_state)
             continue
 
         prev = prev_state.get(pid, {})
@@ -287,5 +355,15 @@ async def check_alerts(db: AsyncSession) -> None:
                 await _dispatch(db, printer, cond, resolved=True, alert_email=alert_email)
         new_state[pid] = cond_state
 
-    # new_state only holds live printers -> deleted printers are pruned.
-    await _save_alert_state(db, new_state)
+        # F128: persisted after *this* printer's transitions, not only once
+        # at the very end of the sweep -- a crash (or a failed write) later
+        # in the loop must not lose the printers already processed and
+        # already-dispatched this cycle, which would otherwise re-fire their
+        # onsets on every subsequent poll/restart.
+        await _save_alert_state(db, new_state)
+
+    # Empty printer list never enters the loop above -- still persist so a
+    # fleet that just lost its last printer prunes the stale state (new_state
+    # only ever holds live printers, so deleted ones are pruned either way).
+    if not printers:
+        await _save_alert_state(db, new_state)

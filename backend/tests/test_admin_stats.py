@@ -30,6 +30,7 @@ def test_print_statuses_zero_filled_when_no_rows():
     counts = _zero_filled_status_counts([], PRINT_JOB_STATUSES)
     assert counts == {
         "held": 0,
+        "converting": 0,
         "completed": 0,
         "failed": 0,
         "cancelled": 0,
@@ -44,11 +45,22 @@ def test_print_statuses_mapped_from_group_by_rows():
     counts = _zero_filled_status_counts(rows, PRINT_JOB_STATUSES)
     assert counts == {
         "held": 3,
+        "converting": 0,
         "completed": 10,
         "failed": 1,
         "cancelled": 0,
         "printing": 0,
     }
+
+
+def test_converting_status_is_counted_not_dropped():
+    """Regression (F141): "converting" is a real persisted PrintJob status
+    that used to be absent from PRINT_JOB_STATUSES, so a job mid-conversion
+    was silently dropped from every status breakdown."""
+    rows = [("held", 2), ("converting", 1)]
+    counts = _zero_filled_status_counts(rows, PRINT_JOB_STATUSES)
+    assert counts["converting"] == 1
+    assert sum(counts.values()) == 3
 
 
 def test_scan_statuses_mapped_from_group_by_rows():
@@ -221,8 +233,10 @@ async def test_stats_trend_30d_zero_fills_and_respects_utc_day_boundary(db, admi
     assert set(body["scan_counts"].keys()) == set(SCAN_JOB_STATUSES)
     assert body["print_counts"]["completed"] == 3
     assert body["scan_counts"]["completed"] == 1
-    assert "daily_prints" in body
-    assert "daily_scans" in body
+    # F142: daily_prints/daily_scans were dead weight (no client consumed
+    # them) and are no longer computed or serialized.
+    assert "daily_prints" not in body
+    assert "daily_scans" not in body
 
 
 async def test_stats_per_user_ranks_and_rolls_up_beyond_top_10(db, admin_client):
@@ -258,3 +272,27 @@ async def test_stats_per_user_ranks_and_rolls_up_beyond_top_10(db, admin_client)
     ]
     # The 11th user (count=2) rolls up alone into "Other".
     assert per_user[10] == {"username": "Other", "prints": 2, "scans": 0}
+
+
+# --------------------------------------------------------------------------- #
+# F37 — GET /api/admin/audit limit/offset are bounded (both directions; the
+# pre-fix code had `le=200` but no `ge=` on either param).
+# --------------------------------------------------------------------------- #
+async def test_audit_log_rejects_negative_limit(admin_client):
+    resp = await admin_client.get("/api/admin/audit", params={"limit": -1})
+    assert resp.status_code == 422
+
+
+async def test_audit_log_rejects_negative_offset(admin_client):
+    resp = await admin_client.get("/api/admin/audit", params={"offset": -1})
+    assert resp.status_code == 422
+
+
+async def test_audit_log_rejects_limit_above_200(admin_client):
+    resp = await admin_client.get("/api/admin/audit", params={"limit": 1_000_000})
+    assert resp.status_code == 422
+
+
+async def test_audit_log_accepts_max_limit_of_200(admin_client):
+    resp = await admin_client.get("/api/admin/audit", params={"limit": 200})
+    assert resp.status_code == 200

@@ -11,11 +11,6 @@ export async function restoreBackup(body: unknown): Promise<void> {
 
 // --- Dashboard stats ---
 
-export interface DailyCount {
-  day: string;
-  count: number;
-}
-
 /** One day of the 30-day trend (zero-filled by the backend, oldest first).
  * `date` is a UTC calendar-day ISO string, e.g. `"2026-06-07"`. */
 export interface TrendPoint {
@@ -36,8 +31,6 @@ export interface UserUsage {
 export interface DashboardStats {
   print_counts: Record<string, number>;
   scan_counts: Record<string, number>;
-  daily_prints: DailyCount[];
-  daily_scans: DailyCount[];
   trend_30d: TrendPoint[];
   per_user: UserUsage[];
 }

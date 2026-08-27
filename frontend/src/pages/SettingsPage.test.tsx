@@ -105,7 +105,6 @@ describe('SettingsPage', () => {
     await waitFor(() => expect(putBody).not.toBeNull());
     expect(putBody).toEqual({
       base_url: 'https://old.example.com',
-      dev_mode: '',
       require_release_pin: '',
     });
 

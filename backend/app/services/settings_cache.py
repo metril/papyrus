@@ -27,6 +27,14 @@ TTL_SECONDS = 30.0
 
 _cache: dict[str, tuple[str | None, float]] = {}
 
+# F130: bumped by every invalidate()/invalidate_all() call. get_setting reads
+# this *before* its DB query and skips repopulating the cache if the
+# generation moved on while it was awaiting -- otherwise a reader that
+# resolved its SELECT just before a concurrent writer's commit could still
+# write the pre-commit value into the cache just after that writer's
+# invalidate(), serving it stale for up to TTL_SECONDS. See get_generation().
+_generation = 0
+
 
 def get(key: str) -> tuple[bool, str | None]:
     """Look up ``key``. Returns ``(hit, value)``; ``hit`` is False on miss or expiry."""
@@ -45,8 +53,17 @@ def put(key: str, value: str | None) -> None:
     _cache[key] = (value, time.monotonic() + TTL_SECONDS)
 
 
+def get_generation() -> int:
+    """Current invalidation generation. Capture this before a DB read and
+    compare it after: if it changed, an invalidate() ran concurrently and the
+    value just read may already be stale (F130) -- skip caching it."""
+    return _generation
+
+
 def invalidate(key: str) -> None:
     """Evict a single key. Call after writing that key's AppConfig row."""
+    global _generation
+    _generation += 1
     _cache.pop(key, None)
 
 
@@ -57,4 +74,6 @@ def invalidate_all() -> None:
     restore) or whenever serving a stale value for up to ``TTL_SECONDS`` would
     be unsafe.
     """
+    global _generation
+    _generation += 1
     _cache.clear()

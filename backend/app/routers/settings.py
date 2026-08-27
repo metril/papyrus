@@ -28,7 +28,6 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "scan_retention_days": (int, False),
     "escl_enabled": (bool, False),
     "base_url": (str, False),
-    "dev_mode": (bool, False),
     "smtp_host": (str, False),
     "smtp_port": (int, False),
     "smtp_user": (str, False),
@@ -62,6 +61,8 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "sftp_host_key_fingerprint": (str, False),
     "require_release_pin": (bool, False),
     "print_retention_days": (int, False),
+    # F69: how long audit_log rows are kept; pruned by run_retention.
+    "audit_retention_days": (int, False),
     # Supply/error alerts (poller in main.py + alert_service)
     "alerts_enabled": (bool, False),
     "alert_toner_threshold": (int, False),
@@ -88,8 +89,8 @@ DEFAULTS: dict[str, str] = {
     "max_upload_size_mb": "50",
     "scan_retention_days": "7",
     "print_retention_days": "30",
+    "audit_retention_days": "90",
     "scan_filename_template": "scan_{date}_{time}_{id}",
-    "dev_mode": "false",
     "require_release_pin": "false",
     "smtp_port": "587",
     "smtp_security": "starttls",
@@ -121,6 +122,31 @@ def _coerce(value: str, type_: type) -> Any:
     return type_(value)
 
 
+_BOOL_STRINGS = {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
+
+
+def _coerce_for_storage(key: str, value: Any, type_: type) -> str:
+    """Coerce an incoming PUT value to its declared type's DB string form.
+
+    F64: writes used to be stored as bare ``str(value)`` with no validation,
+    so e.g. ``{"smtp_port": "587 (TLS)"}`` was accepted and only blew up much
+    later at a bare ``int()`` deep in email_service. Raises a 400 naming the
+    offending key instead.
+    """
+    if type_ is bool:
+        if isinstance(value, bool):
+            return str(value).lower()
+        if isinstance(value, str) and value.strip().lower() in _BOOL_STRINGS:
+            return str(_BOOL_STRINGS[value.strip().lower()]).lower()
+        raise HTTPException(status_code=400, detail=f"Setting {key} must be a boolean")
+    if type_ is int:
+        try:
+            return str(int(value))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail=f"Setting {key} must be an integer")
+    return str(value)
+
+
 async def _load_db_values(db: AsyncSession) -> dict[str, str]:
     result = await db.execute(select(AppConfig))
     return {row.key: row.value for row in result.scalars()}
@@ -138,6 +164,12 @@ async def get_setting(db: AsyncSession, key: str) -> str | None:
     hit, cached_value = settings_cache.get(key)
     if hit:
         return cached_value
+
+    # F130: captured before the DB read so it can be compared after -- a
+    # concurrent update_settings() that commits and invalidates() while this
+    # await is suspended bumps the generation, and the value read below (a
+    # snapshot from just before that commit) must not be cached over it.
+    generation = settings_cache.get_generation()
 
     _type, encrypted = CONFIGURABLE.get(key, (str, False))
     db_key = _db_key(key, encrypted)
@@ -157,7 +189,8 @@ async def get_setting(db: AsyncSession, key: str) -> str | None:
     else:
         value = None
 
-    settings_cache.put(key, value)
+    if settings_cache.get_generation() == generation:
+        settings_cache.put(key, value)
     return value
 
 
@@ -231,7 +264,7 @@ async def update_settings(
                 # Clear the setting — let it fall back to default
                 await db.execute(delete(AppConfig).where(AppConfig.key == key))
             else:
-                str_value = str(value).lower() if _type is bool else str(value)
+                str_value = _coerce_for_storage(key, value, _type)
                 existing = await db.get(AppConfig, key)
                 if existing:
                     existing.value = str_value

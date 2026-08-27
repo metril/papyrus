@@ -24,8 +24,6 @@ export function makeDashboardStats(overrides: Partial<DashboardStats> = {}): Das
   return {
     print_counts: { held: 2, released: 40, failed: 1, printing: 0 },
     scan_counts: { completed: 47, failed: 0 },
-    daily_prints: [],
-    daily_scans: [],
     trend_30d: makeTrend({ '2026-06-10': { prints: 5, scans: 2 }, '2026-07-06': { prints: 8, scans: 6 } }),
     per_user: DEFAULT_PER_USER,
     ...overrides,

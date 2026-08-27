@@ -24,8 +24,8 @@ router = APIRouter()
 async def get_audit_log(
     action: str | None = None,
     entity_type: str | None = None,
-    limit: int = Query(default=50, le=200),
-    offset: int = 0,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
@@ -65,7 +65,7 @@ async def get_audit_log(
 
 # --- Usage Stats ---
 
-PRINT_JOB_STATUSES = ["held", "completed", "failed", "cancelled", "printing"]
+PRINT_JOB_STATUSES = ["held", "converting", "printing", "completed", "failed", "cancelled"]
 SCAN_JOB_STATUSES = ["completed", "failed", "scanning"]
 
 TREND_DAYS = 30
@@ -178,29 +178,6 @@ async def get_usage_stats(
     )
     scan_counts = _zero_filled_status_counts(scan_status_rows.all(), SCAN_JOB_STATUSES)
 
-    # Daily counts for last 30 days
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-
-    daily_prints = await db.execute(
-        select(
-            cast(PrintJob.created_at, Date).label("day"),
-            func.count().label("count"),
-        )
-        .where(PrintJob.created_at >= cutoff)
-        .group_by("day")
-        .order_by("day")
-    )
-
-    daily_scans = await db.execute(
-        select(
-            cast(ScanJob.created_at, Date).label("day"),
-            func.count().label("count"),
-        )
-        .where(ScanJob.created_at >= cutoff)
-        .group_by("day")
-        .order_by("day")
-    )
-
     # 30-day trend: one row per UTC calendar day, zero-filled so a trend
     # chart never has to skip a day. `created_at` is stored as an instant
     # (timestamptz); `timezone("UTC", ...)` reinterprets it as a naive UTC
@@ -253,12 +230,6 @@ async def get_usage_stats(
     return {
         "print_counts": print_counts,
         "scan_counts": scan_counts,
-        "daily_prints": [
-            {"day": str(row.day), "count": row.count} for row in daily_prints
-        ],
-        "daily_scans": [
-            {"day": str(row.day), "count": row.count} for row in daily_scans
-        ],
         "trend_30d": trend_30d,
         "per_user": per_user,
     }
@@ -334,8 +305,11 @@ async def trigger_retention(
 
     scan_days = safe_int_setting(await get_setting(db, "scan_retention_days"), 7)
     print_days = safe_int_setting(await get_setting(db, "print_retention_days"), 30)
+    audit_days = safe_int_setting(await get_setting(db, "audit_retention_days"), 90)
 
-    result = await run_retention(db, scan_days=scan_days, print_days=print_days)
+    result = await run_retention(
+        db, scan_days=scan_days, print_days=print_days, audit_days=audit_days
+    )
     return result
 
 

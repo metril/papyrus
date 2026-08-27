@@ -176,3 +176,56 @@ async def test_get_setting_decrypt_failure_returns_none_and_is_not_stale_success
 
     result = await settings_router.get_setting(db, "smtp_password")
     assert result is None
+
+
+# --------------------------------------------------------------------------- #
+# F130 — a commit+invalidate racing a concurrent get_setting() must not
+# repopulate the cache with the pre-commit value.
+# --------------------------------------------------------------------------- #
+def test_invalidate_bumps_generation():
+    before = settings_cache.get_generation()
+    settings_cache.invalidate("some_key")
+    assert settings_cache.get_generation() == before + 1
+
+
+def test_invalidate_all_bumps_generation():
+    before = settings_cache.get_generation()
+    settings_cache.invalidate_all()
+    assert settings_cache.get_generation() == before + 1
+
+
+async def test_get_setting_concurrent_invalidate_during_db_read_is_not_cached():
+    """Simulates the race: a writer (update_settings) commits and invalidates
+    while this get_setting() call's `await db.get(...)` is still in flight
+    -- the value it resolves to is a pre-commit snapshot, and it must not be
+    written into the cache after the fact (it would then serve the stale
+    value for up to TTL_SECONDS on every reader for the next 30s)."""
+    db = _CountingSession({"scan_dir": "/data/scans"})
+    real_get = db.get
+
+    async def get_then_concurrent_invalidate(model, key: str):
+        # Stand-in for "a concurrent update_settings() commits and
+        # invalidates while our own read was suspended".
+        settings_cache.invalidate(key)
+        return await real_get(model, key)
+
+    db.get = get_then_concurrent_invalidate
+
+    value = await settings_router.get_setting(db, "scan_dir")
+    assert value == "/data/scans"
+
+    # Not cached -- a second call must hit the DB again rather than serve the
+    # snapshot read while the invalidate was in flight.
+    hit, _ = settings_cache.get("scan_dir")
+    assert hit is False
+
+
+async def test_get_setting_uncontended_read_is_still_cached():
+    """Sanity check that the generation guard doesn't disable caching on the
+    ordinary (no concurrent writer) path."""
+    db = _CountingSession({"scan_dir": "/data/scans"})
+
+    await settings_router.get_setting(db, "scan_dir")
+
+    hit, value = settings_cache.get("scan_dir")
+    assert (hit, value) == (True, "/data/scans")

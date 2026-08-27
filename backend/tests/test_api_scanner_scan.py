@@ -4,6 +4,7 @@
 import sites (mirrors test_api_escl.py's convention) so no real `scanimage`
 subprocess ever runs.
 """
+import pytest
 from sqlalchemy import select
 
 from app.models import AuditEntry, ScanJob
@@ -34,6 +35,29 @@ def _patch_scan(monkeypatch, filepath: str) -> _FakeScanService:
         scanner_router, "get_default_scanner_device", _fake_get_default_scanner_device
     )
     return fake
+
+
+# --------------------------------------------------------------------------- #
+# F37 — list_scans limit/offset are bounded
+# --------------------------------------------------------------------------- #
+async def test_list_scans_rejects_negative_limit(user_client):
+    resp = await user_client.get("/api/scanner/scans", params={"limit": -1})
+    assert resp.status_code == 422
+
+
+async def test_list_scans_rejects_negative_offset(user_client):
+    resp = await user_client.get("/api/scanner/scans", params={"offset": -1})
+    assert resp.status_code == 422
+
+
+async def test_list_scans_rejects_limit_above_200(user_client):
+    resp = await user_client.get("/api/scanner/scans", params={"limit": 1_000_000})
+    assert resp.status_code == 422
+
+
+async def test_list_scans_accepts_max_limit_of_200(user_client):
+    resp = await user_client.get("/api/scanner/scans", params={"limit": 200})
+    assert resp.status_code == 200
 
 
 # --------------------------------------------------------------------------- #
@@ -138,3 +162,30 @@ async def test_scan_delete_audit_entry_is_persisted(db, user_client, tmp_path):
     )
     entries = result.scalars().all()
     assert len(entries) == 1
+
+
+async def test_delete_scan_row_is_gone_even_if_file_cleanup_blows_up(
+    db, user_client, tmp_path, monkeypatch
+):
+    """Regression (F44): the row must be deleted and committed *before* the
+    file is unlinked. Forcing cleanup_file to raise proves the delete already
+    committed -- the row is gone regardless of what happens to the file."""
+    f = tmp_path / "scan.pdf"
+    f.write_bytes(b"%PDF-1.4")
+    job = ScanJob(scan_id="scan-del-order-1", status="completed", filepath=str(f), format="pdf")
+    db.add(job)
+    await db.commit()
+
+    def boom(_filepath):
+        raise RuntimeError("disk exploded")
+
+    monkeypatch.setattr(scanner_router, "cleanup_file", boom)
+
+    # ASGITransport re-raises unhandled exceptions rather than surfacing them
+    # as the 500 a real deployment would return -- the row-committed-first
+    # behavior is what's under test here, not the response shape.
+    with pytest.raises(RuntimeError):
+        await user_client.delete("/api/scanner/scans/scan-del-order-1")
+
+    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == "scan-del-order-1"))
+    assert result.scalar_one_or_none() is None

@@ -228,7 +228,10 @@ async def _retention_loop() -> None:
             async with async_session() as db:
                 scan_days = safe_int_setting(await get_setting(db, "scan_retention_days"), 7)
                 print_days = safe_int_setting(await get_setting(db, "print_retention_days"), 30)
-                await run_retention(db, scan_days=scan_days, print_days=print_days)
+                audit_days = safe_int_setting(await get_setting(db, "audit_retention_days"), 90)
+                await run_retention(
+                    db, scan_days=scan_days, print_days=print_days, audit_days=audit_days
+                )
         except Exception as exc:
             logger.warning("Retention cleanup failed: %s", exc)
 

@@ -467,6 +467,29 @@ async def test_oversize_upload_is_413_with_no_partial_file(db, user_client, tmp_
 
 
 # --------------------------------------------------------------------------- #
+# F37 — list_jobs limit/offset are bounded
+# --------------------------------------------------------------------------- #
+async def test_list_jobs_rejects_negative_limit(user_client):
+    resp = await user_client.get("/api/jobs", params={"limit": -1})
+    assert resp.status_code == 422
+
+
+async def test_list_jobs_rejects_negative_offset(user_client):
+    resp = await user_client.get("/api/jobs", params={"offset": -1})
+    assert resp.status_code == 422
+
+
+async def test_list_jobs_rejects_limit_above_200(user_client):
+    resp = await user_client.get("/api/jobs", params={"limit": 1_000_000})
+    assert resp.status_code == 422
+
+
+async def test_list_jobs_accepts_max_limit_of_200(user_client):
+    resp = await user_client.get("/api/jobs", params={"limit": 200})
+    assert resp.status_code == 200
+
+
+# --------------------------------------------------------------------------- #
 # Cancel / delete / bulk-delete
 # --------------------------------------------------------------------------- #
 async def test_cancel_job_sets_cancelled_status(db, user_client, tmp_path):
@@ -489,6 +512,31 @@ async def test_delete_job_removes_row(db, user_client, tmp_path):
 
     get_resp = await user_client.get(f"/api/jobs/{job_id}")
     assert get_resp.status_code == 404
+
+
+async def test_delete_job_row_is_gone_even_if_file_cleanup_blows_up(
+    db, user_client, tmp_path, monkeypatch
+):
+    """Regression (F44): the row must be deleted and committed *before* the
+    file is unlinked. Forcing cleanup_file to raise proves the delete already
+    committed -- the row is gone regardless of what happens to the file."""
+    await _seed_upload_dir(db, tmp_path)
+    upload_resp = await user_client.post("/api/jobs/upload", files=_pdf_file())
+    job_id = upload_resp.json()["id"]
+
+    def boom(_filepath):
+        raise RuntimeError("disk exploded")
+
+    monkeypatch.setattr(jobs_router, "cleanup_file", boom)
+
+    # ASGITransport re-raises unhandled exceptions rather than surfacing them
+    # as the 500 a real deployment would return -- the row-committed-first
+    # behavior is what's under test here, not the response shape.
+    with pytest.raises(RuntimeError):
+        await user_client.delete(f"/api/jobs/{job_id}")
+
+    result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
+    assert result.scalar_one_or_none() is None
 
 
 async def test_bulk_delete_removes_all_rows(db, user_client, tmp_path):

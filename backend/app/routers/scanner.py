@@ -3,7 +3,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -287,8 +287,8 @@ async def initiate_batch_scan(
 
 @router.get("/scans", response_model=ScanList)
 async def list_scans(
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -607,13 +607,20 @@ async def bulk_delete_scans(
     jobs = result.scalars().all()
 
     deleted = 0
+    filepaths: list[str] = []
     for job in jobs:
         if job.filepath:
-            cleanup_file(job.filepath)
+            filepaths.append(job.filepath)
         await db.delete(job)
         deleted += 1
 
+    # F44: rows are deleted and committed before their files are unlinked, so
+    # a slow/failing unlink can never leave a committed row pointing at a
+    # file that's already gone.
     await db.commit()
+
+    for filepath in filepaths:
+        await asyncio.to_thread(cleanup_file, filepath)
 
     for scan_id in body.scan_ids:
         await ws_manager.broadcast("scans", {
@@ -747,12 +754,15 @@ async def delete_scan(
     if job is None:
         raise HTTPException(status_code=404, detail="Scan not found")
 
-    if job.filepath:
-        cleanup_file(job.filepath)
-
+    filepath = job.filepath
     scan_id_copy = job.scan_id
     await db.delete(job)
+    # F44: commit before unlinking, so a slow/failing unlink can never leave
+    # a committed row pointing at a file that's already gone.
     await db.commit()
+
+    if filepath:
+        await asyncio.to_thread(cleanup_file, filepath)
 
     await log_event(db, "scan.delete", "scan_job", scan_id_copy, user_id=user.id)
     await db.commit()

@@ -272,6 +272,119 @@ async def test_ipp_markers_enrich_when_uri_is_ip_based(harness):
     assert events == ["printer.supply_low"]
 
 
+# --------------------------------------------------------------------------- #
+# F126 — a total CUPS outage must not fire a false offline onset for every
+# printer; state is carried forward untouched.
+# --------------------------------------------------------------------------- #
+async def test_cups_totally_unreachable_carries_state_forward_and_fires_nothing(
+    harness, monkeypatch
+):
+    db = _FakeDB([_printer(pid=1, cups_name="brother")])
+    # Seed a prior sweep's persisted state directly, as if the printer was
+    # previously healthy on every condition.
+    prior = {"1": {"supply_low": False, "error": False, "offline": False}}
+    db.add(AppConfig(key="alert_state", value=json.dumps(prior)))
+
+    async def cups_down() -> bool:
+        return False
+
+    monkeypatch.setattr(alert_service, "_cups_reachable", cups_down)
+
+    await alert_service.check_alerts(db)
+
+    assert harness.webhooks == []
+    assert harness.emails == []
+    # Untouched -- not reset, not re-derived from the (unreachable) status.
+    assert db.saved_state() == prior
+
+
+async def test_empty_printer_list_skips_the_cups_reachability_probe(harness):
+    """No printers configured -> nothing to probe CUPS for; must not treat an
+    empty printer list as a CUPS outage."""
+    db = _FakeDB([])
+
+    await alert_service.check_alerts(db)
+
+    assert harness.webhooks == []
+    assert db.saved_state() == {}
+
+
+# --------------------------------------------------------------------------- #
+# F127 — a marker visible to both CUPS and the IPP probe must not be counted
+# twice.
+# --------------------------------------------------------------------------- #
+async def test_marker_seen_in_both_cups_and_ipp_is_not_duplicated(harness):
+    harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 5}])
+    harness.ipp_by_host["192.168.1.50"] = {
+        "state_reasons": [],
+        "markers": {"names": ["Black"], "levels": [5]},
+    }
+    db = _FakeDB([_printer(uri="ipp://192.168.1.50/ipp/print")])
+
+    await alert_service.check_alerts(db)
+
+    assert len(harness.webhooks) == 1
+    _, data = harness.webhooks[0]
+    assert data["markers"] == [{"name": "Black", "level": 5}]
+
+
+async def test_ipp_marker_absent_from_cups_still_fills_the_gap(harness):
+    """A marker CUPS didn't report but IPP did must still come through --
+    the dedupe must not drop genuinely distinct markers."""
+    harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 50}])
+    harness.ipp_by_host["192.168.1.50"] = {
+        "state_reasons": [],
+        "markers": {"names": ["Black", "Cyan"], "levels": [50, 3]},
+    }
+    db = _FakeDB([_printer(uri="ipp://192.168.1.50/ipp/print")])
+
+    await alert_service.check_alerts(db)
+
+    assert len(harness.webhooks) == 1
+    _, data = harness.webhooks[0]
+    assert data["markers"] == [{"name": "Cyan", "level": 3}]
+
+
+# --------------------------------------------------------------------------- #
+# F128 — alert_state is durable after each printer's transitions, not only
+# once at the very end of the sweep.
+# --------------------------------------------------------------------------- #
+async def test_state_saved_after_each_printer_not_only_at_sweep_end(harness):
+    harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 5}])
+    harness.status_by_queue["epson_release"] = _status(markers=[{"name": "Cyan", "level": 5}])
+    printers = [_printer(pid=1, cups_name="brother"), _printer(pid=2, cups_name="epson")]
+    db = _FakeDB(printers)
+
+    await alert_service.check_alerts(db)
+
+    # One persist per printer (2), not a single persist at the very end.
+    assert db.commits == len(printers)
+
+
+async def test_printer1_state_survives_a_crash_dispatching_printer2(harness, monkeypatch):
+    """Regression (F128): if something blows up processing printer 2 (e.g. a
+    webhook POST that doesn't come back before the container restarts),
+    printer 1's already-computed, already-dispatched transition must already
+    be durably persisted -- not lost, which would otherwise re-fire printer
+    1's onset again on the next poll even though it already fired once."""
+    harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 5}])
+    harness.status_by_queue["epson_release"] = _status(markers=[{"name": "Cyan", "level": 5}])
+    printers = [_printer(pid=1, cups_name="brother"), _printer(pid=2, cups_name="epson")]
+    db = _FakeDB(printers)
+
+    async def flaky_dispatch(_db, event, data):
+        if data["printer_id"] == 2:
+            raise RuntimeError("simulated crash mid-dispatch")
+        harness.webhooks.append((event, data))
+
+    monkeypatch.setattr(alert_service, "dispatch_webhook", flaky_dispatch)
+
+    with pytest.raises(RuntimeError):
+        await alert_service.check_alerts(db)
+
+    assert db.saved_state().get("1", {}).get("supply_low") is True
+
+
 async def test_stale_printer_ids_are_pruned_from_state(harness):
     # First poll: printer 1 is low -> state {"1": {...}}
     harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 5}])

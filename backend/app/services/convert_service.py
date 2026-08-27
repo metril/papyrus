@@ -3,6 +3,8 @@ import os
 import shutil
 import tempfile
 
+_CONVERSION_TIMEOUT_SECONDS = 120
+
 CONVERTIBLE_MIMES = {
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -51,7 +53,10 @@ async def convert_to_pdf(input_path: str, output_dir: str) -> str:
         Path to the converted PDF file, inside a temp dir under `output_dir`
 
     Raises:
-        RuntimeError: If conversion fails
+        RuntimeError: If conversion fails or times out (F24: headless
+            LibreOffice is known to hang on a malformed document or a stale
+            profile lock; without a bound here the awaiting request holds its
+            DB connection checked out for as long as the child hangs).
     """
     tmpdir = await asyncio.to_thread(tempfile.mkdtemp, prefix="convert_", dir=output_dir)
     try:
@@ -64,7 +69,14 @@ async def convert_to_pdf(input_path: str, output_dir: str) -> str:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=_CONVERSION_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise RuntimeError("conversion timed out")
 
         if process.returncode != 0:
             error_msg = stderr.decode().strip() if stderr else "Unknown error"
