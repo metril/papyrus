@@ -24,8 +24,14 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# Override sqlalchemy.url with the app's configured database URL
-config.set_main_option("sqlalchemy.url", settings.db_url)
+# Override sqlalchemy.url with the app's configured database URL. A caller
+# that built this Config programmatically (rather than from alembic.ini) can
+# route around the process-global `settings.db_url` by stashing a URL in
+# `config.attributes["db_url"]` -- this is alembic's documented in-process
+# override channel and is never populated by alembic.ini, so the normal
+# CLI/entrypoint path (`python -m alembic upgrade head`) is unaffected.
+url = config.attributes.get("db_url") or settings.db_url
+config.set_main_option("sqlalchemy.url", url)
 
 
 def run_migrations_offline() -> None:

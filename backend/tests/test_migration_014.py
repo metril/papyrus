@@ -19,7 +19,6 @@ import asyncio
 import uuid
 from pathlib import Path
 
-import pytest
 import sqlalchemy as sa
 from alembic.config import Config
 from sqlalchemy import text
@@ -48,26 +47,29 @@ def _maintenance_url() -> str:
 
 
 async def _run_alembic_upgrade(scratch_url: str, revision: str) -> None:
-    """Point the app's settings.db_url at the scratch database for the
-    duration of one alembic command. env.py reads settings.db_url fresh on
-    every invocation (`from app.config import settings`, same singleton), so
-    mutating the attribute is enough -- it does not touch app.database's
-    already-constructed engine, which stays bound to the real test DB."""
-    original = settings.db_url
-    settings.db_url = scratch_url
-    try:
-        cfg = Config()
-        cfg.set_main_option("script_location", str(ALEMBIC_DIR))
-        await asyncio.to_thread(command.upgrade, cfg, revision)
-    finally:
-        settings.db_url = original
+    """Run one alembic command against the scratch database, routed there via
+    `config.attributes["db_url"]` (env.py's in-process override channel)
+    rather than mutating the process-global `settings.db_url` -- so this
+    never touches app.database's already-constructed engine, which stays
+    bound to the real test DB, and can't leak the scratch URL into another
+    concurrently-running test."""
+    cfg = Config()
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    cfg.attributes["db_url"] = scratch_url
+    await asyncio.to_thread(command.upgrade, cfg, revision)
 
 
-@pytest.mark.integration
-async def test_migration_014_dedupes_existing_default_printers_and_scanners():
+async def test_migration_014_dedupes_existing_default_printers_and_scanners(migrated_db):
     """Seed two is_default=true printers and two is_default=true scanners at
     revision 013, then upgrade to head. Must succeed (not IntegrityError) and
-    leave exactly the lowest-id row of each table as the survivor."""
+    leave exactly the lowest-id row of each table as the survivor.
+
+    Takes `migrated_db` purely to gate on Postgres reachability the same way
+    the rest of the suite does (it skips cleanly, with the standard reason,
+    and auto-marks this test `integration` -- see conftest.py); this test
+    doesn't otherwise touch the database `migrated_db` migrates, since it
+    creates and drops its own scratch database below.
+    """
     maint_engine = create_async_engine(_maintenance_url(), isolation_level="AUTOCOMMIT")
     db_name = f"papyrus_migration014_{uuid.uuid4().hex[:10]}"
     try:
@@ -76,10 +78,8 @@ async def test_migration_014_dedupes_existing_default_printers_and_scanners():
                 conn.execute(text(f'CREATE DATABASE "{db_name}"')),
                 timeout=_CONNECT_TIMEOUT_SECONDS,
             )
-    except Exception:
+    finally:
         await maint_engine.dispose()
-        pytest.skip("test Postgres unreachable — start papyrus-test-pg (see CLAUDE.md)")
-    await maint_engine.dispose()
 
     scratch_url = sa.engine.url.make_url(settings.db_url).set(
         database=db_name
