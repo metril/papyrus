@@ -10,8 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_permission
-from app.auth.ws import authenticate_websocket
-from app.database import get_db
+from app.auth.ws import authenticate_websocket, has_ws_permission
+from app.database import async_session, get_db
 from app.models import CloudProvider, ScanJob, ScanProfile, SMBShare, User
 from app.schemas import (
     BulkDeleteResponse,
@@ -842,17 +842,20 @@ async def delete_profile(
 
 # WebSocket endpoint for scan progress
 @router.websocket("/ws/scan/{scan_id}")
-async def scan_progress_ws(
-    websocket: WebSocket, scan_id: str, db: AsyncSession = Depends(get_db)
-):
+async def scan_progress_ws(websocket: WebSocket, scan_id: str):
     """WebSocket for real-time scan progress updates.
 
-    F48: authenticated before accept(), same as the system.py channels --
-    ScanForm opens this before POSTing /scan, using the browser's session
-    cookie, which authenticate_websocket honors same as any other route.
+    F48: authenticated (and permission-checked -- "scan") before accept(),
+    same as the system.py channels -- ScanForm opens this before POSTing
+    /scan, using the browser's session cookie, which authenticate_websocket
+    honors same as any other route. The auth lookup uses its own
+    short-lived session (see system.py's jobs_ws docstring for why -- a
+    request-scoped `Depends(get_db)` session would stay checked out of the
+    pool for as long as the socket is open).
     """
-    user = await authenticate_websocket(websocket, db)
-    if user is None:
+    async with async_session() as db:
+        identity = await authenticate_websocket(websocket, db)
+    if identity is None or not has_ws_permission(identity, "scan"):
         await websocket.close(code=1008)
         return
     channel = f"scan:{scan_id}"

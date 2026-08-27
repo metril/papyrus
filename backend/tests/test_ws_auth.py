@@ -1,12 +1,14 @@
-"""F48: authenticate_websocket() and the four WS routes that gate on it.
+"""F48: authenticate_websocket()/has_ws_permission() and the four WS routes
+that gate on them.
 
-Two layers:
+Three layers:
 
-- Unit tests drive `authenticate_websocket` directly against a fake
-  WebSocket (headers/query_params/session), sharing the `db` fixture's
-  session on the pytest-asyncio function loop -- no TestClient involved, so
-  there's no event-loop boundary to worry about. This covers every
-  resolution branch (Bearer, `?token=`, session cookie, Origin check).
+- Unit tests drive `authenticate_websocket`/`has_ws_permission` directly
+  against a fake WebSocket (headers/query_params/session), sharing the `db`
+  fixture's session on the pytest-asyncio function loop -- no TestClient
+  involved, so there's no event-loop boundary to worry about. This covers
+  every resolution branch (Bearer, `?token=`, session cookie, Origin check,
+  permission scoping).
 - Integration tests go through the real routes with Starlette's
   `TestClient` (httpx's `ASGITransport` has no WebSocket support). Because
   `TestClient.websocket_connect` runs the ASGI app in its own background
@@ -16,6 +18,9 @@ Two layers:
   after every phase -- seed, request, cleanup -- so no pooled connection
   ever crosses from one loop to another (verified empirically; skipping the
   dispose calls reproduces "RuntimeError: Event loop is closed").
+- One pool-level test asserts the fix for the critical finding: the auth
+  session must be closed/released *before* accept(), not held for the
+  socket's whole lifetime.
 """
 import asyncio
 import uuid
@@ -27,7 +32,7 @@ from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app.auth.tokens import hash_token
-from app.auth.ws import authenticate_websocket
+from app.auth.ws import authenticate_websocket, has_ws_permission
 from app.database import async_session, engine
 from app.main import app
 from app.models import APIToken, User
@@ -38,6 +43,16 @@ WS_ROUTES = [
     "/api/system/ws/printers",
     "/api/scanner/ws/scan/probe-scan-id",
 ]
+
+# Each route's required permission -- mirrors the HTTP routes serving the
+# same data (jobs.py/printers.py use require_permission("print"),
+# scanner.py uses require_permission("scan")).
+ROUTE_PERMISSIONS = {
+    "/api/system/ws/jobs": "print",
+    "/api/system/ws/scans": "scan",
+    "/api/system/ws/printers": "print",
+    "/api/scanner/ws/scan/probe-scan-id": "scan",
+}
 
 
 class FakeWebSocket:
@@ -75,12 +90,13 @@ async def test_no_credentials_returns_none(db):
     assert await authenticate_websocket(ws, db) is None
 
 
-async def test_valid_bearer_header_returns_user(db):
-    user, plaintext = await _make_user_with_token(db)
+async def test_valid_bearer_header_returns_identity(db):
+    user, plaintext = await _make_user_with_token(db, permissions=("print", "scan"))
     ws = FakeWebSocket(headers={"authorization": f"Bearer {plaintext}"})
     result = await authenticate_websocket(ws, db)
     assert result is not None
-    assert result.id == user.id
+    assert result.user.id == user.id
+    assert result.permissions == ["print", "scan"]
 
 
 async def test_invalid_bearer_header_returns_none(db):
@@ -88,12 +104,12 @@ async def test_invalid_bearer_header_returns_none(db):
     assert await authenticate_websocket(ws, db) is None
 
 
-async def test_valid_query_token_returns_user(db):
+async def test_valid_query_token_returns_identity(db):
     user, plaintext = await _make_user_with_token(db)
     ws = FakeWebSocket(query_params={"token": plaintext})
     result = await authenticate_websocket(ws, db)
     assert result is not None
-    assert result.id == user.id
+    assert result.user.id == user.id
 
 
 async def test_invalid_query_token_returns_none(db):
@@ -101,12 +117,15 @@ async def test_invalid_query_token_returns_none(db):
     assert await authenticate_websocket(ws, db) is None
 
 
-async def test_valid_session_returns_user(db):
+async def test_valid_session_returns_identity_with_no_permission_scoping(db):
+    """Session users get `permissions=None` -- full access, mirroring how
+    `require_permission` treats `token_permissions is None`."""
     user, _ = await _make_user_with_token(db)
     ws = FakeWebSocket(session={"user_id": str(user.id)})
     result = await authenticate_websocket(ws, db)
     assert result is not None
-    assert result.id == user.id
+    assert result.user.id == user.id
+    assert result.permissions is None
 
 
 async def test_empty_session_returns_none(db):
@@ -130,7 +149,7 @@ async def test_bearer_takes_priority_over_session(db):
     )
     result = await authenticate_websocket(ws, db)
     assert result is not None
-    assert result.id == bearer_user.id
+    assert result.user.id == bearer_user.id
 
 
 async def test_origin_matching_host_is_allowed(db):
@@ -144,7 +163,7 @@ async def test_origin_matching_host_is_allowed(db):
     )
     result = await authenticate_websocket(ws, db)
     assert result is not None
-    assert result.id == user.id
+    assert result.user.id == user.id
 
 
 async def test_origin_mismatched_host_is_rejected(db):
@@ -161,11 +180,31 @@ async def test_origin_mismatched_host_is_rejected(db):
 
 async def test_missing_origin_is_allowed(db):
     """Non-browser clients (curl, native apps) send no Origin header at all."""
-    user, plaintext = await _make_user_with_token(db)
+    user, plaintext = await _make_user_with_token(db, permissions=("print", "scan"))
     ws = FakeWebSocket(headers={"authorization": f"Bearer {plaintext}", "host": "example.com"})
     result = await authenticate_websocket(ws, db)
     assert result is not None
-    assert result.id == user.id
+    assert result.user.id == user.id
+
+
+# --- Unit tests: has_ws_permission() ------------------------------------
+
+
+async def test_has_ws_permission_session_identity_passes_any_permission(db):
+    user, _ = await _make_user_with_token(db)
+    ws = FakeWebSocket(session={"user_id": str(user.id)})
+    identity = await authenticate_websocket(ws, db)
+    assert has_ws_permission(identity, "print") is True
+    assert has_ws_permission(identity, "scan") is True
+    assert has_ws_permission(identity, "admin") is True
+
+
+async def test_has_ws_permission_token_identity_scoped_to_its_permissions(db):
+    _, plaintext = await _make_user_with_token(db, permissions=("scan",))
+    ws = FakeWebSocket(headers={"authorization": f"Bearer {plaintext}"})
+    identity = await authenticate_websocket(ws, db)
+    assert has_ws_permission(identity, "scan") is True
+    assert has_ws_permission(identity, "print") is False
 
 
 # --- Integration tests: the real routes via TestClient ------------------
@@ -179,27 +218,42 @@ def _run(coro):
     return result
 
 
-@pytest.fixture
-def ws_token(migrated_db):
-    """A committed User + real Bearer token, seeded and torn down through
-    their own throwaway event loops (see module docstring)."""
+def _token_fixture(permissions: tuple[str, ...], *, name: str):
+    """Build a pytest fixture yielding a Bearer token scoped to exactly
+    `permissions`, seeded/torn down through their own throwaway event loops
+    (see module docstring).
 
-    async def _seed():
-        async with async_session() as session:
-            user, plaintext = await _make_user_with_token(session)
-            return user.id, plaintext
+    `name=` is required: every fixture built here would otherwise share the
+    inner function's own `__name__` ("_fixture") and pytest would register
+    them all under that one name instead of the module-level name each is
+    assigned to.
+    """
 
-    user_id, plaintext = _run(_seed())
+    @pytest.fixture(name=name)
+    def _fixture(migrated_db):
+        async def _seed():
+            async with async_session() as session:
+                user, plaintext = await _make_user_with_token(session, permissions=permissions)
+                return user.id, plaintext
 
-    yield plaintext
+        user_id, plaintext = _run(_seed())
 
-    async def _cleanup():
-        async with async_session() as session:
-            await session.execute(delete(APIToken).where(APIToken.user_id == user_id))
-            await session.execute(delete(User).where(User.id == user_id))
-            await session.commit()
+        yield plaintext
 
-    _run(_cleanup())
+        async def _cleanup():
+            async with async_session() as session:
+                await session.execute(delete(APIToken).where(APIToken.user_id == user_id))
+                await session.execute(delete(User).where(User.id == user_id))
+                await session.commit()
+
+        _run(_cleanup())
+
+    return _fixture
+
+
+ws_token = _token_fixture(("print", "scan"), name="ws_token")
+scan_only_token = _token_fixture(("scan",), name="scan_only_token")
+print_only_token = _token_fixture(("print",), name="print_only_token")
 
 
 @pytest.mark.parametrize("path", WS_ROUTES)
@@ -260,4 +314,73 @@ def test_route_accepts_matching_origin(ws_token):
         },
     ):
         pass
+    asyncio.run(engine.dispose())
+
+
+# --- Integration tests: per-route permission gating ---------------------
+
+
+@pytest.mark.parametrize("path", ["/api/system/ws/jobs", "/api/system/ws/printers"])
+def test_scan_only_token_rejected_on_print_gated_routes(path, scan_only_token):
+    client = TestClient(app)
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(
+            path, headers={"Authorization": f"Bearer {scan_only_token}"}
+        ):
+            pass
+    assert exc_info.value.code == 1008
+    asyncio.run(engine.dispose())
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/system/ws/scans", "/api/scanner/ws/scan/probe-scan-id"]
+)
+def test_scan_only_token_accepted_on_scan_gated_routes(path, scan_only_token):
+    client = TestClient(app)
+    with client.websocket_connect(
+        path, headers={"Authorization": f"Bearer {scan_only_token}"}
+    ):
+        pass
+    asyncio.run(engine.dispose())
+
+
+@pytest.mark.parametrize(
+    "path", ["/api/system/ws/scans", "/api/scanner/ws/scan/probe-scan-id"]
+)
+def test_print_only_token_rejected_on_scan_gated_routes(path, print_only_token):
+    client = TestClient(app)
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with client.websocket_connect(
+            path, headers={"Authorization": f"Bearer {print_only_token}"}
+        ):
+            pass
+    assert exc_info.value.code == 1008
+    asyncio.run(engine.dispose())
+
+
+@pytest.mark.parametrize("path", ["/api/system/ws/jobs", "/api/system/ws/printers"])
+def test_print_only_token_accepted_on_print_gated_routes(path, print_only_token):
+    client = TestClient(app)
+    with client.websocket_connect(
+        path, headers={"Authorization": f"Bearer {print_only_token}"}
+    ):
+        pass
+    asyncio.run(engine.dispose())
+
+
+# --- Critical fix: the auth session must not be held for the socket's life --
+
+
+@pytest.mark.parametrize("path", WS_ROUTES)
+def test_authenticated_socket_releases_its_db_connection_before_accept(path, ws_token):
+    """The auth-only session must already be closed/released by the time
+    the handshake completes -- a `Depends(get_db)` session held for the
+    whole request would otherwise stay checked out of the pool,
+    idle-in-transaction, for as long as the socket stays open. With the
+    fix, no connection is checked out while the socket sits open and idle."""
+    client = TestClient(app)
+    with client.websocket_connect(
+        path, headers={"Authorization": f"Bearer {ws_token}"}
+    ):
+        assert engine.pool.checkedout() == 0
     asyncio.run(engine.dispose())

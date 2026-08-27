@@ -12,18 +12,24 @@ import logging
 
 import pytest
 
-from app.logging_config import DEV_FORMAT, JSONFormatter, RequestIdFilter, setup_logging
+from app.logging_config import (
+    DEV_FORMAT,
+    JSONFormatter,
+    RedactWebSocketTokenFilter,
+    RequestIdFilter,
+    setup_logging,
+)
 from app.request_context import request_id_var
 
 
-def _make_record(msg="hello world", exc_info=None) -> logging.LogRecord:
+def _make_record(msg="hello world", exc_info=None, args=()) -> logging.LogRecord:
     return logging.LogRecord(
         name="app.some.module",
         level=logging.INFO,
         pathname=__file__,
         lineno=42,
         msg=msg,
-        args=(),
+        args=args,
         exc_info=exc_info,
     )
 
@@ -44,6 +50,54 @@ def test_request_id_filter_uses_the_current_request_id():
         assert record.request_id == "req-abc123"
     finally:
         request_id_var.reset(token)
+
+
+def test_redact_ws_token_filter_redacts_uvicorn_error_style_ws_accept_line():
+    # uvicorn's WS accept/reject/close lines go through `uvicorn.error`,
+    # logged as `'%s - "WebSocket %s" [accepted]'` with 2 positional args
+    # (client_addr, path_with_query_string) -- see websockets_impl.py /
+    # wsproto_impl.py.
+    record = _make_record(
+        msg='%s - "WebSocket %s" [accepted]',
+        args=("127.0.0.1:12345", "/api/system/ws/jobs?token=pprs_supersecret123"),
+    )
+
+    assert RedactWebSocketTokenFilter().filter(record) is True
+
+    assert record.args[1] == "/api/system/ws/jobs?token=[redacted]"
+    assert "pprs_supersecret123" not in record.getMessage()
+
+
+def test_redact_ws_token_filter_redacts_uvicorn_access_style_line():
+    # Plain HTTP access lines go through `uvicorn.access`, logged as
+    # '%s - "%s %s HTTP/%s" %d' with 5 positional args, path 3rd.
+    record = _make_record(
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("127.0.0.1:12345", "GET", "/api/x?token=pprs_abc&other=1", "1.1", 200),
+    )
+
+    RedactWebSocketTokenFilter().filter(record)
+
+    assert record.args[2] == "/api/x?token=[redacted]&other=1"
+    assert "pprs_abc" not in record.getMessage()
+
+
+def test_redact_ws_token_filter_is_a_noop_when_no_token_present():
+    record = _make_record(
+        msg='%s - "WebSocket %s" [accepted]',
+        args=("127.0.0.1:12345", "/api/system/ws/jobs"),
+    )
+
+    RedactWebSocketTokenFilter().filter(record)
+
+    assert record.args[1] == "/api/system/ws/jobs"
+
+
+def test_redact_ws_token_filter_tolerates_records_with_no_args():
+    record = _make_record(msg="plain message, no args")
+
+    assert RedactWebSocketTokenFilter().filter(record) is True
+    assert record.getMessage() == "plain message, no args"
 
 
 def test_json_formatter_output_parses_as_json_with_expected_keys():

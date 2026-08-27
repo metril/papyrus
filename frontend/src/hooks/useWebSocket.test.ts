@@ -1,6 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useWebSocket } from './useWebSocket';
+import api from '../api/client';
+
+vi.mock('../api/client', () => ({
+  default: { get: vi.fn(() => Promise.resolve({ data: {} })) },
+}));
 
 /**
  * Minimal mock of the browser WebSocket, driven manually by tests via
@@ -56,6 +61,8 @@ function latestSocket(): MockWebSocket {
 beforeEach(() => {
   MockWebSocket.instances = [];
   vi.stubGlobal('WebSocket', MockWebSocket);
+  vi.mocked(api.get).mockClear();
+  vi.mocked(api.get).mockImplementation(() => Promise.resolve({ data: {} }));
 });
 
 afterEach(() => {
@@ -230,6 +237,74 @@ describe('useWebSocket', () => {
 
       act(() => window.dispatchEvent(new Event('online')));
       expect(MockWebSocket.instances).toHaveLength(1);
+    });
+  });
+
+  describe('auth-failure probe (coordinator ruling on F48 x F17/F84)', () => {
+    /** Fails the current socket and advances well past any possible backoff
+     * delay (max 30s) so the next reconnect attempt has definitely fired. */
+    function failAndAdvance() {
+      act(() => latestSocket().simulateClose());
+      act(() => vi.advanceTimersByTime(40_000));
+    }
+
+    it('does not probe /auth/me before the 3rd consecutive failed attempt', () => {
+      vi.useFakeTimers();
+      renderHook(() => useWebSocket({ url: '/x' }));
+
+      failAndAdvance(); // attempt 1
+      failAndAdvance(); // attempt 2
+      expect(api.get).not.toHaveBeenCalled();
+    });
+
+    it('probes /auth/me on every 3rd consecutive failed attempt', () => {
+      vi.useFakeTimers();
+      renderHook(() => useWebSocket({ url: '/x' }));
+
+      failAndAdvance(); // 1
+      failAndAdvance(); // 2
+      failAndAdvance(); // 3 -- probe
+      expect(api.get).toHaveBeenCalledTimes(1);
+      expect(api.get).toHaveBeenCalledWith('/auth/me');
+
+      failAndAdvance(); // 4
+      failAndAdvance(); // 5
+      expect(api.get).toHaveBeenCalledTimes(1);
+      failAndAdvance(); // 6 -- probe again
+      expect(api.get).toHaveBeenCalledTimes(2);
+    });
+
+    it('resets the streak on a successful open, so the count starts over from 0', () => {
+      vi.useFakeTimers();
+      renderHook(() => useWebSocket({ url: '/x' }));
+
+      failAndAdvance(); // 1
+      failAndAdvance(); // 2
+      act(() => latestSocket().simulateOpen()); // success -- streak resets
+
+      failAndAdvance(); // 1 again (not 3) -- no probe yet
+      failAndAdvance(); // 2 again
+      expect(api.get).not.toHaveBeenCalled();
+
+      failAndAdvance(); // 3 since the reset -- probe fires
+      expect(api.get).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores a rejected /auth/me probe (401 handled by the client interceptor, not here)', async () => {
+      vi.useFakeTimers();
+      vi.mocked(api.get).mockImplementation(() => Promise.reject(new Error('401')));
+      renderHook(() => useWebSocket({ url: '/x' }));
+
+      failAndAdvance();
+      failAndAdvance();
+      failAndAdvance(); // probe fires and rejects
+
+      expect(api.get).toHaveBeenCalledTimes(1);
+      // Let the rejected promise's .catch() settle -- an unhandled
+      // rejection would otherwise fail the test run.
+      await act(async () => {
+        await Promise.resolve();
+      });
     });
   });
 });

@@ -5,8 +5,8 @@ import time
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.ws import authenticate_websocket
-from app.database import get_db
+from app.auth.ws import authenticate_websocket, has_ws_permission
+from app.database import async_session, get_db
 from app.schemas import HealthResponse
 from app.services.ws_manager import ws_manager
 
@@ -144,15 +144,25 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
 
 @router.websocket("/ws/jobs")
-async def jobs_ws(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
+async def jobs_ws(websocket: WebSocket):
     """WebSocket for real-time print job status updates.
 
     F48: broadcasts carry full job metadata for every user, so the handshake
-    must be authenticated before accept() -- an unauthenticated or
-    cross-origin client is closed with 1008 and never joins the channel.
+    must be authenticated -- and, like the HTTP routes serving the same
+    data, permission-checked ("print") -- before accept(); an
+    unauthenticated, wrong-permission, or cross-origin client is closed
+    with 1008 and never joins the channel.
+
+    The auth lookup runs in its own short-lived session
+    (`async with async_session()`, not `Depends(get_db)`) so it closes
+    before accept() -- a request-scoped session would otherwise stay
+    checked out of the pool, idle-in-transaction, for the socket's entire
+    (potentially hours-long) lifetime, and a handful of open tabs would
+    exhaust the pool and block every other request.
     """
-    user = await authenticate_websocket(websocket, db)
-    if user is None:
+    async with async_session() as db:
+        identity = await authenticate_websocket(websocket, db)
+    if identity is None or not has_ws_permission(identity, "print"):
         await websocket.close(code=1008)
         return
     await ws_manager.connect("jobs", websocket)
@@ -164,10 +174,12 @@ async def jobs_ws(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
 
 
 @router.websocket("/ws/scans")
-async def scans_ws(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
-    """WebSocket for real-time scan list updates. See jobs_ws's F48 note."""
-    user = await authenticate_websocket(websocket, db)
-    if user is None:
+async def scans_ws(websocket: WebSocket):
+    """WebSocket for real-time scan list updates. See jobs_ws's F48 note
+    (permission "scan" here, and the same short-lived auth session)."""
+    async with async_session() as db:
+        identity = await authenticate_websocket(websocket, db)
+    if identity is None or not has_ws_permission(identity, "scan"):
         await websocket.close(code=1008)
         return
     await ws_manager.connect("scans", websocket)
@@ -179,10 +191,12 @@ async def scans_ws(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
 
 
 @router.websocket("/ws/printers")
-async def printers_ws(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
-    """WebSocket for real-time printer status updates. See jobs_ws's F48 note."""
-    user = await authenticate_websocket(websocket, db)
-    if user is None:
+async def printers_ws(websocket: WebSocket):
+    """WebSocket for real-time printer status updates. See jobs_ws's F48
+    note (permission "print" here, and the same short-lived auth session)."""
+    async with async_session() as db:
+        identity = await authenticate_websocket(websocket, db)
+    if identity is None or not has_ws_permission(identity, "print"):
         await websocket.close(code=1008)
         return
     await ws_manager.connect("printers", websocket)

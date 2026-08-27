@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from fastapi import WebSocket
@@ -7,6 +8,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.tokens import validate_token
 from app.models import User
+
+
+@dataclass
+class WebSocketIdentity:
+    """The resolved identity of an authenticated WS handshake.
+
+    `permissions` mirrors `request.state.token_permissions` from the HTTP
+    auth path (`app/auth/dependencies.py`): `None` means a session user --
+    full access, same as `require_permission` treats `token_permissions is
+    None` -- and a list means an API-token user, scoped to exactly those
+    permissions. See `has_ws_permission` below.
+    """
+
+    user: User
+    permissions: list[str] | None
 
 
 def _origin_allowed(ws: WebSocket) -> bool:
@@ -25,7 +41,7 @@ def _origin_allowed(ws: WebSocket) -> bool:
     return urlparse(origin).netloc == ws.headers.get("host", "")
 
 
-async def authenticate_websocket(ws: WebSocket, db: AsyncSession) -> User | None:
+async def authenticate_websocket(ws: WebSocket, db: AsyncSession) -> WebSocketIdentity | None:
     """Resolve the identity of an incoming WebSocket handshake, or None.
 
     Mirrors `app.auth.dependencies.get_current_user`'s resolution order
@@ -36,9 +52,16 @@ async def authenticate_websocket(ws: WebSocket, db: AsyncSession) -> User | None
     (`routers/auth.py`'s `/login`) works by populating the session cookie,
     which the session-cookie path below already honors.
 
+    `db` is expected to be a short-lived session the caller opens and closes
+    around just this call (e.g. `async with async_session() as db:`), never
+    a request-scoped `Depends(get_db)` session held for the socket's whole
+    lifetime -- see the callers in routers/system.py and routers/scanner.py
+    for why that matters.
+
     Never raises. Callers must treat None as "reject": close with code 1008
-    before returning, and always authenticate before `ws_manager.connect()`
-    (which calls `accept()`).
+    before returning, and always authenticate (and permission-check, via
+    `has_ws_permission`) before `ws_manager.connect()` (which calls
+    `accept()`).
     """
     if not _origin_allowed(ws):
         return None
@@ -54,11 +77,27 @@ async def authenticate_websocket(ws: WebSocket, db: AsyncSession) -> User | None
         if token is None:
             return None
         result = await db.execute(select(User).where(User.id == token.user_id))
-        return result.scalar_one_or_none()
+        user = result.scalar_one_or_none()
+        if user is None:
+            return None
+        return WebSocketIdentity(user=user, permissions=token.permissions)
 
     user_id = ws.session.get("user_id")
     if user_id:
         result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
-        return result.scalar_one_or_none()
+        user = result.scalar_one_or_none()
+        if user is None:
+            return None
+        return WebSocketIdentity(user=user, permissions=None)
 
     return None
+
+
+def has_ws_permission(identity: WebSocketIdentity, permission: str) -> bool:
+    """True if `identity` may use a channel gated on `permission`.
+
+    Mirrors `app.auth.dependencies.require_permission`: a session user
+    (`permissions is None`) always passes; an API-token user must have the
+    permission in their token's scoped permission list.
+    """
+    return identity.permissions is None or permission in identity.permissions

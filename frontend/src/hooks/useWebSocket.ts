@@ -1,4 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
+import api from '../api/client';
 import type { WSMessage } from '../types';
 
 interface UseWebSocketOptions {
@@ -11,6 +12,18 @@ interface UseWebSocketOptions {
 // its last (10th, hard-ceiling) attempt. Capping the delay and dropping the
 // ceiling means a socket keeps retrying indefinitely, at most 30s apart.
 const MAX_RECONNECT_DELAY_MS = 30_000;
+
+// A pre-accept close() (F48's auth/Origin rejection) reaches the browser as
+// a failed handshake indistinguishable from a network blip -- onerror then
+// onclose 1006, same as a dropped connection. Without a way to tell them
+// apart, an expired session would reconnect forever (backoff now has no
+// ceiling) with the realtime UI silently dead and nothing prompting the
+// user to log back in. Every 3rd consecutive failed attempt with no
+// intervening onopen, ping the shared axios client's /auth/me: its response
+// interceptor (api/client.ts) redirects to login on a 401, which breaks the
+// loop for a genuine auth failure while leaving real network blips to keep
+// retrying on their own backoff, uninterrupted.
+const AUTH_PROBE_ATTEMPT_INTERVAL = 3;
 
 export function useWebSocket({
   url,
@@ -79,6 +92,11 @@ export function useWebSocket({
         reconnectInterval * 2 ** reconnectCount.current,
       );
       reconnectCount.current++;
+      if (reconnectCount.current % AUTH_PROBE_ATTEMPT_INTERVAL === 0) {
+        // Fire-and-forget -- only the interceptor's side effect on 401
+        // matters here, not the response itself.
+        api.get('/auth/me').catch(() => {});
+      }
       reconnectTimer.current = setTimeout(connectImpl, delay);
     };
 
