@@ -204,8 +204,14 @@ def _encrypt_secrets(old_config: dict | None, new_config: dict) -> dict:
     literally. `old_config` is None on creation, where a submitted sentinel
     has nothing to resolve to and is simply dropped. Recurses into nested
     dicts, mirroring `_redact_secrets`.
+
+    F5 legacy ruling: a kept value that isn't already a valid Fernet token
+    -- a legacy plaintext secret stored before encryption-at-rest was added
+    for its field -- is encrypted here rather than carried over as-is, so
+    any PUT that merely keeps a secret (the common case: editing an
+    unrelated field) opportunistically migrates it to encrypted-at-rest.
     """
-    from app.services.crypto import encrypt_value
+    from app.services.crypto import encrypt_value, is_encrypted
 
     old_config = old_config or {}
     result: dict = {}
@@ -218,7 +224,8 @@ def _encrypt_secrets(old_config: dict | None, new_config: dict) -> dict:
         elif _is_secret_key(key):
             if value == _SECRET_SENTINEL:
                 if key in old_config:
-                    result[key] = old_config[key]
+                    existing = old_config[key]
+                    result[key] = existing if is_encrypted(existing) else encrypt_value(existing)
                 # else: sentinel with nothing stored to keep -- drop it
                 # rather than persist the literal placeholder string.
             elif value:

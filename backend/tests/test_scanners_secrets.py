@@ -145,3 +145,56 @@ async def test_sentinel_on_create_with_nothing_stored_is_dropped(db, admin_clien
     await db.rollback()
     scanner = await db.get(Scanner, scanner_id)
     assert "ftp_password" not in (scanner.post_scan_config or {})
+
+
+# --------------------------------------------------------------------------- #
+# F5 legacy ruling: a scanner row created before secrets-at-rest was added
+# (seeded directly, since the API always encrypts on write) still holds a
+# plaintext ftp_password. GET must mask it exactly like an encrypted one,
+# and keeping it via "*set*" must migrate it to a real Fernet token.
+# --------------------------------------------------------------------------- #
+async def test_get_masks_legacy_plaintext_secret_too(db, admin_client):
+    """`_scanner_response` redacts by key name, not by value format -- a
+    legacy (never-encrypted) secret must be masked exactly like an
+    encrypted one, not accidentally returned verbatim."""
+    scanner = Scanner(
+        name="Legacy FTP Scanner",
+        device="test:device:legacy",
+        post_scan_config={"ftp_host": "ftp.example.com", "ftp_password": "legacy-plaintext"},
+    )
+    db.add(scanner)
+    await db.commit()
+
+    resp = await admin_client.get("/api/scanners")
+    scanner_out = next(s for s in resp.json() if s["name"] == "Legacy FTP Scanner")
+    assert scanner_out["post_scan_config"]["ftp_password"] == "*set*"
+    assert "legacy-plaintext" not in resp.text
+
+
+async def test_patch_with_sentinel_migrates_legacy_plaintext_to_encrypted(db, admin_client):
+    """A PUT/PATCH that merely keeps a secret via the "*set*" sentinel (the
+    common case -- editing some other field) opportunistically re-encrypts
+    it if it wasn't already a valid Fernet token, migrating it off
+    cleartext instead of carrying it over unchanged forever."""
+    scanner = Scanner(
+        name="Legacy FTP Scanner 2",
+        device="test:device:legacy2",
+        post_scan_config={"ftp_host": "old.example.com", "ftp_password": "legacy-plaintext-2"},
+    )
+    db.add(scanner)
+    await db.commit()
+    await db.refresh(scanner)
+    scanner_id = scanner.id
+
+    patch = await admin_client.patch(
+        f"/api/scanners/{scanner_id}",
+        json={"post_scan_config": {"ftp_password": "*set*", "ftp_host": "new.example.com"}},
+    )
+    assert patch.status_code == 200
+    assert patch.json()["post_scan_config"]["ftp_password"] == "*set*"
+
+    await db.rollback()
+    refreshed = await db.get(Scanner, scanner_id)
+    stored = refreshed.post_scan_config["ftp_password"]
+    assert stored != "legacy-plaintext-2"  # no longer bare cleartext
+    assert decrypt_value(stored) == "legacy-plaintext-2"  # decrypts to the same value

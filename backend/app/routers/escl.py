@@ -29,23 +29,51 @@ from app.services.ws_manager import ws_manager
 _log = logging.getLogger(__name__)
 
 
+def _is_lan_address(host: str) -> bool:
+    """Whether `host` parses as a private/loopback/link-local address.
+    Unparseable input is treated as not-LAN (fail closed)."""
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return addr.is_private or addr.is_loopback or addr.is_link_local
+
+
 def _require_lan_client(request: Request) -> None:
-    """Reject any request whose source address isn't a plausible LAN host
-    (F3). The eSCL router has no auth of its own by design — real AirScan
-    clients (Apple/Mopria/WSD-eSCL) hit it directly with no credentials — so
-    without this, anyone who can reach the app's URL at all could drive a
-    scan and read back whatever's on the platen. An unparseable/missing
-    client address is rejected the same way as a public one: fail closed.
+    """Reject any request that doesn't resolve to a plausible LAN host (F3).
+
+    The eSCL router has no auth of its own by design — real AirScan clients
+    (Apple/Mopria/WSD-eSCL) hit it directly with no credentials — so without
+    this, anyone who can reach the app's URL at all could drive a scan and
+    read back whatever's on the platen.
+
+    The deployment fronts the whole app with Traefik on the same host
+    (`network_mode: host`, uvicorn started with no `--proxy-headers`), so
+    `request.client.host` — the raw TCP peer — is loopback/private for
+    *every* request that reaches this process, proxied or not; on its own
+    it can never distinguish a LAN caller from one relayed from the public
+    internet. So: when the peer is loopback/private (i.e. it could
+    plausibly be the trusted local proxy) AND an `X-Forwarded-For` header is
+    present, the *rightmost* XFF entry — the one appended by that single
+    trusted proxy hop, everything before it is client-supplied and
+    untrustworthy — is evaluated instead of the peer. A peer that isn't
+    loopback/private is never trusted to supply XFF at all (nothing stops a
+    direct internet caller from setting that header itself), so its own
+    address is what's checked, XFF or not. Unparseable/missing host, or an
+    XFF whose rightmost entry isn't LAN, → 403 either way: fail closed.
     """
     host = request.client.host if request.client else None
     if host is None:
         raise HTTPException(status_code=403, detail="Forbidden")
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
-        raise HTTPException(status_code=403, detail="Forbidden") from None
-    if not (addr.is_private or addr.is_loopback or addr.is_link_local):
+
+    if not _is_lan_address(host):
         raise HTTPException(status_code=403, detail="Forbidden")
+
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        rightmost = xff.rsplit(",", 1)[-1].strip()
+        if not _is_lan_address(rightmost):
+            raise HTTPException(status_code=403, detail="Forbidden")
 
 
 router = APIRouter(prefix="/eSCL", dependencies=[Depends(_require_lan_client)])

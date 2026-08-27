@@ -247,6 +247,55 @@ async def test_loopback_source_ip_is_allowed(client):
     assert resp.status_code == 503  # disabled, not 403 -- LAN check passed
 
 
+# --------------------------------------------------------------------------- #
+# F3 coordinator ruling: the deployment fronts the whole app with Traefik on
+# the same host (network_mode: host), so request.client.host is always
+# loopback/private for every proxied request -- the LAN check alone can
+# never tell a real LAN caller from one relayed from the internet. When the
+# TCP peer is loopback/private AND an X-Forwarded-For header is present, the
+# *rightmost* XFF entry (appended by the single trusted proxy hop) is
+# evaluated instead of the peer; with no XFF, the peer (already known LAN)
+# is used as before. A non-LAN peer is never trusted to supply XFF at all.
+# --------------------------------------------------------------------------- #
+async def test_xff_public_rightmost_behind_trusted_peer_is_403(client):
+    # A real, globally-routable address (Google Public DNS), not an RFC 5737
+    # documentation address (e.g. 203.0.113.0/24) -- see public_client's own
+    # docstring: Python's ipaddress.is_private treats those reserved,
+    # non-routable ranges as private too, which would make this pass for
+    # the wrong reason.
+    resp = await client.get(
+        "/eSCL/ScannerCapabilities",
+        headers={"X-Forwarded-For": "8.8.8.8"},
+    )
+    assert resp.status_code == 403
+
+
+async def test_xff_private_rightmost_behind_trusted_peer_is_allowed(client):
+    # Rightmost entry (192.168.1.20) is private -- allowed, regardless of
+    # what the client-supplied earlier hop (1.2.3.4) claims.
+    resp = await client.get(
+        "/eSCL/ScannerCapabilities",
+        headers={"X-Forwarded-For": "1.2.3.4, 192.168.1.20"},
+    )
+    assert resp.status_code == 503  # disabled, not 403 -- LAN check passed
+
+
+async def test_xff_from_untrusted_public_peer_is_ignored_and_still_403(public_client):
+    # The peer itself (8.8.8.8, from the public_client fixture) isn't
+    # loopback/private, so it's never trusted to supply XFF at all -- a
+    # private-looking XFF value must not let it through.
+    resp = await public_client.get(
+        "/eSCL/ScannerCapabilities",
+        headers={"X-Forwarded-For": "192.168.1.20"},
+    )
+    assert resp.status_code == 403
+
+
+async def test_no_xff_header_private_peer_is_allowed(client):
+    resp = await client.get("/eSCL/ScannerCapabilities")
+    assert resp.status_code == 503  # disabled, not 403 -- LAN check passed
+
+
 async def test_second_concurrent_scan_job_is_503(db, client, monkeypatch, _captured_tasks):
     await _enable_escl(db)
 

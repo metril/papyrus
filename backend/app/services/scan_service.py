@@ -19,10 +19,39 @@ _DEFAULT_SCAN_DIR = "/app/data/scans"
 # a full scan can legitimately take a while at high resolution.
 _LIST_TIMEOUT_SECONDS = 20
 _SCAN_TIMEOUT_SECONDS = 300
+# A multi-page ADF batch can legitimately run far longer than a single scan
+# (many pages at high resolution); the PDF merge step is CPU-bound and
+# shouldn't need anywhere near as long.
+_BATCH_SCAN_TIMEOUT_SECONDS = 900
+_PDF_MERGE_TIMEOUT_SECONDS = 300
 
 
 class ScanError(PapyrusError):
     status_code = 502
+
+
+def _scanimage_match_candidates(device: str) -> list[str]:
+    """Return substrings to search `scanimage -L`'s output for, given a
+    stored `Scanner.device` string (F42 fix-up).
+
+    Most device strings (`brother4:...`, plain SANE device paths) appear in
+    `scanimage -L`'s output verbatim, between backticks -- register_brscan4
+    parses them out with exactly that assumption. `airscan:` devices are the
+    exception: `probe_scanner_ip`'s manual eSCL-port-probing fallback stores
+    them as `airscan:{prefix}:{label}:{url}` (the URL is needed later to
+    reconstruct airscan.conf), but `_write_airscan_device` registers the
+    device in sane-airscan under just its label, so `scanimage -L` actually
+    prints `airscan:{prefix}:{label}` with no URL suffix at all -- matching
+    on the full stored string alone made a perfectly working eSCL scanner
+    report unavailable. `maxsplit=3` stops after the third colon so a colon
+    inside the URL itself (`http://...`) doesn't fragment it.
+    """
+    candidates = [device]
+    if device.startswith("airscan:"):
+        parts = device.split(":", 3)
+        if len(parts) >= 3:
+            candidates.append(":".join(parts[:3]))
+    return candidates
 
 
 class ScanService:
@@ -54,10 +83,11 @@ class ScanService:
     async def check_device(self, device: str | None = None) -> dict:
         """Check if the scanner device is available.
 
-        Availability is derived solely from the configured device name being
-        present in `scanimage -L`'s output (F42) -- `scanimage -L` exits 0
-        even when it finds no scanners at all, so a bare `returncode == 0`
-        check used to report "available" for every device, including an
+        Availability is derived solely from the configured device string (or
+        its airscan label, see `_scanimage_match_candidates`) being present
+        in `scanimage -L`'s output (F42) -- `scanimage -L` exits 0 even when
+        it finds no scanners at all, so a bare `returncode == 0` check used
+        to report "available" for every device, including an
         empty/unconfigured one.
         """
         _device = device if device is not None else self._scanner_device
@@ -77,10 +107,10 @@ class ScanService:
             raise ScannerBusyError("Timed out listing scanner devices")
 
         output = stdout.decode() + stderr.decode()
-        device_name = _device.split(":")[-1].strip()
+        candidates = _scanimage_match_candidates(_device) if _device else []
 
         return {
-            "available": bool(device_name) and device_name in output,
+            "available": any(c in output for c in candidates),
             "device": _device,
             "output": output.strip(),
         }
@@ -260,6 +290,29 @@ class ScanService:
                 if not keep_tiff and os.path.exists(tiff_file):
                     os.unlink(tiff_file)
 
+    @staticmethod
+    async def _await_with_timeout(coro, process: asyncio.subprocess.Process,
+                                   timeout: float, timeout_message: str):
+        """Await `coro` (which itself awaits/reads from `process`), bounded
+        by `timeout` and cancellation-safe (F41/F110): on a timeout OR the
+        calling task being cancelled (e.g. an eSCL client cancelling the
+        job, or a future caller of scan_batch), `process` is killed and
+        reaped before the exception propagates, instead of being left
+        running unreaped -- a hung subprocess otherwise holds `self._lock`
+        forever, wedging every subsequent scan (web UI and eSCL alike) with
+        "Scanner is busy" until the process restarts.
+        """
+        try:
+            return await asyncio.wait_for(coro, timeout=timeout)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise ScanError(timeout_message)
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
+
     async def _read_scan_output(
         self,
         process: asyncio.subprocess.Process,
@@ -267,10 +320,8 @@ class ScanService:
         progress_callback: Callable[[str, float], Awaitable[None]] | None,
     ) -> list[str]:
         """Read `process`'s stderr for progress lines and wait for exit,
-        bounded by `_SCAN_TIMEOUT_SECONDS` (F41) and cancellation-safe (F110):
-        on a timeout OR the caller's task being cancelled (e.g. an eSCL
-        client cancelling the job), the child is killed and reaped before the
-        exception propagates, instead of being left running unreaped.
+        bounded by `_SCAN_TIMEOUT_SECONDS` (F41) and cancellation-safe (F110)
+        via `_await_with_timeout`.
         """
 
         async def _read() -> list[str]:
@@ -285,16 +336,9 @@ class ScanService:
             await process.wait()
             return stderr_lines
 
-        try:
-            return await asyncio.wait_for(_read(), timeout=_SCAN_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            raise ScanError("Scan timed out")
-        except asyncio.CancelledError:
-            process.kill()
-            await process.wait()
-            raise
+        return await self._await_with_timeout(
+            _read(), process, _SCAN_TIMEOUT_SECONDS, "Scan timed out"
+        )
 
     async def scan_batch(
         self,
@@ -339,14 +383,18 @@ class ScanService:
 
             success = False
             try:
-                if process.stderr:
-                    async for line in process.stderr:
-                        text = line.decode().strip()
-                        match = re.search(r"Progress: (\d+\.?\d*)%", text)
-                        if match and progress_callback:
-                            await progress_callback(scan_id, float(match.group(1)))
+                async def _read_batch() -> None:
+                    if process.stderr:
+                        async for line in process.stderr:
+                            text = line.decode().strip()
+                            match = re.search(r"Progress: (\d+\.?\d*)%", text)
+                            if match and progress_callback:
+                                await progress_callback(scan_id, float(match.group(1)))
+                    await process.wait()
 
-                await process.wait()
+                await self._await_with_timeout(
+                    _read_batch(), process, _BATCH_SCAN_TIMEOUT_SECONDS, "Batch scan timed out"
+                )
 
                 # scanimage returns non-zero when ADF runs out of paper, which is expected
                 # Check if we got any pages
@@ -366,7 +414,10 @@ class ScanService:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                await pdf_process.wait()
+                await self._await_with_timeout(
+                    pdf_process.wait(), pdf_process,
+                    _PDF_MERGE_TIMEOUT_SECONDS, "PDF merge timed out",
+                )
 
                 if pdf_process.returncode != 0:
                     raise ScanError("Failed to merge pages into PDF")
@@ -573,16 +624,24 @@ async def run_post_scan_actions(
 
     if config.get("ftp_host"):
         try:
-            from app.services.crypto import encrypt_value
+            from app.services.crypto import decrypt_value_lenient, encrypt_value
             from app.services.ftp_service import ftp_service
             host = config["ftp_host"]
             port = int(config.get("ftp_port", 21))
             user = config.get("ftp_username", "")
-            # ftp_password is stored encrypted at rest (F5) -- ftp_service's
-            # upload_* helpers expect an already-encrypted value and decrypt
-            # it themselves. An empty/absent password is encrypted here on
-            # the fly so decrypt_value() still gets a valid token.
-            pwd_enc = config.get("ftp_password") or encrypt_value("")
+            # ftp_password is stored encrypted at rest (F5), but a scanner
+            # configured before that fix -- or whose secret hasn't been
+            # re-saved via PUT since -- may still hold the legacy plaintext
+            # value. decrypt_value_lenient() falls back to treating a
+            # non-Fernet value as plaintext instead of raising InvalidToken
+            # and silently dropping this whole delivery action; the result
+            # is re-encrypted fresh so ftp_service's own (strict)
+            # decrypt_value() call always succeeds, whichever case this was.
+            stored_password = config.get("ftp_password") or ""
+            plaintext_password = (
+                decrypt_value_lenient(stored_password) if stored_password else ""
+            )
+            pwd_enc = encrypt_value(plaintext_password)
             remote_dir = config.get("ftp_remote_dir", "/")
             protocol = config.get("ftp_protocol", "ftp")
             if protocol == "sftp":
