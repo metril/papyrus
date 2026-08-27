@@ -8,6 +8,14 @@ avahi-daemon --daemonize --no-chroot --no-drop-root || echo "Warning: avahi-daem
 # Start CUPS daemon
 cupsd
 
+# Generate a per-container shared secret for the internal network-ingest
+# endpoint (F7) and hand it to both sides: the app reads it from the
+# environment, and the papyrus CUPS backend script reads it from this file at
+# request time (it runs as a separate process CUPS invokes, not a child of
+# this shell).
+export PAPYRUS_INGEST_TOKEN=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+mkdir -p /run/papyrus && printf '%s' "$PAPYRUS_INGEST_TOKEN" > /run/papyrus/ingest.token && chmod 600 /run/papyrus/ingest.token
+
 # Wait for CUPS to be ready
 sleep 2
 

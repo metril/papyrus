@@ -4,10 +4,9 @@ import os
 import re
 import secrets
 import shutil
-import sys
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -15,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import FileResponse
 
 from app.auth.dependencies import get_current_user, require_permission
+from app.config import settings
 from app.database import get_db
 from app.exceptions import ExternalServiceError, PrinterUnavailableError
 from app.models import Printer, PrintJob, User
@@ -60,6 +60,12 @@ _PIN_RE = re.compile(r"^[0-9]{4,10}$")  # [0-9], not \d — \d is Unicode-aware
 # (F68) — a job's 4-digit PIN space (10,000 values) is otherwise sweepable by
 # an authenticated printer user in well under an hour.
 _release_pin_throttle = Throttle(max_failures=5, lockout_seconds=300)
+
+# F70: network ingest used to stream with max_bytes=sys.maxsize (no real cap),
+# so a huge job wrote unbounded data to disk before failing the INSERT on the
+# (now-fixed) int32 file_size overflow. 1 GiB comfortably covers any real job
+# from this device class and turns an oversize job into a clean 413 mid-stream.
+INGEST_MAX_BYTES = 1024 * 1024 * 1024
 
 
 async def _create_print_job_from_upload(
@@ -271,7 +277,11 @@ async def get_default_printer(db: AsyncSession):
     result = await db.execute(
         select(Printer).where(Printer.is_default.is_(True), Printer.is_network_queue.is_(False))
     )
-    return result.scalar_one_or_none()
+    # F11: .first() rather than scalar_one_or_none() -- a partial unique index
+    # now prevents two rows from persisting is_default=true, but this stays
+    # defensive against any pre-existing/racy duplicate rather than 500ing
+    # every print path with MultipleResultsFound.
+    return result.scalars().first()
 
 
 async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
@@ -354,6 +364,7 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
 @router.post("/internal/ingest", response_model=PrintJobResponse, status_code=201)
 async def ingest_network_job(
     request: Request,
+    response: Response,
     file: UploadFile = File(...),
     title: str = Form(default="Untitled"),
     username: str = Form(default="unknown"),
@@ -361,25 +372,51 @@ async def ingest_network_job(
     duplex: bool = Form(default=False),
     media: str = Form(default="A4"),
     queue_name: str = Form(default=""),
+    ingest_key: str = Form(default=""),
     db: AsyncSession = Depends(get_db),
 ):
     """Internal endpoint for the CUPS backend to submit network print jobs.
 
-    Only accessible from localhost (called by the papyrus CUPS backend script).
+    Reachable only from localhost (F7): with `network_mode: host` and a
+    same-host reverse proxy, a request forwarded from anywhere can present
+    peer IP 127.0.0.1, so when `PAPYRUS_INGEST_TOKEN` is configured a
+    matching `X-Papyrus-Ingest-Token` header is required too.
     """
     client_host = request.client.host if request.client else ""
     if client_host not in ("127.0.0.1", "::1"):
         raise HTTPException(status_code=403, detail="Internal endpoint only")
 
+    if settings.ingest_token:
+        provided_token = request.headers.get("X-Papyrus-Ingest-Token", "")
+        if not secrets.compare_digest(provided_token, settings.ingest_token):
+            raise HTTPException(status_code=403, detail="Internal endpoint only")
+
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
+
+    # F91: the CUPS backend script retries an unanswered request up to 10x,
+    # which can duplicate a job that was actually committed before its
+    # response reached the script. ingest_key (boot_id:printer:job_id) is
+    # stable across retries of the same physical job, so a repeat is served
+    # the already-created job back instead of streaming the file again and
+    # inserting a duplicate (potentially auto-released) row.
+    if ingest_key:
+        existing = await db.execute(
+            select(PrintJob).where(PrintJob.ingest_key == ingest_key)
+        )
+        existing_job = existing.scalar_one_or_none()
+        if existing_job is not None:
+            response.status_code = 200
+            return existing_job
 
     from app.routers.settings import get_setting
     _upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
     upload_path = get_upload_path(file.filename, upload_dir=_upload_dir)
-    # No configured size cap for network jobs (internal, localhost-only endpoint);
-    # stream unbounded to preserve prior behavior while avoiding full in-RAM buffering.
-    file_size = await save_upload_streaming(file, upload_path, max_bytes=sys.maxsize)
+    # F70: was max_bytes=sys.maxsize (no cap at all) -- a >2 GiB job would be
+    # written to disk in full and only then fail the INSERT on the file_size
+    # int32 overflow. Cap streaming at INGEST_MAX_BYTES so an oversize job
+    # 413s mid-stream instead.
+    file_size = await save_upload_streaming(file, upload_path, max_bytes=INGEST_MAX_BYTES)
     if not file_size:
         cleanup_file(upload_path)
         raise HTTPException(status_code=400, detail="Empty file")
@@ -406,6 +443,7 @@ async def ingest_network_job(
         media=media,
         source_type="network",
         printer_id=printer.id if printer else None,
+        ingest_key=ingest_key or None,
     )
     db.add(job)
     await db.commit()

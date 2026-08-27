@@ -134,6 +134,29 @@ async def test_poll_fetches_status_per_printer_and_broadcasts_on_change(monkeypa
     assert broadcast.await_count == 2
 
 
+async def test_poll_queries_the_release_queue_not_the_hold_queue(monkeypatch, broadcast):
+    """Regression (F34): a physical printer's status must be read from its
+    '<cups_name>_release' queue -- the only one bound to the real device.
+    The printer's own cups_name is a fake papyrus:/ hold queue that always
+    reports idle/no-markers regardless of the device's actual state."""
+    seen_names: list[str] = []
+
+    class FakeCupsService:
+        def __init__(self, printer_name: str):
+            seen_names.append(printer_name)
+            self.printer_name = printer_name
+
+        async def get_printer_status(self) -> dict:
+            return _status(3)
+
+    monkeypatch.setattr("app.services.cups_service.CupsService", FakeCupsService)
+    printers = [SimpleNamespace(id=1, cups_name="brother1")]
+
+    await main_module._poll_printer_statuses(printers)
+
+    assert seen_names == ["brother1_release"]
+
+
 async def test_poll_skips_broadcast_when_no_physical_printers(monkeypatch, broadcast):
     class FakeCupsService:
         def __init__(self, printer_name: str):
@@ -162,7 +185,9 @@ async def test_poll_survives_one_printer_erroring_and_still_broadcasts_others(
             self.printer_name = printer_name
 
         async def get_printer_status(self) -> dict:
-            if self.printer_name == "brotherA":
+            # F34: status is now queried from the '_release' queue, not the
+            # printer's own (fake hold-queue) cups_name.
+            if self.printer_name == "brotherA_release":
                 raise RuntimeError("cupsd connection refused")
             return _status(4)
 

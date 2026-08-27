@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     # Development
     dev_mode: bool = False
 
+    # Shared secret the papyrus CUPS backend script sends on every
+    # /api/jobs/internal/ingest POST (F7). Generated per-container by
+    # docker/entrypoint.sh; empty (default) only in local/dev setups that
+    # never run the real CUPS backend against this endpoint.
+    ingest_token: str = ""
+
     # CORS: comma-separated list of allowed origins. Empty (default) means
     # same-origin only — CORSMiddleware is not added at all, since the app
     # is served from behind a reverse proxy on the same origin.

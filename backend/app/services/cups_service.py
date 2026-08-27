@@ -213,7 +213,11 @@ async def get_default_printer(db: AsyncSession):
     result = await db.execute(
         select(Printer).where(Printer.is_default.is_(True), Printer.is_network_queue.is_(False))
     )
-    return result.scalar_one_or_none()
+    # F11: .first() rather than scalar_one_or_none() -- defensive against a
+    # duplicate is_default=true row surviving despite the partial unique
+    # index, so a race never 500s every printer/status/print path with
+    # MultipleResultsFound.
+    return result.scalars().first()
 
 
 async def get_default_printer_name(db: AsyncSession) -> str:
@@ -224,9 +228,14 @@ async def get_default_printer_name(db: AsyncSession) -> str:
     this queue instead of its `_release` sibling re-enters the CUPS backend
     script and ingest pipeline (F9); use ``get_default_release_queue_name``
     for anything that submits/cancels an actual print.
+
+    Raises:
+        PrinterUnavailableError: if no default physical printer is configured.
     """
     printer = await get_default_printer(db)
-    return printer.cups_name if printer else ""
+    if printer is None:
+        raise PrinterUnavailableError("No default printer configured")
+    return printer.cups_name
 
 
 async def get_default_release_queue_name(db: AsyncSession) -> str:

@@ -25,6 +25,9 @@ class _FakeScalars:
     def __iter__(self):
         return iter(self._items)
 
+    def first(self):
+        return self._items[0] if self._items else None
+
 
 class _FakeQueryResult:
     def __init__(self, items):
@@ -46,6 +49,7 @@ class _FakeDB:
         self.printers = printers or []
         self.get_return = get_return
         self.committed = 0
+        self.rolled_back = 0
         self.added = None
         self.refreshed = None
 
@@ -61,6 +65,9 @@ class _FakeDB:
     async def commit(self):
         self.committed += 1
 
+    async def rollback(self):
+        self.rolled_back += 1
+
     async def refresh(self, obj):
         self.refreshed = obj
 
@@ -73,7 +80,10 @@ async def test_printer_response_includes_device_info_fields(monkeypatch):
     status = {"state": 3, "state_message": "Idle", "accepting_jobs": True}
 
     async def fake_cups_status(cups_name: str) -> dict:
-        assert cups_name == "brother"
+        # F34: a physical printer's status/toner is read from its
+        # '_release' queue -- the only one bound to the real device -- not
+        # its own cups_name, which is the fake papyrus:/ hold queue.
+        assert cups_name == "brother_release"
         return status
 
     monkeypatch.setattr(printers_router, "_cups_status", fake_cups_status)
@@ -99,7 +109,31 @@ async def test_printer_response_includes_device_info_fields(monkeypatch):
     assert resp["cups_status"] == status
     assert resp["id"] == 1
     assert resp["display_name"] == "Brother"
-    assert resp["uri"] == "ipp://192.168.1.50/ipp/print"
+
+
+async def test_printer_response_network_queue_uses_own_cups_name(monkeypatch):
+    """A network (hold-only) queue has no '_release' sibling -- it must keep
+    reporting status from its own cups_name."""
+    status = {"state": 3, "state_message": "Idle", "accepting_jobs": True}
+
+    async def fake_cups_status(cups_name: str) -> dict:
+        assert cups_name == "lobby"
+        return status
+
+    monkeypatch.setattr(printers_router, "_cups_status", fake_cups_status)
+
+    printer = Printer(
+        id=9,
+        display_name="Lobby",
+        cups_name="lobby",
+        uri="",
+        is_network_queue=True,
+        created_at=datetime(2026, 7, 5, tzinfo=timezone.utc),
+    )
+
+    resp = await printers_router._printer_response(printer)
+
+    assert resp["cups_status"] == status
 
 
 async def test_printer_response_device_info_defaults_to_none(monkeypatch):
@@ -746,3 +780,94 @@ async def test_add_network_queue_printer_skips_enrichment(monkeypatch):
 
     assert result["make_and_model"] is None
     assert db.committed == 1
+
+
+# --------------------------------------------------------------------------- #
+# POST /printers (reserved name, default promotion, CUPS-failure rollback)
+# --------------------------------------------------------------------------- #
+async def test_add_printer_reserved_name_is_400(monkeypatch):
+    """Regression (F113): a display name that sanitizes to the built-in
+    'Papyrus' queue name would collide with cups_admin.DEFAULT_QUEUE_NAME --
+    reconfiguring/deleting it would clobber the zero-config AirPrint queue."""
+    db = _FakeDB(printers=[])
+    body = printers_router.PrinterCreate(
+        display_name=printers_router.cups_admin.DEFAULT_QUEUE_NAME,
+        uri="", is_network_queue=False,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await printers_router.add_printer(body=body, db=db, _user=None)
+
+    assert exc_info.value.status_code == 400
+    assert db.added is None
+
+
+async def test_add_first_physical_printer_becomes_default(monkeypatch):
+    """Regression (F35): the first printer added must become the default, or
+    release resolves to an empty queue name."""
+    monkeypatch.setattr(printers_router, "_cups_status", _fake_cups_status)
+
+    async def fake_add_physical_printer(cups_name: str, display_name: str, uri: str) -> None:
+        return None
+
+    monkeypatch.setattr(
+        printers_router.cups_admin, "add_physical_printer", fake_add_physical_printer
+    )
+
+    db = _FakeDB(printers=[])
+    body = printers_router.PrinterCreate(display_name="First", uri="", is_network_queue=False)
+
+    result = await printers_router.add_printer(body=body, db=db, _user=None)
+
+    assert result["is_default"] is True
+
+
+async def test_add_network_queue_is_never_default(monkeypatch):
+    """A network (hold-only) queue must never become the default, even as
+    the very first printer added -- set_default_printer already rejects it,
+    and add_printer must not silently mark one default anyway."""
+    monkeypatch.setattr(printers_router, "_cups_status", _fake_cups_status)
+
+    async def fake_add_network_queue(cups_name: str, display_name: str) -> None:
+        return None
+
+    monkeypatch.setattr(printers_router.cups_admin, "add_network_queue", fake_add_network_queue)
+
+    db = _FakeDB(printers=[])
+    body = printers_router.PrinterCreate(display_name="Hold Only", is_network_queue=True)
+
+    result = await printers_router.add_printer(body=body, db=db, _user=None)
+
+    assert result["is_default"] is False
+
+
+async def test_add_printer_cups_failure_rolls_back_and_raises_external_service_error(
+    monkeypatch,
+):
+    """Regression (F33): an lpadmin failure (now a RuntimeError from _run)
+    must roll back the DB row and surface a curated ExternalServiceError,
+    not leave a committed row with no working CUPS queue behind it."""
+    monkeypatch.setattr(printers_router, "_cups_status", _fake_cups_status)
+
+    async def fake_add_physical_printer(cups_name: str, display_name: str, uri: str) -> None:
+        raise RuntimeError("lpadmin 'Broken' failed (rc=1): unknown scheme")
+
+    monkeypatch.setattr(
+        printers_router.cups_admin, "add_physical_printer", fake_add_physical_printer
+    )
+
+    db = _FakeDB(printers=[])
+    body = printers_router.PrinterCreate(
+        display_name="Broken", uri="garbage://uri", is_network_queue=False
+    )
+
+    with pytest.raises(printers_router.ExternalServiceError) as exc_info:
+        await printers_router.add_printer(body=body, db=db, _user=None)
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.detail == "Could not create the CUPS queue."
+    # Never leak the raw lpadmin stderr into the client-visible detail.
+    assert "lpadmin" not in exc_info.value.detail
+    assert db.rolled_back == 1
+    # The row must never have been committed.
+    assert db.committed == 0

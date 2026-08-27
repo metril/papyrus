@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import logging
 import os
 import re
@@ -61,12 +62,28 @@ def _ensure_airscan_config(scanner_name: str, device: str, post_scan_config: dic
     _write_airscan_device(name, url, protocol)
 
 
+# F36: characters that could inject an extra config line/device entry (a
+# newline) or break out of the quoted name (a quote) or the bracketed
+# [devices] section header (brackets) if ever written unescaped.
+_UNSAFE_AIRSCAN_CHARS = ("\n", '"', "[", "]")
+
+
+def _reject_unsafe_airscan_chars(value: str, field: str) -> None:
+    if any(ch in value for ch in _UNSAFE_AIRSCAN_CHARS):
+        raise ValueError(f"invalid character in {field}")
+
+
 def _write_airscan_device(name: str, url: str, protocol: str) -> None:
     """Write a device entry to our own drop-in config file.
 
     Manages /etc/sane.d/airscan.d/papyrus.conf as a complete file.
     Reads existing entries, adds/updates this one, writes the whole file.
     """
+    # F36: reject before touching the file -- name/url ultimately come from a
+    # probe result, and the config format has no escaping of its own.
+    _reject_unsafe_airscan_chars(name, "name")
+    _reject_unsafe_airscan_chars(url, "url")
+
     os.makedirs(os.path.dirname(AIRSCAN_PAPYRUS_CONF), exist_ok=True)
 
     # Read existing entries from our config file
@@ -130,6 +147,19 @@ async def list_scanners(
     return [_scanner_response(s) for s in result.scalars()]
 
 
+def _validate_probe_ip(ip: str) -> None:
+    """F36: reject anything that isn't a plausible LAN host literal --
+    unparseable input, or loopback/link-local/multicast/unspecified, which a
+    host-networked server has no legitimate reason to probe on an admin's
+    behalf. Detail is a fixed, safe message -- never the parsed exception."""
+    try:
+        parsed = ipaddress.ip_address(ip)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid IP address") from exc
+    if parsed.is_loopback or parsed.is_link_local or parsed.is_multicast or parsed.is_unspecified:
+        raise HTTPException(status_code=400, detail="Invalid IP address")
+
+
 @router.get("/probe")
 async def probe_scanner_ip(
     ip: str,
@@ -139,6 +169,8 @@ async def probe_scanner_ip(
 
     Falls back to manual eSCL port probing if airscan-discover doesn't find the device.
     """
+    _validate_probe_ip(ip)
+
     import xml.etree.ElementTree as ET
     from urllib.error import URLError
     from urllib.request import urlopen
@@ -213,12 +245,15 @@ async def probe_scanner_ip(
             }
         except TimeoutError:
             last_error = f"{base_url}: timed out"
-        except URLError as exc:
-            last_error = f"{base_url}: {exc.reason}"
-        except OSError as exc:
-            last_error = f"{base_url}: {exc}"
-        except Exception as exc:
-            last_error = f"{base_url}: {exc}"
+        except URLError:
+            # F36: never echo the raw exception text back to the caller --
+            # a per-URL connection-refused/timeout/no-route distinction is
+            # exactly the "port oracle" signal an SSRF probe would want.
+            last_error = f"{base_url}: connection failed"
+        except OSError:
+            last_error = f"{base_url}: connection failed"
+        except Exception:
+            last_error = f"{base_url}: probe failed"
 
     # --- 3. Fallback: if host is reachable on port 80, configure as WSD ---
     # WSD uses SOAP over HTTP and can't be detected with a simple GET request.
@@ -249,8 +284,8 @@ async def probe_scanner_ip(
                 "airscan_url": wsd_url,
                 "error": None,
             }
-    except Exception as exc:
-        last_error = f"WSD fallback: {exc}"
+    except Exception:
+        last_error = "WSD fallback: probe failed"
 
     return {
         "reachable": False,
@@ -495,12 +530,18 @@ async def add_scanner(
             psc["airscan_url"] = f"http://{ip}:80{DEFAULT_WSD_PATH}"
             psc["airscan_protocol"] = "wsd"
 
+    # F35: the first scanner added becomes the default, so scans never
+    # resolve to an unconfigured device.
+    current_default = await db.execute(select(Scanner).where(Scanner.is_default.is_(True)))
+    is_default = current_default.scalars().first() is None
+
     scanner = Scanner(
         name=body.name,
         device=body.device,
         description=body.description,
         auto_deliver=body.auto_deliver,
         post_scan_config=psc if psc else None,
+        is_default=is_default,
     )
     db.add(scanner)
     await db.commit()
@@ -549,8 +590,18 @@ async def delete_scanner(
     scanner = await db.get(Scanner, scanner_id)
     if not scanner:
         raise HTTPException(status_code=404, detail="Scanner not found")
+    was_default = scanner.is_default
     await db.delete(scanner)
     await db.commit()
+
+    # F35: promote the oldest remaining scanner, or every scan loses its
+    # default device.
+    if was_default:
+        result = await db.execute(select(Scanner).order_by(Scanner.id))
+        replacement = result.scalars().first()
+        if replacement is not None:
+            replacement.is_default = True
+            await db.commit()
 
 
 @router.post("/{scanner_id}/default", status_code=200)
@@ -563,8 +614,10 @@ async def set_default_scanner(
     if not scanner:
         raise HTTPException(status_code=404, detail="Scanner not found")
 
-    await db.execute(update(Scanner).where(Scanner.is_default.is_(True)).values(is_default=False))
-    scanner.is_default = True
+    # F11: clear-and-set in a single statement -- see printers.set_default_printer.
+    await db.execute(
+        update(Scanner).values(is_default=(Scanner.id == scanner_id))
+    )
     await db.commit()
     await db.refresh(scanner)
     return _scanner_response(scanner)

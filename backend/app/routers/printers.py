@@ -1,4 +1,6 @@
 import asyncio
+import ipaddress
+import logging
 import re
 from urllib.parse import urlparse
 
@@ -10,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_admin
 from app.database import get_db
-from app.exceptions import PapyrusError
+from app.exceptions import ExternalServiceError, PapyrusError
 from app.models import Printer, User
 from app.schemas import serialize_print_job
 from app.services import cups_admin
@@ -20,6 +22,8 @@ from app.services.discovery_service import discover_printers
 from app.services.ipp_client import probe_ipp
 from app.services.test_page_service import print_test_page
 from app.services.webhook_service import dispatch_webhook
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -52,6 +56,18 @@ async def _cups_status(cups_name: str) -> dict:
         return {"state": 5, "state_message": "Unavailable", "accepting_jobs": False}
 
 
+def _status_queue_name(p: Printer) -> str:
+    """The CUPS queue that reports this printer's real status/toner (F34).
+
+    A physical printer's ``cups_name`` queue is the fake ``papyrus:/`` hold
+    queue with the generic PPD -- it has no device behind it, so it always
+    reports idle/no-markers. The ``_release`` queue is the only one bound to
+    the actual device URI. Network (hold-only) queues have no ``_release``
+    sibling, so they keep reporting from their own queue.
+    """
+    return p.cups_name if p.is_network_queue else f"{p.cups_name}_release"
+
+
 async def _printer_response(p: Printer) -> dict:
     return {
         "id": p.id,
@@ -65,7 +81,7 @@ async def _printer_response(p: Printer) -> dict:
         "is_network_queue": p.is_network_queue,
         "auto_release": p.auto_release,
         "created_at": p.created_at,
-        "cups_status": await _cups_status(p.cups_name),
+        "cups_status": await _cups_status(_status_queue_name(p)),
     }
 
 
@@ -213,12 +229,27 @@ async def discover_network_printers(
     return {"printers": devices}
 
 
+def _validate_probe_ip(ip: str) -> None:
+    """F36: reject anything that isn't a plausible LAN host literal --
+    unparseable input, or loopback/link-local/multicast/unspecified, which a
+    host-networked server has no legitimate reason to probe on an admin's
+    behalf. Never raises with the parsed exception text; the detail is a
+    fixed, safe message."""
+    try:
+        parsed = ipaddress.ip_address(ip)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid IP address") from exc
+    if parsed.is_loopback or parsed.is_link_local or parsed.is_multicast or parsed.is_unspecified:
+        raise HTTPException(status_code=400, detail="Invalid IP address")
+
+
 @router.get("/probe")
 async def probe_printer_ip(
     ip: str,
     _user: User = Depends(require_admin),
 ) -> dict:
     """Probe a printer at the given IP address for reachability and IPP details."""
+    _validate_probe_ip(ip)
     fallback_uri = f"ipp://{ip}/ipp"
     empty_fields = {
         "make_model": None,
@@ -253,12 +284,31 @@ async def add_printer(
 ) -> dict:
     cups_name = _sanitize(body.display_name)
 
+    # F113: this name would collide with the built-in zero-config hold queue
+    # the static Avahi AirPrint advert hardcodes (rp=printers/Papyrus) --
+    # reconfiguring or later deleting a printer named "Papyrus" would
+    # clobber/destroy it.
+    if cups_name == cups_admin.DEFAULT_QUEUE_NAME:
+        raise HTTPException(status_code=400, detail="Name is reserved")
+
     # Ensure cups_name is unique
     existing = await db.execute(select(Printer).where(Printer.cups_name == cups_name))
     if existing.scalar_one_or_none():
         raise HTTPException(
             status_code=409, detail=f"A printer with cups_name '{cups_name}' already exists"
         )
+
+    # F35: the first physical printer added becomes the default, so release
+    # never resolves to an empty queue name. Network (hold-only) queues are
+    # never eligible (set_default_printer already rejects them).
+    is_default = False
+    if not body.is_network_queue:
+        current_default = await db.execute(
+            select(Printer).where(
+                Printer.is_default.is_(True), Printer.is_network_queue.is_(False)
+            )
+        )
+        is_default = current_default.scalars().first() is None
 
     printer = Printer(
         display_name=body.display_name,
@@ -267,18 +317,30 @@ async def add_printer(
         description=body.description,
         is_network_queue=body.is_network_queue,
         auto_release=body.auto_release,
+        is_default=is_default,
     )
     db.add(printer)
+
+    # F33: provision CUPS *before* committing. add_physical_printer/
+    # add_network_queue now raise RuntimeError on an lpadmin failure instead
+    # of silently "succeeding" -- roll back the uncommitted row rather than
+    # leave a Printer row with no working queue behind it (every later
+    # release would then 502 with no indication why).
+    try:
+        if body.is_network_queue:
+            await cups_admin.add_network_queue(cups_name, body.display_name)
+        else:
+            await cups_admin.add_physical_printer(cups_name, body.display_name, body.uri)
+    except RuntimeError as exc:
+        logger.warning("Failed to provision CUPS queue '%s': %s", cups_name, exc)
+        await db.rollback()
+        raise ExternalServiceError("Could not create the CUPS queue.") from exc
+
     await db.commit()
     await db.refresh(printer)
 
-    # Configure CUPS + Avahi
-    if body.is_network_queue:
-        await cups_admin.add_network_queue(cups_name, body.display_name)
-    else:
-        await cups_admin.add_physical_printer(cups_name, body.display_name, body.uri)
-        if await _enrich_printer_info(printer, body.uri):
-            await db.commit()
+    if not body.is_network_queue and await _enrich_printer_info(printer, body.uri):
+        await db.commit()
 
     return await _printer_response(printer)
 
@@ -332,9 +394,23 @@ async def delete_printer(
         raise HTTPException(status_code=404, detail="Printer not found")
 
     cups_name = printer.cups_name
+    was_default = printer.is_default
     await db.delete(printer)
     await db.commit()
     await cups_admin.remove_printer(cups_name)
+
+    # F35: promote the oldest remaining physical printer, or every held job
+    # loses its default and release starts failing with "no default printer".
+    if was_default:
+        result = await db.execute(
+            select(Printer)
+            .where(Printer.is_network_queue.is_(False))
+            .order_by(Printer.id)
+        )
+        replacement = result.scalars().first()
+        if replacement is not None:
+            replacement.is_default = True
+            await db.commit()
 
 
 @router.post("/{printer_id}/default", status_code=200)
@@ -349,11 +425,14 @@ async def set_default_printer(
     if printer.is_network_queue:
         raise HTTPException(status_code=400, detail="Network queue cannot be set as default")
 
-    # Clear existing default
+    # F11: clear-and-set in a single statement (rather than a separate clear
+    # UPDATE followed by setting this row) closes the race where two
+    # concurrent calls could both commit is_default=true for different
+    # printers -- the partial unique index (migration 014) now also rejects
+    # that outright, but a single statement removes the window entirely.
     await db.execute(
-        update(Printer).where(Printer.is_default.is_(True)).values(is_default=False)
+        update(Printer).values(is_default=(Printer.id == printer_id))
     )
-    printer.is_default = True
     await db.commit()
     await db.refresh(printer)
     return await _printer_response(printer)

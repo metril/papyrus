@@ -5,11 +5,18 @@ MagicMock. These tests therefore never rely on real CUPS behaviour: they
 monkeypatch the service's private ``_*_sync`` bodies and, where an IPPError path
 is exercised, install a real exception class on the stubbed ``cups`` module.
 """
+from types import SimpleNamespace
+
 import cups
 import pytest
 
 import app.services.cups_service as cs_module
-from app.services.cups_service import CupsService
+from app.exceptions import PrinterUnavailableError
+from app.services.cups_service import (
+    CupsService,
+    get_default_printer_name,
+    get_default_release_queue_name,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -221,3 +228,61 @@ async def test_concurrent_status_misses_coalesce(monkeypatch):
     )
     assert calls["n"] == 1
     assert r1 == r2 == r3 == _ok_status()
+
+
+# ---------------------------------------------------------------------------
+# get_default_printer_name / get_default_release_queue_name (F35)
+# ---------------------------------------------------------------------------
+class _FakeScalars:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def first(self):
+        return self._rows[0] if self._rows else None
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalars(self):
+        return _FakeScalars(self._rows)
+
+
+class _FakeDB:
+    """Minimal AsyncSession stand-in: .execute() always returns the
+    configured printer row list, regardless of the query."""
+
+    def __init__(self, printers):
+        self._printers = printers
+
+    async def execute(self, _stmt):
+        return _FakeResult(self._printers)
+
+
+def _printer(cups_name="brother"):
+    return SimpleNamespace(cups_name=cups_name, is_default=True, is_network_queue=False)
+
+
+async def test_get_default_printer_name_raises_when_none_configured():
+    db = _FakeDB([])
+    with pytest.raises(PrinterUnavailableError) as exc_info:
+        await get_default_printer_name(db)
+    assert exc_info.value.detail == "No default printer configured"
+
+
+async def test_get_default_printer_name_returns_hold_queue_name():
+    db = _FakeDB([_printer(cups_name="brother")])
+    assert await get_default_printer_name(db) == "brother"
+
+
+async def test_get_default_release_queue_name_raises_when_none_configured():
+    db = _FakeDB([])
+    with pytest.raises(PrinterUnavailableError) as exc_info:
+        await get_default_release_queue_name(db)
+    assert exc_info.value.detail == "No default printer configured"
+
+
+async def test_get_default_release_queue_name_returns_release_suffix():
+    db = _FakeDB([_printer(cups_name="brother")])
+    assert await get_default_release_queue_name(db) == "brother_release"

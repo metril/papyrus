@@ -7,7 +7,7 @@ from typing import Awaitable, Callable
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.exceptions import PapyrusError
+from app.exceptions import PapyrusError, ScannerBusyError
 
 _DEFAULT_SCAN_DIR = "/app/data/scans"
 
@@ -283,18 +283,29 @@ scan_service = ScanService()
 
 
 async def get_default_scanner_device(db: AsyncSession) -> str:
-    """Return the SANE device string for the default scanner (DB overrides settings)."""
-    from app.models import Scanner  # avoid circular import at module level
-    result = await db.execute(select(Scanner).where(Scanner.is_default.is_(True)))
-    s = result.scalar_one_or_none()
-    return s.device if s else scan_service._scanner_device
+    """Return the SANE device string for the default scanner (DB overrides settings).
+
+    Raises:
+        ScannerBusyError: if there is no default Scanner row AND no
+        settings-configured scanner device either -- there is nothing to
+        scan with, so callers must not proceed with an empty device string
+        (F35).
+    """
+    scanner = await get_default_scanner(db)
+    if scanner is not None:
+        return scanner.device
+    if scan_service._scanner_device:
+        return scan_service._scanner_device
+    raise ScannerBusyError("No default scanner configured")
 
 
 async def get_default_scanner(db: AsyncSession):
     """Return the default Scanner DB object, or None."""
     from app.models import Scanner
     result = await db.execute(select(Scanner).where(Scanner.is_default.is_(True)))
-    return result.scalar_one_or_none()
+    # F11: .first() rather than scalar_one_or_none() -- defensive against a
+    # duplicate is_default=true row despite the partial unique index.
+    return result.scalars().first()
 
 
 def render_scan_filename(template: str, scan_job, fmt: str | None = None) -> str:

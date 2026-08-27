@@ -248,7 +248,14 @@ async def _poll_printer_statuses(printers: list) -> None:
     current: dict[str, dict] = {}
     for p in printers:
         try:
-            status = await CupsService(printer_name=p.cups_name).get_printer_status()
+            # F34: p.cups_name is the fake papyrus:/ hold queue with the
+            # generic PPD -- no device behind it, so it always reports
+            # idle/no-markers. _release is the queue actually bound to the
+            # device URI. Callers of this function only pass physical
+            # printers (is_network_queue=False), which always have one.
+            status = await CupsService(
+                printer_name=f"{p.cups_name}_release"
+            ).get_printer_status()
         except Exception as exc:
             logger.warning("Status poll failed for printer '%s': %s", p.cups_name, exc)
             continue

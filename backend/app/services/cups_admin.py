@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import re
+from xml.sax.saxutils import escape
 
 logger = logging.getLogger(__name__)
 
@@ -32,33 +33,45 @@ def _sanitize_cups_name(display_name: str) -> str:
 
 
 async def _run(args: list[str], ignore_errors: bool = False) -> None:
+    """Run a CUPS admin command. Raises RuntimeError on a non-zero exit
+    unless ``ignore_errors`` (F33) -- callers that need the queue to actually
+    exist (add_physical_printer/add_network_queue/ensure_default_queue) must
+    not silently "succeed" when lpadmin rejected the request."""
     proc = await asyncio.create_subprocess_exec(
         *args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await proc.communicate()
-    if proc.returncode != 0 and not ignore_errors:
-        logger.warning("Command %s failed (rc=%d): %s", args, proc.returncode, stderr.decode())
-    elif proc.returncode != 0:
+    if proc.returncode == 0:
+        return
+    if ignore_errors:
         logger.debug("Command %s failed (ignored): %s", args, stderr.decode())
+        return
+    logger.warning("Command %s failed (rc=%d): %s", args, proc.returncode, stderr.decode())
+    raise RuntimeError(f"{args[0]} failed (rc={proc.returncode}): {stderr.decode().strip()}")
 
 
 def _avahi_service_xml(display_name: str, cups_name: str) -> str:
+    # F32: display_name is an admin-chosen free-text field, interpolated raw
+    # into six XML nodes; an unescaped '&' or '<' produced a file avahi
+    # rejected on reload, silently killing that printer's mDNS advert.
+    name = escape(display_name)
+    queue = escape(cups_name)
     return f"""<?xml version="1.0" standalone="no"?>
 <!DOCTYPE service-group SYSTEM "avahi-service.dtd">
 <service-group>
-  <name replace-wildcards="yes">{display_name} @ %h</name>
+  <name replace-wildcards="yes">{name} @ %h</name>
   <service>
     <type>_ipp._tcp</type>
     <subtype>_universal._sub._ipp._tcp</subtype>
     <port>{CUPS_PORT}</port>
     <txt-record>txtvers=1</txt-record>
     <txt-record>qtotal=1</txt-record>
-    <txt-record>rp=printers/{cups_name}</txt-record>
-    <txt-record>ty={display_name}</txt-record>
-    <txt-record>note={display_name} via Papyrus</txt-record>
-    <txt-record>product=({display_name})</txt-record>
+    <txt-record>rp=printers/{queue}</txt-record>
+    <txt-record>ty={name}</txt-record>
+    <txt-record>note={name} via Papyrus</txt-record>
+    <txt-record>product=({name})</txt-record>
     <txt-record>printer-state=3</txt-record>
     <txt-record>printer-type=0x801046</txt-record>
     <txt-record>pdl=application/octet-stream,application/pdf,application/postscript,image/jpeg,image/png,image/urf</txt-record>

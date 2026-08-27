@@ -12,6 +12,10 @@
 
 PAPYRUS_API="http://localhost:8080/api/jobs/internal/ingest"
 UPLOAD_DIR="${PAPYRUS_UPLOAD_DIR:-/app/data/uploads}"
+# F7: shared secret written by docker/entrypoint.sh; overridable so tests can
+# point at a temp file instead of the real root-owned path.
+INGEST_TOKEN_FILE="${PAPYRUS_INGEST_TOKEN_FILE:-/run/papyrus/ingest.token}"
+BOOT_ID_FILE="/proc/sys/kernel/random/boot_id"
 
 # Device discovery mode (no arguments)
 if [ $# -eq 0 ]; then
@@ -69,14 +73,31 @@ fi
 #
 # $PRINTER is set by CUPS to the queue name that received the job.
 #
+# F91: ingest_key is a stable idempotency key for this physical job
+# (boot_id:printer:job_id) -- every retry below re-sends the identical key, so
+# the API can recognize a re-POST of a job it already accepted (its response
+# to the first attempt was lost) and hand back the existing job instead of
+# creating a duplicate held (and possibly auto-printed) copy.
+INGEST_KEY="$(cat "$BOOT_ID_FILE"):${PRINTER}:${JOB_ID}"
+
+# F7: authenticate to the ingest endpoint with the shared secret, when one is
+# configured. Read fresh on every attempt (cheap, and avoids caching a token
+# from before a container restart rotated it).
+#
 # Retry on connection failure / 5xx (e.g. the API restarting during a deploy)
 # for a short window; a 4xx is a permanent rejection and is not retried.
 attempt=0
 max_attempts=10
 while : ; do
     attempt=$((attempt + 1))
+    AUTH_HEADER=()
+    if [ -r "$INGEST_TOKEN_FILE" ]; then
+        AUTH_HEADER=(-H "X-Papyrus-Ingest-Token: $(cat "$INGEST_TOKEN_FILE")")
+    fi
     HTTP_CODE=$(curl -s -o /dev/stderr -w "%{http_code}" \
         -X POST "$PAPYRUS_API" \
+        --connect-timeout 5 --max-time 300 \
+        "${AUTH_HEADER[@]}" \
         -F "file=@${TMPFILE};type=application/pdf;filename=document.pdf" \
         --form-string "title=${TITLE:-Untitled}" \
         --form-string "username=${USER:-unknown}" \
@@ -84,6 +105,7 @@ while : ; do
         --form-string "duplex=${DUPLEX}" \
         --form-string "media=${MEDIA}" \
         --form-string "queue_name=${PRINTER:-}" \
+        --form-string "ingest_key=${INGEST_KEY}" \
         2>/dev/null)
     HTTP_CODE=${HTTP_CODE:-000}
 

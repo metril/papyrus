@@ -77,7 +77,9 @@ def harness(monkeypatch):
 
     Returns an object exposing:
       - ``settings``: dict backing get_setting (defaults: enabled, threshold 20)
-      - ``status_by_queue``: cups_name -> status dict returned by fake CupsService
+      - ``status_by_queue``: '<cups_name>_release' -> status dict returned by
+        fake CupsService (F34: alert_service reads the printer's real device
+        status from its release queue, not its cups_name hold queue)
       - ``ipp_by_host``: host -> normalized probe dict (or None)
       - ``webhooks``: list of (event, data) dispatched
       - ``emails``: list of (to, subject, body)
@@ -134,7 +136,7 @@ def harness(monkeypatch):
 # Onset / no-repeat / recovery-rearm
 # --------------------------------------------------------------------------- #
 async def test_toner_crossing_fires_exactly_one_webhook_and_one_email(harness):
-    harness.status_by_queue["brother"] = _status(markers=[{"name": "Black", "level": 5}])
+    harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 5}])
     db = _FakeDB([_printer()])
 
     await alert_service.check_alerts(db)
@@ -151,7 +153,7 @@ async def test_toner_crossing_fires_exactly_one_webhook_and_one_email(harness):
 
 
 async def test_second_poll_same_state_fires_nothing(harness):
-    harness.status_by_queue["brother"] = _status(markers=[{"name": "Black", "level": 5}])
+    harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 5}])
     db = _FakeDB([_printer()])
 
     await alert_service.check_alerts(db)
@@ -166,15 +168,15 @@ async def test_recovery_resets_and_next_crossing_refires(harness):
     db = _FakeDB(printers)
 
     # Onset
-    harness.status_by_queue["brother"] = _status(markers=[{"name": "Black", "level": 5}])
+    harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 5}])
     await alert_service.check_alerts(db)
 
     # Recovery: level back up -> resolved webhook, NO email
-    harness.status_by_queue["brother"] = _status(markers=[{"name": "Black", "level": 80}])
+    harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 80}])
     await alert_service.check_alerts(db)
 
     # Cross again -> fires onset again
-    harness.status_by_queue["brother"] = _status(markers=[{"name": "Black", "level": 5}])
+    harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 5}])
     await alert_service.check_alerts(db)
 
     events = [e for e, _ in harness.webhooks]
@@ -190,7 +192,7 @@ async def test_recovery_resets_and_next_crossing_refires(harness):
 # --------------------------------------------------------------------------- #
 async def test_disabled_alerts_do_nothing(harness):
     harness.settings["alerts_enabled"] = "false"
-    harness.status_by_queue["brother"] = _status(markers=[{"name": "Black", "level": 1}])
+    harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 1}])
     db = _FakeDB([_printer()])
 
     await alert_service.check_alerts(db)
@@ -202,7 +204,7 @@ async def test_disabled_alerts_do_nothing(harness):
 
 async def test_unknown_marker_level_never_alerts(harness):
     # -1 == unknown; absent level also unknown. Neither should alert.
-    harness.status_by_queue["brother"] = _status(
+    harness.status_by_queue["brother_release"] = _status(
         markers=[{"name": "Black", "level": -1}, {"name": "Cyan", "level": -3}]
     )
     db = _FakeDB([_printer()])
@@ -218,7 +220,7 @@ async def test_unknown_marker_level_never_alerts(harness):
 # Error reasons / offline
 # --------------------------------------------------------------------------- #
 async def test_jam_state_reason_fires_printer_error(harness):
-    harness.status_by_queue["brother"] = _status(
+    harness.status_by_queue["brother_release"] = _status(
         state=3, state_reasons=["media-jam-warning"]
     )
     db = _FakeDB([_printer()])
@@ -231,7 +233,7 @@ async def test_jam_state_reason_fires_printer_error(harness):
 
 
 async def test_stopped_printer_fires_offline_printer_error(harness):
-    harness.status_by_queue["brother"] = _status(state=5)  # stopped/unreachable
+    harness.status_by_queue["brother_release"] = _status(state=5)  # stopped/unreachable
     db = _FakeDB([_printer()])
 
     await alert_service.check_alerts(db)
@@ -246,7 +248,7 @@ async def test_stopped_printer_fires_offline_printer_error(harness):
 # --------------------------------------------------------------------------- #
 async def test_webhook_fires_even_when_no_alert_email_configured(harness):
     harness.settings["alert_email"] = ""
-    harness.status_by_queue["brother"] = _status(markers=[{"name": "Black", "level": 5}])
+    harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 5}])
     db = _FakeDB([_printer()])
 
     await alert_service.check_alerts(db)
@@ -257,7 +259,7 @@ async def test_webhook_fires_even_when_no_alert_email_configured(harness):
 
 async def test_ipp_markers_enrich_when_uri_is_ip_based(harness):
     # CUPS reports clean; the low level comes only from the IPP probe.
-    harness.status_by_queue["brother"] = _status(markers=[])
+    harness.status_by_queue["brother_release"] = _status(markers=[])
     harness.ipp_by_host["192.168.1.50"] = {
         "state_reasons": [],
         "markers": {"names": ["Toner"], "levels": [3]},
@@ -272,7 +274,7 @@ async def test_ipp_markers_enrich_when_uri_is_ip_based(harness):
 
 async def test_stale_printer_ids_are_pruned_from_state(harness):
     # First poll: printer 1 is low -> state {"1": {...}}
-    harness.status_by_queue["brother"] = _status(markers=[{"name": "Black", "level": 5}])
+    harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 5}])
     db = _FakeDB([_printer(pid=1, cups_name="brother")])
     await alert_service.check_alerts(db)
     assert "1" in db.saved_state()
@@ -280,7 +282,7 @@ async def test_stale_printer_ids_are_pruned_from_state(harness):
     # Printer 1 is deleted and replaced by printer 2 in a later poll; the
     # persisted state must not keep a stale row for the gone printer.
     db._printers = [_printer(pid=2, cups_name="epson")]
-    harness.status_by_queue["epson"] = _status(markers=[])
+    harness.status_by_queue["epson_release"] = _status(markers=[])
     await alert_service.check_alerts(db)
 
     saved = db.saved_state()

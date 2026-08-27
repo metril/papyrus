@@ -71,9 +71,16 @@ def _truthy(value: str | None) -> bool:
 
 
 async def _cups_status(cups_name: str) -> dict:
-    """CUPS status via the cached helper; never raises (offline fallback)."""
+    """CUPS status via the cached helper; never raises (offline fallback).
+
+    F34: ``cups_name`` is the fake ``papyrus:/`` hold queue -- no device
+    behind it, so it always reports idle/no-markers. Query the ``_release``
+    queue instead, the only one actually bound to the device URI. Every
+    caller here is a physical printer (``check_alerts`` filters out network
+    queues before calling this), so the ``_release`` sibling always exists.
+    """
     try:
-        return await CupsService(printer_name=cups_name).get_printer_status()
+        return await CupsService(printer_name=f"{cups_name}_release").get_printer_status()
     except Exception:
         return dict(_OFFLINE_FALLBACK)
 

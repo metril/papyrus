@@ -6,7 +6,14 @@ recorders, so no CUPS/Avahi/subprocess is touched. They lock in the two
 guarantees the "Papyrus default queue" fix depends on: every created queue
 carries ``printer-error-policy=abort-job``, and the built-in default queue is
 created WITHOUT a second Avahi advert (airprint.service already advertises it).
+
+Also covers the real (unstubbed) ``_run`` (F33: raises RuntimeError on a
+non-zero exit unless ``ignore_errors``) and ``_avahi_service_xml`` (F32:
+escapes interpolated values so a display name with '&'/'<' still produces
+well-formed XML).
 """
+import xml.etree.ElementTree as ET
+
 import pytest
 
 from app.services import cups_admin
@@ -88,3 +95,55 @@ async def test_add_physical_printer_sets_abort_job_on_both_queues(run_calls, ava
     assert release[release.index("-v") + 1] == "ipp://printer/ipp"
     assert "everywhere" in release
     assert "printer-error-policy=abort-job" in release
+
+
+# --------------------------------------------------------------------------- #
+# _run (F33): raises on failure unless ignore_errors
+# --------------------------------------------------------------------------- #
+async def test_run_raises_runtime_error_on_nonzero_exit():
+    with pytest.raises(RuntimeError):
+        await cups_admin._run(["false"])
+
+
+async def test_run_ignores_nonzero_exit_when_ignore_errors():
+    # Must not raise even though the command fails.
+    await cups_admin._run(["false"], ignore_errors=True)
+
+
+async def test_run_does_not_raise_on_success():
+    await cups_admin._run(["true"])
+
+
+async def test_add_physical_printer_propagates_lpadmin_failure(monkeypatch):
+    """Regression (F33): a real lpadmin failure must surface as a RuntimeError
+    from add_physical_printer instead of silently 'succeeding' with no queue
+    created."""
+    async def fake_run(args, ignore_errors=False):
+        if not ignore_errors:
+            raise RuntimeError(f"{args[0]} failed (rc=1): bad URI")
+
+    monkeypatch.setattr(cups_admin, "_run", fake_run)
+    monkeypatch.setattr(cups_admin, "_write_avahi_service", lambda *a: None)
+
+    with pytest.raises(RuntimeError):
+        await cups_admin.add_physical_printer("Office", "Office", "garbage://uri")
+
+
+# --------------------------------------------------------------------------- #
+# _avahi_service_xml (F32): escapes interpolated values
+# --------------------------------------------------------------------------- #
+def test_avahi_service_xml_escapes_ampersand_and_angle_brackets():
+    xml_str = cups_admin._avahi_service_xml("A&B<c>", "AB_c")
+
+    # Must parse as well-formed XML -- an unescaped '&'/'<' would raise here.
+    root = ET.fromstring(xml_str)
+    assert root.tag == "service-group"
+    name_el = root.find("name")
+    assert name_el.text == "A&B<c> @ %h"
+
+
+def test_avahi_service_xml_well_formed_for_plain_name():
+    # Sanity check: the escaping doesn't corrupt an ordinary name.
+    xml_str = cups_admin._avahi_service_xml("Office Brother", "Office_Brother")
+    root = ET.fromstring(xml_str)
+    assert root.find("name").text == "Office Brother @ %h"

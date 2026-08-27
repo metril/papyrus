@@ -19,6 +19,7 @@ import shutil
 
 import pytest
 from PIL import Image
+from sqlalchemy import select
 
 from app.auth.tokens import hash_token
 from app.exceptions import ExternalServiceError
@@ -929,6 +930,115 @@ async def test_ingest_network_job_from_localhost_is_held(db, client, tmp_path):
     body = resp.json()
     assert body["status"] == "held"
     assert body["source_type"] == "network"
+
+
+# --------------------------------------------------------------------------- #
+# F7: ingest-token auth
+# --------------------------------------------------------------------------- #
+async def test_ingest_without_token_header_is_403_when_token_configured(
+    db, client, tmp_path, monkeypatch
+):
+    await _seed_upload_dir(db, tmp_path)
+    monkeypatch.setattr(jobs_router.settings, "ingest_token", "s3cr3t")
+
+    resp = await client.post(
+        "/api/jobs/internal/ingest",
+        files=_pdf_file("network.pdf"),
+    )
+    assert resp.status_code == 403
+
+
+async def test_ingest_with_wrong_token_header_is_403(db, client, tmp_path, monkeypatch):
+    await _seed_upload_dir(db, tmp_path)
+    monkeypatch.setattr(jobs_router.settings, "ingest_token", "s3cr3t")
+
+    resp = await client.post(
+        "/api/jobs/internal/ingest",
+        files=_pdf_file("network.pdf"),
+        headers={"X-Papyrus-Ingest-Token": "wrong"},
+    )
+    assert resp.status_code == 403
+
+
+async def test_ingest_with_correct_token_header_succeeds(db, client, tmp_path, monkeypatch):
+    await _seed_upload_dir(db, tmp_path)
+    monkeypatch.setattr(jobs_router.settings, "ingest_token", "s3cr3t")
+
+    resp = await client.post(
+        "/api/jobs/internal/ingest",
+        files=_pdf_file("network.pdf"),
+        headers={"X-Papyrus-Ingest-Token": "s3cr3t"},
+    )
+    assert resp.status_code == 201
+
+
+async def test_ingest_no_token_configured_does_not_require_header(db, client, tmp_path):
+    # Default settings.ingest_token == "" -- unauthenticated dev/local setups
+    # keep working exactly as before.
+    await _seed_upload_dir(db, tmp_path)
+
+    resp = await client.post(
+        "/api/jobs/internal/ingest",
+        files=_pdf_file("network.pdf"),
+    )
+    assert resp.status_code == 201
+
+
+# --------------------------------------------------------------------------- #
+# F91: ingest_key dedupe
+# --------------------------------------------------------------------------- #
+async def test_ingest_same_ingest_key_twice_dedupes_to_one_row(db, client, tmp_path, monkeypatch):
+    """Regression (F91): the CUPS backend script retries an unanswered POST
+    up to 10x with the identical body. A repeat carrying the same ingest_key
+    must be served the original job back (200, no new row, no broadcast),
+    not create a second (possibly auto-printed) held job."""
+    await _seed_upload_dir(db, tmp_path)
+    broadcasts: list = []
+
+    async def fake_broadcast(channel, message):
+        broadcasts.append((channel, message))
+
+    monkeypatch.setattr(jobs_router.ws_manager, "broadcast", fake_broadcast)
+
+    first = await client.post(
+        "/api/jobs/internal/ingest",
+        files=_pdf_file("network.pdf"),
+        data={"ingest_key": "boot-abc:Papyrus:7"},
+    )
+    assert first.status_code == 201
+    first_id = first.json()["id"]
+    assert len(broadcasts) == 1
+
+    second = await client.post(
+        "/api/jobs/internal/ingest",
+        files=_pdf_file("network.pdf"),
+        data={"ingest_key": "boot-abc:Papyrus:7"},
+    )
+    assert second.status_code == 200
+    assert second.json()["id"] == first_id
+    # No second broadcast -- the dedupe path returns before any DB write.
+    assert len(broadcasts) == 1
+
+    rows = await db.execute(select(PrintJob).where(PrintJob.ingest_key == "boot-abc:Papyrus:7"))
+    assert len(rows.scalars().all()) == 1
+
+
+async def test_ingest_different_ingest_keys_create_separate_rows(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+
+    first = await client.post(
+        "/api/jobs/internal/ingest",
+        files=_pdf_file("network.pdf"),
+        data={"ingest_key": "boot-abc:Papyrus:1"},
+    )
+    second = await client.post(
+        "/api/jobs/internal/ingest",
+        files=_pdf_file("network.pdf"),
+        data={"ingest_key": "boot-abc:Papyrus:2"},
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json()["id"] != second.json()["id"]
 
 
 # --------------------------------------------------------------------------- #

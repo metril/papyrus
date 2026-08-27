@@ -159,6 +159,167 @@ async def test_delete_printer_removes_row_and_calls_remove_printer(db, admin_cli
 
 
 # --------------------------------------------------------------------------- #
+# F113: reserved queue name
+# --------------------------------------------------------------------------- #
+async def test_add_printer_named_papyrus_is_rejected(db, admin_client, monkeypatch):
+    """A display name that sanitizes to 'Papyrus' would collide with the
+    built-in zero-config hold queue the static Avahi AirPrint advert points
+    at -- deleting it later would destroy that queue until a restart."""
+    _patch_cups_status(monkeypatch)
+
+    resp = await admin_client.post(
+        "/api/printers",
+        json={
+            "display_name": printers_router.cups_admin.DEFAULT_QUEUE_NAME,
+            "uri": "", "is_network_queue": False,
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Name is reserved"
+
+    listing = await admin_client.get("/api/printers")
+    assert listing.json() == []
+
+
+# --------------------------------------------------------------------------- #
+# F35: default printer promotion
+# --------------------------------------------------------------------------- #
+async def test_first_printer_added_becomes_default(db, admin_client, monkeypatch):
+    _patch_cups_status(monkeypatch)
+
+    async def fake_add(cups_name, display_name, uri):
+        return None
+
+    monkeypatch.setattr(printers_router.cups_admin, "add_physical_printer", fake_add)
+
+    resp = await admin_client.post(
+        "/api/printers", json={"display_name": "First", "uri": "", "is_network_queue": False}
+    )
+    assert resp.status_code == 201
+    assert resp.json()["is_default"] is True
+
+
+async def test_second_printer_added_is_not_default(db, admin_client, monkeypatch):
+    _patch_cups_status(monkeypatch)
+
+    async def fake_add(cups_name, display_name, uri):
+        return None
+
+    monkeypatch.setattr(printers_router.cups_admin, "add_physical_printer", fake_add)
+
+    first = await admin_client.post(
+        "/api/printers", json={"display_name": "One", "uri": "", "is_network_queue": False}
+    )
+    assert first.json()["is_default"] is True
+
+    second = await admin_client.post(
+        "/api/printers", json={"display_name": "Two", "uri": "", "is_network_queue": False}
+    )
+    assert second.json()["is_default"] is False
+
+
+async def test_network_queue_is_never_default_even_when_first(db, admin_client, monkeypatch):
+    _patch_cups_status(monkeypatch)
+
+    async def fake_add_network(cups_name, display_name):
+        return None
+
+    monkeypatch.setattr(printers_router.cups_admin, "add_network_queue", fake_add_network)
+
+    resp = await admin_client.post(
+        "/api/printers", json={"display_name": "Hold Only", "is_network_queue": True}
+    )
+    assert resp.status_code == 201
+    assert resp.json()["is_default"] is False
+
+
+async def test_deleting_default_printer_promotes_oldest_remaining(db, admin_client, monkeypatch):
+    _patch_cups_status(monkeypatch)
+
+    async def fake_add(cups_name, display_name, uri):
+        return None
+
+    async def fake_remove(cups_name):
+        return None
+
+    monkeypatch.setattr(printers_router.cups_admin, "add_physical_printer", fake_add)
+    monkeypatch.setattr(printers_router.cups_admin, "remove_printer", fake_remove)
+
+    first = await admin_client.post(
+        "/api/printers", json={"display_name": "One", "uri": "", "is_network_queue": False}
+    )
+    await admin_client.post(
+        "/api/printers", json={"display_name": "Two", "uri": "", "is_network_queue": False}
+    )
+    first_id = first.json()["id"]
+    assert first.json()["is_default"] is True
+
+    del_resp = await admin_client.delete(f"/api/printers/{first_id}")
+    assert del_resp.status_code == 204
+
+    listing = (await admin_client.get("/api/printers")).json()
+    two = next(p for p in listing if p["display_name"] == "Two")
+    assert two["is_default"] is True
+
+
+async def test_deleting_non_default_printer_does_not_touch_default(
+    db, admin_client, monkeypatch
+):
+    _patch_cups_status(monkeypatch)
+
+    async def fake_add(cups_name, display_name, uri):
+        return None
+
+    async def fake_remove(cups_name):
+        return None
+
+    monkeypatch.setattr(printers_router.cups_admin, "add_physical_printer", fake_add)
+    monkeypatch.setattr(printers_router.cups_admin, "remove_printer", fake_remove)
+
+    first = await admin_client.post(
+        "/api/printers", json={"display_name": "One", "uri": "", "is_network_queue": False}
+    )
+    second = await admin_client.post(
+        "/api/printers", json={"display_name": "Two", "uri": "", "is_network_queue": False}
+    )
+    second_id = second.json()["id"]
+
+    del_resp = await admin_client.delete(f"/api/printers/{second_id}")
+    assert del_resp.status_code == 204
+
+    listing = (await admin_client.get("/api/printers")).json()
+    one = next(p for p in listing if p["display_name"] == "One")
+    assert one["id"] == first.json()["id"]
+    assert one["is_default"] is True
+
+
+# --------------------------------------------------------------------------- #
+# F33: lpadmin failure rolls back the DB row
+# --------------------------------------------------------------------------- #
+async def test_add_printer_cups_failure_rolls_back_and_returns_502(db, admin_client, monkeypatch):
+    _patch_cups_status(monkeypatch)
+
+    async def fake_add_physical_printer(cups_name, display_name, uri):
+        raise RuntimeError("lpadmin 'Broken' failed (rc=1): unknown URI scheme")
+
+    monkeypatch.setattr(
+        printers_router.cups_admin, "add_physical_printer", fake_add_physical_printer
+    )
+
+    resp = await admin_client.post(
+        "/api/printers",
+        json={"display_name": "Broken", "uri": "garbage://uri", "is_network_queue": False},
+    )
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "Could not create the CUPS queue."
+    # Never leak lpadmin's raw stderr to the client.
+    assert "lpadmin" not in resp.json()["detail"]
+
+    listing = await admin_client.get("/api/printers")
+    assert all(p["display_name"] != "Broken" for p in listing.json())
+
+
+# --------------------------------------------------------------------------- #
 # GET /printers/discover
 # --------------------------------------------------------------------------- #
 async def test_discover_filters_self_advertisement_and_flags_configured(
@@ -223,6 +384,37 @@ async def test_probe_reachable_and_enriched_returns_corrected_uri(admin_client, 
         "state": 3,
         "suggested_display_name": "Brother DCP-L2540DW",
     }
+
+
+# --------------------------------------------------------------------------- #
+# F36: probe IP validation (SSRF hardening)
+# --------------------------------------------------------------------------- #
+async def test_probe_unparseable_ip_is_400(admin_client):
+    resp = await admin_client.get(
+        "/api/printers/probe", params={"ip": "169.254.169.254/latest/meta-data"}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Invalid IP address"
+
+
+async def test_probe_loopback_ip_is_400(admin_client):
+    resp = await admin_client.get("/api/printers/probe", params={"ip": "127.0.0.1"})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Invalid IP address"
+
+
+async def test_probe_link_local_ip_is_400(admin_client):
+    # 169.254.169.254 is the AWS/GCP/Azure metadata endpoint -- exactly the
+    # SSRF target the failure scenario names.
+    resp = await admin_client.get("/api/printers/probe", params={"ip": "169.254.169.254"})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Invalid IP address"
+
+
+async def test_probe_multicast_ip_is_400(admin_client):
+    resp = await admin_client.get("/api/printers/probe", params={"ip": "224.0.0.1"})
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == "Invalid IP address"
 
 
 # --------------------------------------------------------------------------- #
