@@ -15,7 +15,7 @@ from app.database import get_db
 from app.models import CloudProvider, User
 from app.routers.settings import get_setting
 from app.schemas import CloudFileEntry
-from app.services.cloud_service import CloudError, cloud_service
+from app.services.cloud_service import UnknownCloudProviderError, cloud_service
 from app.services.crypto import encrypt_value
 from app.services.http_client import get_http_client
 
@@ -26,6 +26,26 @@ router = APIRouter()
 # throwaway client per OAuth connect instead of the shared pooled one every
 # other outbound call in this app uses.
 _OAUTH_TIMEOUT_SECONDS = 15.0
+
+# F61: an explicit allowlist, not "any image/*" -- image/svg+xml can embed
+# <script> and must never be served inline on the app's own origin (session
+# cookie exposure via a crafted ?filename=payload.svg).
+_INLINE_CONTENT_TYPES = {
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+}
+
+
+def _content_disposition_for(content_type: str) -> str:
+    """Whether `content_type` may be served `inline` vs. forced `attachment`.
+
+    Pure/testable on its own -- see test_api_cloud.py.
+    """
+    return "inline" if content_type in _INLINE_CONTENT_TYPES else "attachment"
+
 
 GDRIVE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GDRIVE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -256,14 +276,22 @@ async def _get_access_token(provider: CloudProvider, db: AsyncSession) -> str:
 
     Thin HTTP-layer wrapper around `cloud_service.get_valid_access_token`
     (F14): the actual expiry-check/refresh logic now lives there, shared
-    with the upload paths, and this just keeps browse/download's existing
-    401 status code for "expired with no refresh token" instead of that
-    helper's generic `CloudError` (502).
+    with the upload paths. `CloudError` (both "needs reconnecting" and a
+    transient refresh/transport failure) is deliberately left to propagate
+    to the global PapyrusError handler unchanged -- it's an
+    `ExternalServiceError`, 502, with an already-curated detail. It must
+    never become a 401: 401 means "not authenticated to Papyrus", and the
+    frontend's axios interceptor redirects the *whole page* to
+    /api/auth/login on any 401, so misusing it here logged a user out of
+    whatever they were doing on a five-second Google/Dropbox/Microsoft
+    hiccup. `UnknownCloudProviderError` is the one case mapped to 400
+    instead, since a corrupt `provider` value isn't an external-service
+    problem.
     """
     try:
         return await cloud_service.get_valid_access_token(db, provider)
-    except CloudError as exc:
-        raise HTTPException(status_code=401, detail=exc.detail) from exc
+    except UnknownCloudProviderError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail) from exc
 
 
 @router.get("/files/{provider_id}", response_model=list[CloudFileEntry])
@@ -386,11 +414,9 @@ async def download_file(
             "application/octet-stream"
         )
 
-    inline = content_type == "application/pdf" or content_type.startswith("image/")
-
     return FileResponse(
         local_path,
         filename=display_name,
         media_type=content_type,
-        content_disposition_type="inline" if inline else "attachment",
+        content_disposition_type=_content_disposition_for(content_type),
     )

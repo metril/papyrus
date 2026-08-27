@@ -19,18 +19,28 @@ class FTPError(ExternalServiceError):
 
 
 def _normalize_fingerprint(value: str) -> str:
-    """Strip whitespace and an optional "SHA256:" prefix so a fingerprint
-    pasted from tooling (or from this service's own warning log) compares
-    equal to the raw base64 digest stored/computed here."""
+    """Strip whitespace, an optional "SHA256:" prefix, and base64 padding so
+    a fingerprint pasted from tooling compares equal to the raw digest
+    stored/computed here.
+
+    `ssh-keygen -lf ...` (and `ssh -o FingerprintHash=sha256`) print the
+    *unpadded* base64 form -- `SHA256:AbC...xyz` with no trailing `=` -- so
+    without stripping padding here too, a fingerprint pinned by copying
+    straight from that standard tooling would never match the padded form
+    `base64.b64encode` produces, and every SFTP connection would be refused
+    as a "mismatch" even against the correct server.
+    """
     value = value.strip()
     if value.upper().startswith("SHA256:"):
         value = value[len("SHA256:"):]
-    return value
+    return value.rstrip("=")
 
 
 def _sftp_key_fingerprint(key) -> str:
-    """SHA256/base64 fingerprint of a paramiko host key's public blob."""
-    return base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode()
+    """SHA256/base64 fingerprint of a paramiko host key's public blob, in
+    the same unpadded form `ssh-keygen -lf` prints -- see
+    `_normalize_fingerprint` for why the padding is stripped."""
+    return base64.b64encode(hashlib.sha256(key.asbytes()).digest()).decode().rstrip("=")
 
 
 def _connect_sftp_transport(host, port, username, password, host_key_fingerprint):

@@ -19,6 +19,15 @@ class CloudError(ExternalServiceError):
     pass
 
 
+class UnknownCloudProviderError(CloudError):
+    """Raised when a `CloudProvider` row's `provider` column isn't one of
+    the supported values.
+
+    Distinct from other `CloudError`s so callers can map it to 400 (a
+    corrupt/bad request, not an external-service problem) instead of the
+    502 every other `CloudError` gets."""
+
+
 class CloudService:
     # --- Google Drive ---
 
@@ -474,7 +483,12 @@ class CloudService:
         now = datetime.now(timezone.utc)
         if provider.token_expiry and provider.token_expiry.replace(tzinfo=timezone.utc) < now:
             if not provider.refresh_token_encrypted:
-                raise CloudError("Cloud storage session expired. Please reconnect.")
+                # Coordinator ruling: this is never a Papyrus 401 -- 401
+                # means "not authenticated to Papyrus" and the frontend
+                # interceptor bounces the whole page to /api/auth/login on
+                # it. A cloud provider needing reconnection is an
+                # ExternalServiceError (502) with a curated detail instead.
+                raise CloudError("Cloud provider needs to be reconnected.")
 
             if provider.provider == "gdrive":
                 client_id = await get_setting(db, "gdrive_client_id")
@@ -495,7 +509,7 @@ class CloudService:
                     provider.refresh_token_encrypted, client_id, client_secret
                 )
             else:
-                raise CloudError("Unknown cloud provider")
+                raise UnknownCloudProviderError("Unknown cloud provider")
 
             provider.access_token_encrypted = encrypt_value(new_token)
             provider.token_expiry = expiry
