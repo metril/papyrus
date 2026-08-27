@@ -503,6 +503,11 @@ def _require_file_access(job: PrintJob, user: User, pin: str | None) -> None:
     Allowed: the job's owner, an admin, or anyone supplying the correct
     release PIN via the `pin` query param. Jobs without a PIN are unaffected
     — the shared print queue's file access stays open to any print user.
+
+    Shares `release_job`'s per-job PIN throttle (F68, same `pin:{job_id}` key)
+    — without that, this query-param check would be a second, unthrottled
+    oracle over the same 10,000-value PIN space release_job already
+    rate-limits, defeating the lockout entirely.
     """
     if not job.release_pin:
         return
@@ -510,8 +515,12 @@ def _require_file_access(job: PrintJob, user: User, pin: str | None) -> None:
         return
     if user.role == "admin":
         return
+    throttle_key = f"pin:{job.id}"
+    _release_pin_throttle.check(throttle_key)
     if _pin_grants_access(pin, job.release_pin):
+        _release_pin_throttle.reset(throttle_key)
         return
+    _release_pin_throttle.record_failure(throttle_key)
     raise HTTPException(status_code=403, detail="PIN required to access this file")
 
 
@@ -554,19 +563,26 @@ async def _ensure_preview_pdf(job: PrintJob) -> str:
 
     preview_path = job.filepath + ".preview.pdf"
     if not os.path.exists(preview_path):
+        output_dir = os.path.dirname(job.filepath)
+        converted = None
         try:
-            output_dir = os.path.dirname(job.filepath)
             converted = await convert_to_pdf(job.filepath, output_dir)
-            os.rename(converted, preview_path)
-            # convert_to_pdf wrote `converted` into its own unique temp dir
-            # (F30); now that the PDF has been moved out of it into the
-            # `.preview.pdf` cache, the (now-empty) temp dir is ours to clean
-            # up (F31) or it leaks on every first-time office-doc preview.
-            await asyncio.to_thread(shutil.rmtree, os.path.dirname(converted), ignore_errors=True)
+            os.replace(converted, preview_path)
         except RuntimeError as e:
             raise ExternalServiceError(
                 "Converting the document for preview failed."
             ) from e
+        finally:
+            # convert_to_pdf wrote `converted` into its own unique temp dir
+            # (F30); clean it up in `finally` — whether the replace succeeded
+            # (now-empty dir) or raised (dir still holds the PDF) — so a
+            # failed replace can't leak it. `converted` stays None if
+            # convert_to_pdf itself raised (it cleans up its own temp dir on
+            # failure), so there's nothing to remove in that case.
+            if converted is not None:
+                await asyncio.to_thread(
+                    shutil.rmtree, os.path.dirname(converted), ignore_errors=True
+                )
     return preview_path
 
 
@@ -727,8 +743,18 @@ async def release_job(
     # work. A second concurrent release blocks here until the first commits,
     # then observes status != "held" and gets 409 instead of both requests
     # passing the plain status check above and printing the job twice.
+    #
+    # populate_existing=True is required: `job` is already identity-mapped
+    # into this session from the plain select above, and with
+    # expire_on_commit=False (app/database.py) nothing expires it, so
+    # SQLAlchemy would otherwise return that same cached instance — with its
+    # stale (pre-lock) column values — instead of what the FOR UPDATE
+    # re-select actually just read off the row.
     locked_result = await db.execute(
-        select(PrintJob).where(PrintJob.id == job_id).with_for_update()
+        select(PrintJob)
+        .where(PrintJob.id == job_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     job = locked_result.scalar_one_or_none()
     if job is None or job.status != "held":
@@ -965,9 +991,14 @@ async def delete_job(
         await db.rollback()
 
 
+class ReprintRequest(BaseModel):
+    pin: str | None = None
+
+
 @router.post("/{job_id}/reprint", response_model=PrintJobResponse, status_code=201)
 async def reprint_job(
     job_id: int,
+    body: ReprintRequest | None = None,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -978,6 +1009,23 @@ async def reprint_job(
         raise HTTPException(status_code=404, detail="Job not found")
     if not original.filepath or not os.path.exists(original.filepath):
         raise HTTPException(status_code=400, detail="Original file no longer available")
+
+    # F27: reprinting hands the requester a brand-new row *they* own — for a
+    # PIN-protected original, that would otherwise be an unprotected copy of
+    # someone else's confidential file. Gate it like file access (owner/admin
+    # bypass; anyone else needs the correct PIN) and share release_job's
+    # throttle (same pin:{job_id} key) so this isn't a second, unthrottled
+    # oracle over the PIN space.
+    if original.release_pin:
+        is_owner = original.user_id is not None and original.user_id == user.id
+        if not is_owner and user.role != "admin":
+            throttle_key = f"pin:{job_id}"
+            _release_pin_throttle.check(throttle_key)
+            provided_pin = body.pin if body else None
+            if not _pin_grants_access(provided_pin, original.release_pin):
+                _release_pin_throttle.record_failure(throttle_key)
+                raise HTTPException(status_code=403, detail="PIN required to reprint this file")
+            _release_pin_throttle.reset(throttle_key)
 
     default_printer = await get_default_printer(db)
 
@@ -1012,6 +1060,9 @@ async def reprint_job(
         media=original.media,
         source_type="upload",
         printer_id=reprint_printer_id,
+        # F27: carry the PIN forward so the reprinted copy stays protected —
+        # it must not be an unprotected duplicate of a confidential original.
+        release_pin=original.release_pin,
     )
     db.add(new_job)
     await db.commit()

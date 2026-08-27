@@ -345,35 +345,74 @@ async def test_release_with_no_default_printer_configured_fails_cleanly(db, user
     )
 
 
-async def test_concurrent_release_only_prints_once(db, user_client, tmp_path, monkeypatch):
-    """Regression (F28): two concurrent releases of the same held job used to
-    both pass the status=='held' guard and both submit to CUPS, printing the
-    document twice. A `.with_for_update()` row lock must serialize them so
-    only one succeeds and CUPS is only asked to create/release the job once.
-    The loser gets 400 (it lost the race before even reaching the lock — the
-    other request had already finished and flipped the status) or 409 (it
-    lost at the row lock itself) depending on exactly how the two requests
-    interleave; either way it must not be 200."""
+async def test_concurrent_release_populate_existing_prevents_double_print(
+    db, user_client, tmp_path, monkeypatch
+):
+    """Regression (F28): `.with_for_update()` alone doesn't close the race —
+    `job` is already identity-mapped into the session from the plain select
+    at the top of release_job, and with `expire_on_commit=False`
+    (app/database.py) nothing expires it, so the locked re-select must use
+    `populate_existing=True` or SQLAlchemy just returns the same cached
+    (stale, pre-lock) instance instead of what the lock actually just read.
+
+    Deterministically pins the first release mid-critical-section — inside a
+    fake `create_held_job` that awaits a gate — so it holds the row's FOR
+    UPDATE lock, uncommitted, while the second release is started and given
+    time to actually block on that lock (not just lose an unlocked race
+    before ever reaching it, which the blind `asyncio.gather` version of
+    this test couldn't tell apart from the real fix). Releasing the gate
+    then lets the winner finish; the loser must get 409, and CUPS must only
+    ever have seen one job across every fake instance created."""
     await _seed_upload_dir(db, tmp_path)
-    monkeypatch.setattr(jobs_router, "CupsService", _FakeCupsService)
     await _seed_default_printer(db)
+
+    release_gate = asyncio.Event()
+
+    class _PausingCupsService:
+        instances: list["_PausingCupsService"] = []
+
+        def __init__(self, printer_name: str = "") -> None:
+            self.printer_name = printer_name
+            self.created: list[tuple] = []
+            self.released: list[int] = []
+            _PausingCupsService.instances.append(self)
+
+        async def create_held_job(self, filepath, title, copies=1, duplex=False, media="A4"):
+            # Blocks the winner here, mid-critical-section — after it has
+            # the row lock (from the with_for_update() re-select) but before
+            # it commits status="printing" and releases that lock.
+            await release_gate.wait()
+            self.created.append((filepath, title, copies, duplex, media))
+            return 777
+
+        async def release_job(self, job_id):
+            self.released.append(job_id)
+
+    monkeypatch.setattr(jobs_router, "CupsService", _PausingCupsService)
 
     upload_resp = await user_client.post("/api/jobs/upload", files=_pdf_file())
     job_id = upload_resp.json()["id"]
 
-    resp1, resp2 = await asyncio.gather(
-        user_client.post(f"/api/jobs/{job_id}/release"),
-        user_client.post(f"/api/jobs/{job_id}/release"),
-    )
+    task_a = asyncio.create_task(user_client.post(f"/api/jobs/{job_id}/release"))
+    # Let A run all the way to create_held_job and start waiting on the gate
+    # — several real DB round trips, but no contention, so this is generous.
+    await asyncio.sleep(0.1)
 
-    statuses = [resp1.status_code, resp2.status_code]
-    assert statuses.count(200) == 1
-    assert set(statuses) - {200} <= {400, 409}
+    task_b = asyncio.create_task(user_client.post(f"/api/jobs/{job_id}/release"))
+    # Let B pass its own plain (unlocked) status check and then genuinely
+    # block on the row's FOR UPDATE lock behind A at the Postgres level.
+    await asyncio.sleep(0.2)
 
-    fake = _FakeCupsService.last_instance
-    assert fake is not None
-    assert len(fake.created) == 1
-    assert len(fake.released) == 1
+    release_gate.set()
+    resp_a, resp_b = await asyncio.gather(task_a, task_b)
+
+    assert resp_a.status_code == 200
+    assert resp_b.status_code == 409
+
+    total_created = sum(len(inst.created) for inst in _PausingCupsService.instances)
+    total_released = sum(len(inst.released) for inst in _PausingCupsService.instances)
+    assert total_created == 1
+    assert total_released == 1
 
 
 async def test_release_of_office_doc_cleans_up_conversion_temp_dir(
@@ -758,6 +797,45 @@ async def test_download_non_pin_job_stays_open_to_any_print_user(db, client, tmp
         f"/api/jobs/{job_id}/download", headers={"Authorization": f"Bearer {other_token}"}
     )
     assert resp.status_code == 200
+
+
+async def test_file_gate_pin_throttle_is_shared_with_release(db, client, tmp_path):
+    """Regression (review finding #3): the `?pin=` file gate used to have no
+    throttle at all — a second, unthrottled oracle over the same 10,000-
+    value PIN space release_job already rate-limits (F68). It must share
+    release_job's per-job throttle: 5 wrong `?pin=` downloads lock out the
+    6th (even with the correct PIN), and release — which shares the same
+    `pin:{job_id}` key — is locked out too."""
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownerthrottle")
+    _, other_token = await _make_user_with_token(db, "otherthrottle")
+
+    upload_resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    job_id = upload_resp.json()["id"]
+
+    for _ in range(5):
+        resp = await client.get(
+            f"/api/jobs/{job_id}/download?pin=0000",
+            headers={"Authorization": f"Bearer {other_token}"},
+        )
+        assert resp.status_code == 403
+
+    # 6th attempt is locked out, even with the correct PIN.
+    locked_resp = await client.get(
+        f"/api/jobs/{job_id}/download?pin=1234",
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
+    assert locked_resp.status_code == 429
+
+    # release shares the same pin:{job_id} key, so it's locked out too.
+    release_resp = await client.post(
+        f"/api/jobs/{job_id}/release", json={"pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert release_resp.status_code == 429
 
 
 # --------------------------------------------------------------------------- #
@@ -1275,6 +1353,96 @@ async def test_reprint_copies_file_independently_of_original(db, user_client, tm
     # The reprint's own file must survive the original's deletion.
     download_resp = await user_client.get(f"/api/jobs/{reprint_id}/download")
     assert download_resp.status_code == 200
+
+
+# --------------------------------------------------------------------------- #
+# F27 — reprint of a PIN-protected job (review fix)
+#
+# reprint_job used to have no ownership or PIN check at all, and built the
+# new row with no release_pin — so any print user could reprint someone
+# else's PIN-protected job and get an unprotected copy of the file.
+# --------------------------------------------------------------------------- #
+async def test_reprint_pin_protected_job_other_user_is_403_without_pin(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownerrp")
+    _, other_token = await _make_user_with_token(db, "otherrp")
+
+    upload_resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    job_id = upload_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/jobs/{job_id}/reprint", headers={"Authorization": f"Bearer {other_token}"}
+    )
+    assert resp.status_code == 403
+
+
+async def test_reprint_pin_protected_job_other_user_with_correct_pin_ok(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownerrp2")
+    _, other_token = await _make_user_with_token(db, "otherrp2")
+
+    upload_resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    job_id = upload_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/jobs/{job_id}/reprint", json={"pin": "1234"},
+        headers={"Authorization": f"Bearer {other_token}"},
+    )
+    assert resp.status_code == 201
+
+
+async def test_reprint_pin_protected_job_owner_needs_no_pin(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownerrp3")
+
+    upload_resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    job_id = upload_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/jobs/{job_id}/reprint", headers={"Authorization": f"Bearer {owner_token}"}
+    )
+    assert resp.status_code == 201
+
+
+async def test_reprint_pin_protected_job_admin_needs_no_pin(db, client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+    _, owner_token = await _make_user_with_token(db, "ownerrp4")
+    _, admin_token = await _make_user_with_token(db, "adminrp", role="admin")
+
+    upload_resp = await client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"},
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    job_id = upload_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/jobs/{job_id}/reprint", headers={"Authorization": f"Bearer {admin_token}"}
+    )
+    assert resp.status_code == 201
+
+
+async def test_reprint_carries_the_pin_forward_onto_the_new_job(db, user_client, tmp_path):
+    """The reprinted copy must stay PIN-protected — not silently drop
+    protection because the new row is unconditionally owned by the
+    reprinter."""
+    await _seed_upload_dir(db, tmp_path)
+    upload_resp = await user_client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"release_pin": "1234"}
+    )
+    job_id = upload_resp.json()["id"]
+
+    resp = await user_client.post(f"/api/jobs/{job_id}/reprint")
+    assert resp.status_code == 201
+    assert resp.json()["has_pin"] is True
 
 
 # --------------------------------------------------------------------------- #
