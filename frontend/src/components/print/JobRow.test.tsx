@@ -133,6 +133,62 @@ describe('JobRow thumbnail', () => {
   });
 });
 
+describe('JobRow printer selector (F150)', () => {
+  function makePrinter(id: number, name: string): ManagedPrinter {
+    return {
+      id,
+      display_name: name,
+      cups_name: name.toLowerCase(),
+      uri: `ipp://${name}`,
+      description: null,
+      make_and_model: null,
+      location: null,
+      is_default: id === 1,
+      is_network_queue: false,
+      auto_release: false,
+      created_at: '2026-07-05T00:00:00Z',
+      cups_status: { state: 3, state_message: '', accepting_jobs: true },
+    };
+  }
+
+  const printerA = makePrinter(1, 'Printer A');
+  const printerB = makePrinter(2, 'Printer B');
+  const twoPrinters = [printerA, printerB];
+
+  it('resets its selection when the job is reassigned remotely, instead of offering a stale "Move" back', () => {
+    const heldOnA: PrintJob = { ...heldJob, printer_id: 1 };
+    const { rerender } = render(
+      <JobRowComponent {...makeProps({ job: heldOnA, printers: twoPrinters })} />
+    );
+
+    const select = screen.getByLabelText('Select printer') as HTMLSelectElement;
+    expect(select.value).toBe('1');
+    expect(screen.queryByRole('button', { name: 'Move' })).toBeNull();
+
+    // Simulate the WS job_updated broadcast from another admin reassigning
+    // this job to printer B — JobQueue re-renders this row with the same
+    // job.id but a new printer_id.
+    const heldOnB: PrintJob = { ...heldJob, printer_id: 2 };
+    rerender(<JobRowComponent {...makeProps({ job: heldOnB, printers: twoPrinters })} />);
+
+    // Without F150's key, `selected` would still read 1 here — showing a
+    // live "Move" button that, if clicked, silently reassigns the job back
+    // to printer A. The selector must remount and pick up printer B.
+    expect(screen.getByLabelText('Select printer')).toHaveValue('2');
+    expect(screen.queryByRole('button', { name: 'Move' })).toBeNull();
+  });
+
+  it('still shows "Move" for a genuine local, unsaved selection change', async () => {
+    const user = userEvent.setup();
+    const heldOnA: PrintJob = { ...heldJob, printer_id: 1 };
+    render(<JobRowComponent {...makeProps({ job: heldOnA, printers: twoPrinters })} />);
+
+    await user.selectOptions(screen.getByLabelText('Select printer'), '2');
+
+    expect(screen.getByRole('button', { name: 'Move' })).toBeInTheDocument();
+  });
+});
+
 describe('JobRow PIN lock placeholder (F27)', () => {
   const owner: User = { id: 'user-owner', email: 'o@example.com', display_name: 'Owner', role: 'user' };
   const otherUser: User = { id: 'user-other', email: 'x@example.com', display_name: 'Other', role: 'user' };

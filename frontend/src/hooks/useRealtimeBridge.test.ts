@@ -126,6 +126,27 @@ describe('applyJobEvent', () => {
     expect(cache.total).toBe(1);
   });
 
+  // F81: history's own paginated cache can't be upserted like the live list
+  // (a new/deleted job shifts every later page's offset), so every job
+  // event invalidates the whole historyAll prefix instead.
+  it('job_created also invalidates any cached jobs-history pages', () => {
+    qc.setQueryData(key, { jobs: [], total: 0 });
+    qc.setQueryData(queryKeys.jobs.history(0), { jobs: [makeJob(1)], total: 1 });
+
+    applyJobEvent(qc, msg('job_created', makeJob(2)));
+
+    expect(qc.getQueryState(queryKeys.jobs.history(0))?.isInvalidated).toBe(true);
+  });
+
+  it('job_deleted also invalidates any cached jobs-history pages', () => {
+    qc.setQueryData(key, { jobs: [makeJob(1)], total: 1 });
+    qc.setQueryData(queryKeys.jobs.history(0), { jobs: [makeJob(1)], total: 1 });
+
+    applyJobEvent(qc, msg('job_deleted', { id: 1 }));
+
+    expect(qc.getQueryState(queryKeys.jobs.history(0))?.isInvalidated).toBe(true);
+  });
+
   it('leaves the cache unset for every job event when the key was never seeded', () => {
     for (const event of [
       msg('job_created', makeJob(1)),
@@ -182,6 +203,24 @@ describe('applyScanEvent', () => {
     const cache = qc.getQueryData<ScansCache>(key)!;
     expect(cache.scans.map((s) => s.scan_id)).toEqual(['def']);
     expect(cache.total).toBe(1);
+  });
+
+  it('scan_completed also invalidates any cached scans-history pages', () => {
+    qc.setQueryData(key, { scans: [], total: 0 });
+    qc.setQueryData(queryKeys.scans.history(0), { scans: [makeScan('abc')], total: 1 });
+
+    applyScanEvent(qc, msg('scan_completed', makeScan('def')));
+
+    expect(qc.getQueryState(queryKeys.scans.history(0))?.isInvalidated).toBe(true);
+  });
+
+  it('scan_deleted also invalidates any cached scans-history pages', () => {
+    qc.setQueryData(key, { scans: [makeScan('abc')], total: 1 });
+    qc.setQueryData(queryKeys.scans.history(0), { scans: [makeScan('abc')], total: 1 });
+
+    applyScanEvent(qc, msg('scan_deleted', { scan_id: 'abc' }));
+
+    expect(qc.getQueryState(queryKeys.scans.history(0))?.isInvalidated).toBe(true);
   });
 
   it('leaves the cache unset for scan events when the key was never seeded', () => {

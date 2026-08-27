@@ -119,4 +119,71 @@ describe('HistoryPage', () => {
     expect(screen.queryByText('doc.pdf')).not.toBeInTheDocument();
     expect(screen.queryByText('PDF 300 DPI')).not.toBeInTheDocument();
   });
+
+  it('deleting a selected row prunes it from the selection instead of leaving a phantom count (F147)', async () => {
+    let jobDeleted = false;
+    server.use(
+      http.get('/api/jobs', () =>
+        HttpResponse.json(jobDeleted ? { jobs: [], total: 0 } : { jobs: [job], total: 1 }),
+      ),
+      http.get('/api/scanner/scans', () => HttpResponse.json({ scans: [scan], total: 1 })),
+      http.delete('/api/jobs/1', () => {
+        jobDeleted = true;
+        return HttpResponse.json({});
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<HistoryPage />, { wrapper: makeWrapper() });
+
+    await waitFor(() => expect(screen.getByText('doc.pdf')).toBeInTheDocument());
+
+    // Select just the print row (index 0 is the "select all" header
+    // checkbox; index 1 is doc.pdf, sorted newest-first ahead of the scan).
+    const checkboxes = screen.getAllByRole('checkbox');
+    await user.click(checkboxes[1]);
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+
+    // That row's own Delete button (not "Delete selected (1)").
+    await user.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
+
+    await waitFor(() => expect(screen.queryByText('doc.pdf')).not.toBeInTheDocument());
+    // The bar must clear itself — not keep reading "1 selected" for a row
+    // that's already gone (which also used to make "Delete selected"
+    // silently issue no request, since the id no longer resolves).
+    expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+  });
+
+  it('"Load more" fetches and appends the next page (F81)', async () => {
+    const page0Job: PrintJob = { ...job, id: 1, filename: 'newest.pdf' };
+    const page1Job: PrintJob = { ...job, id: 2, filename: 'oldest.pdf', created_at: '2026-06-01T00:00:00Z' };
+    const jobsCalls: string[] = [];
+
+    server.use(
+      http.get('/api/jobs', ({ request }) => {
+        const offset = new URL(request.url).searchParams.get('offset') ?? '0';
+        jobsCalls.push(offset);
+        return HttpResponse.json(
+          offset === '0' ? { jobs: [page0Job], total: 2 } : { jobs: [page1Job], total: 2 },
+        );
+      }),
+      http.get('/api/scanner/scans', () => HttpResponse.json({ scans: [], total: 0 })),
+    );
+
+    const user = userEvent.setup();
+    render(<HistoryPage />, { wrapper: makeWrapper() });
+
+    await waitFor(() => expect(screen.getByText('newest.pdf')).toBeInTheDocument());
+    expect(screen.queryByText('oldest.pdf')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load more' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Load more' }));
+
+    await waitFor(() => expect(screen.getByText('oldest.pdf')).toBeInTheDocument());
+    // Page 0 stays rendered too — "Load more" appends, it doesn't replace.
+    expect(screen.getByText('newest.pdf')).toBeInTheDocument();
+    expect(jobsCalls).toContain('50');
+    // Both pages' items are now loaded (2 of 2) — no more to fetch.
+    expect(screen.queryByRole('button', { name: 'Load more' })).not.toBeInTheDocument();
+  });
 });

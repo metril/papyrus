@@ -41,9 +41,14 @@ export function SettingField({
   mono?: boolean;
 }) {
   if (type === 'checkbox') {
+    // F19: the draft always holds the *string* form ('true'/'false') once
+    // touched (SettingsPage's `set` stringifies on write) — Boolean('false')
+    // is true, which snapped the switch back ON right after turning it off.
+    // Compare explicitly, matching every sibling card that does its own
+    // boolean parsing (AlertsCard, AuthenticationCard, OcrCard).
     return (
       <Toggle
-        checked={Boolean(value)}
+        checked={value === true || value === 'true'}
         onChange={(v) => onChange(String(v))}
         label={label}
       />

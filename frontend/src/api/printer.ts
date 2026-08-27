@@ -47,8 +47,13 @@ export async function reprintJob(jobId: number): Promise<PrintJob> {
   return data;
 }
 
-export async function listJobs(status?: string): Promise<{ jobs: PrintJob[]; total: number }> {
-  const params = status ? { status } : {};
+export interface ListJobsParams {
+  status?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export async function listJobs(params: ListJobsParams = {}): Promise<{ jobs: PrintJob[]; total: number }> {
   const { data } = await api.get('/jobs', { params });
   return data;
 }

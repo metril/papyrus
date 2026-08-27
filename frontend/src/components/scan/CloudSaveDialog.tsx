@@ -1,42 +1,49 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import Button from '../common/Button';
-import api from '../../api/client';
 import { saveScanToCloud } from '../../api/scanner';
-
-interface CloudProvider {
-  id: number;
-  provider: string;
-  connected_at: string;
-}
+import { uploadScanToWebdav } from '../../api/cloud';
+import { useCloudProviders } from '../../api/queries';
+import { getProviderLabel } from '../../lib/providerLabels';
+import type { CloudProvider } from '../../types';
 
 interface CloudSaveDialogProps {
   scanId: string;
   onClose: () => void;
 }
 
-const providerLabels: Record<string, string> = {
-  gdrive: 'Google Drive',
-  dropbox: 'Dropbox',
-};
+// F149: routes a save to the right backend API for the provider's kind —
+// gdrive/dropbox/onedrive share one endpoint, webdav has its own (no generic
+// /cloud/* dispatch handles "webdav"). The `never` default makes adding a
+// provider without updating this switch a compile error.
+async function saveToProvider(provider: CloudProvider, scanId: string): Promise<unknown> {
+  switch (provider.provider) {
+    case 'gdrive':
+    case 'dropbox':
+    case 'onedrive':
+      return saveScanToCloud(scanId, provider.id);
+    case 'webdav':
+      return uploadScanToWebdav(provider.id, scanId);
+    default: {
+      const unreachable: never = provider.provider;
+      throw new Error(`Unhandled cloud provider: ${unreachable}`);
+    }
+  }
+}
 
 export default function CloudSaveDialog({ scanId, onClose }: CloudSaveDialogProps) {
-  const [providers, setProviders] = useState<CloudProvider[]>([]);
-  const [loading, setLoading] = useState(true);
+  // F149: was a raw `api.get('/cloud/providers')` in its own effect — bypassed
+  // the Query cache (a fresh network round-trip every time the dialog opened)
+  // and duplicated the provider-label map, which only covered gdrive/dropbox
+  // and rendered anything else (onedrive, webdav) as its literal provider key.
+  const { data: providers = [], isPending: loading } = useCloudProviders();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    api.get('/cloud/providers')
-      .then(({ data }) => setProviders(data.providers))
-      .catch(() => setError('Failed to load cloud providers'))
-      .finally(() => setLoading(false));
-  }, []);
-
-  const handleSave = async (providerId: number) => {
+  const handleSave = async (provider: CloudProvider) => {
     setSaving(true);
     setError(null);
     try {
-      await saveScanToCloud(scanId, providerId);
+      await saveToProvider(provider, scanId);
       onClose();
     } catch {
       setError('Failed to upload to cloud storage.');
@@ -57,7 +64,7 @@ export default function CloudSaveDialog({ scanId, onClose }: CloudSaveDialogProp
           <p className="text-sm text-gray-500">Loading providers...</p>
         ) : providers.length === 0 ? (
           <p className="text-sm text-gray-500">
-            No cloud storage connected. Go to Settings to connect Google Drive or Dropbox.
+            No cloud storage connected. Go to Settings to connect a provider.
           </p>
         ) : (
           <div className="space-y-2">
@@ -65,12 +72,12 @@ export default function CloudSaveDialog({ scanId, onClose }: CloudSaveDialogProp
             {providers.map((p) => (
               <button
                 key={p.id}
-                onClick={() => handleSave(p.id)}
+                onClick={() => handleSave(p)}
                 disabled={saving}
                 className="w-full text-left p-3 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
               >
                 <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                  {providerLabels[p.provider] || p.provider}
+                  {getProviderLabel(p.provider)}
                 </div>
                 <div className="text-xs text-gray-500 dark:text-gray-400">
                   Connected {new Date(p.connected_at).toLocaleDateString()}

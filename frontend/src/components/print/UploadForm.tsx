@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useDropzone, type FileRejection } from 'react-dropzone';
 import { Upload } from 'lucide-react';
@@ -6,6 +6,7 @@ import Button from '../common/Button';
 import Toggle from '../common/Toggle';
 import { uploadPrintJob } from '../../api/printer';
 import { applyJobEvent } from '../../hooks/useRealtimeBridge';
+import { useToast } from '../../hooks/useToast';
 import type { PrintJob } from '../../types';
 
 const ACCEPTED_TYPES = {
@@ -24,14 +25,42 @@ const ACCEPTED_TYPES = {
   'application/vnd.oasis.opendocument.presentation': ['.odp'],
 };
 
+const MIN_COPIES = 1;
+const MAX_COPIES = 99;
+
+// F151: same-named files from different folders (or a multi-folder picker
+// selection) used to collapse into one queue entry because dedup/removal
+// only ever looked at `f.name`. size+lastModified distinguish files that
+// merely share a name.
+function fileKey(f: File): string {
+  return `${f.name}:${f.size}:${f.lastModified}`;
+}
+
+/** Clamps a copies input string to the 1–99 range the backend accepts,
+ * treating anything unparseable (or an empty field) as 1 rather than 0
+ * (F89) — `Number('')` is 0, which used to be sent to the server verbatim. */
+function clampCopies(raw: string): number {
+  if (raw.trim() === '') return MIN_COPIES;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return MIN_COPIES;
+  return Math.min(MAX_COPIES, Math.max(MIN_COPIES, Math.trunc(n)));
+}
+
 export default function UploadForm() {
   const [files, setFiles] = useState<File[]>([]);
-  const [copies, setCopies] = useState(1);
+  // Kept as the raw typed string (not the clamped number) so a field the
+  // user has cleared can stay visually empty while they type a new
+  // multi-digit value, rather than snapping back to "1" after every
+  // keystroke. `copies` below is always the clamped, submit-ready value.
+  const [copiesInput, setCopiesInput] = useState('1');
   const [duplex, setDuplex] = useState(false);
   const [media, setMedia] = useState('A4');
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  const toast = useToast();
+
+  const copies = clampCopies(copiesInput);
 
   // A fresh upload is a new job: prepend it into the cache (grow total). The
   // WS `job_created` broadcast that follows is an idempotent same-id replace.
@@ -45,21 +74,42 @@ export default function UploadForm() {
       }),
   });
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
-    setFiles((prev) => {
-      const existing = new Set(prev.map((f) => f.name));
-      return [...prev, ...acceptedFiles.filter((f) => !existing.has(f.name))];
-    });
-    setError(null);
-  }, []);
+  const onDrop = useCallback(
+    (acceptedFiles: File[]) => {
+      const existingKeys = new Set(files.map(fileKey));
+      const toAdd: File[] = [];
+      let duplicateCount = 0;
+      for (const f of acceptedFiles) {
+        const key = fileKey(f);
+        if (existingKeys.has(key)) {
+          duplicateCount += 1;
+          continue;
+        }
+        existingKeys.add(key);
+        toAdd.push(f);
+      }
+      if (toAdd.length > 0) {
+        setFiles((prev) => [...prev, ...toAdd]);
+      }
+      if (duplicateCount > 0) {
+        toast.show(
+          duplicateCount === 1
+            ? 'Skipped 1 file already in the queue'
+            : `Skipped ${duplicateCount} files already in the queue`,
+        );
+      }
+      setError(null);
+    },
+    [files, toast],
+  );
 
   const onDropRejected = useCallback((rejections: FileRejection[]) => {
     const names = rejections.map((r) => r.file.name);
     setError(`Unsupported file${names.length > 1 ? 's' : ''}: ${names.join(', ')}`);
   }, []);
 
-  const removeFile = (name: string) => {
-    setFiles((prev) => prev.filter((f) => f.name !== name));
+  const removeFile = (key: string) => {
+    setFiles((prev) => prev.filter((f) => fileKey(f) !== key));
   };
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -77,8 +127,14 @@ export default function UploadForm() {
     try {
       for (const file of files) {
         await uploadMutation.mutateAsync(file);
+        // F86: drop each file the moment it succeeds rather than only
+        // clearing the whole list after every file in the batch resolves —
+        // a later file failing (413, unsupported type, ...) used to leave
+        // already-uploaded files sitting in the visible queue, inviting a
+        // second, duplicate upload on retry.
+        const key = fileKey(file);
+        setFiles((prev) => prev.filter((f) => fileKey(f) !== key));
       }
-      setFiles([]);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Upload failed';
       setError(message);
@@ -121,13 +177,13 @@ export default function UploadForm() {
           </div>
           <ul className="text-sm space-y-1">
             {files.map((f) => (
-              <li key={f.name} className="flex items-center justify-between text-gray-700 dark:text-gray-300">
+              <li key={fileKey(f)} className="flex items-center justify-between text-gray-700 dark:text-gray-300">
                 <span className="truncate">
                   {f.name} <span className="font-mono text-gray-500 dark:text-gray-400">({(f.size / 1024).toFixed(1)} KB)</span>
                 </span>
                 <button
                   type="button"
-                  onClick={() => removeFile(f.name)}
+                  onClick={() => removeFile(fileKey(f))}
                   className="ml-2 text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 hover:bg-red-50 dark:hover:bg-red-950/50 rounded-full w-6 h-6 flex items-center justify-center shrink-0 text-base font-bold"
                   title="Remove file"
                 >
@@ -142,10 +198,16 @@ export default function UploadForm() {
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Copies</label>
               <input
                 type="number"
-                min={1}
-                max={99}
-                value={copies}
-                onChange={(e) => setCopies(Number(e.target.value))}
+                min={MIN_COPIES}
+                max={MAX_COPIES}
+                value={copiesInput}
+                onChange={(e) => {
+                  const raw = e.target.value;
+                  setCopiesInput(raw === '' ? '' : String(clampCopies(raw)));
+                }}
+                onBlur={() => {
+                  if (copiesInput === '') setCopiesInput('1');
+                }}
                 className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
               />
             </div>

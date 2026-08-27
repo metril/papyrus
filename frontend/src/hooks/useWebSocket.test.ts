@@ -1,11 +1,23 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
+import { AxiosError } from 'axios';
 import { useWebSocket } from './useWebSocket';
 import api from '../api/client';
+import { useAuthStore } from '../store/authStore';
 
 vi.mock('../api/client', () => ({
   default: { get: vi.fn(() => Promise.resolve({ data: {} })) },
 }));
+
+vi.mock('../store/authStore', () => ({
+  useAuthStore: { getState: vi.fn(() => ({ signOut: vi.fn() })) },
+}));
+
+function make401Error(): AxiosError {
+  const err = new AxiosError('Unauthorized');
+  err.response = { status: 401 } as AxiosError['response'];
+  return err;
+}
 
 /**
  * Minimal mock of the browser WebSocket, driven manually by tests via
@@ -58,11 +70,20 @@ function latestSocket(): MockWebSocket {
   return MockWebSocket.instances[MockWebSocket.instances.length - 1];
 }
 
+// Reassigned fresh in beforeEach and read by useAuthStore.getState's mock
+// implementation below — tests grab it directly rather than re-deriving it
+// from the mock's call args.
+let signOutSpy: ReturnType<typeof vi.fn>;
+
 beforeEach(() => {
   MockWebSocket.instances = [];
   vi.stubGlobal('WebSocket', MockWebSocket);
   vi.mocked(api.get).mockClear();
   vi.mocked(api.get).mockImplementation(() => Promise.resolve({ data: {} }));
+  signOutSpy = vi.fn();
+  vi.mocked(useAuthStore.getState).mockReturnValue(
+    { signOut: signOutSpy } as unknown as ReturnType<typeof useAuthStore.getState>,
+  );
 });
 
 afterEach(() => {
@@ -290,9 +311,9 @@ describe('useWebSocket', () => {
       expect(api.get).toHaveBeenCalledTimes(1);
     });
 
-    it('ignores a rejected /auth/me probe (401 handled by the client interceptor, not here)', async () => {
+    it('ignores a rejected /auth/me probe that is not a 401 (network blip, 5xx)', async () => {
       vi.useFakeTimers();
-      vi.mocked(api.get).mockImplementation(() => Promise.reject(new Error('401')));
+      vi.mocked(api.get).mockImplementation(() => Promise.reject(new Error('network error')));
       renderHook(() => useWebSocket({ url: '/x' }));
 
       failAndAdvance();
@@ -305,6 +326,24 @@ describe('useWebSocket', () => {
       await act(async () => {
         await Promise.resolve();
       });
+
+      expect(signOutSpy).not.toHaveBeenCalled();
+    });
+
+    it('signs out locally when the probe itself gets a 401 (F16: /auth/me is on the interceptor skip-list, so the interceptor never acts on it)', async () => {
+      vi.useFakeTimers();
+      vi.mocked(api.get).mockImplementation(() => Promise.reject(make401Error()));
+      renderHook(() => useWebSocket({ url: '/x' }));
+
+      failAndAdvance();
+      failAndAdvance();
+      failAndAdvance(); // probe fires and rejects with a 401
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(signOutSpy).toHaveBeenCalledTimes(1);
     });
   });
 });

@@ -62,6 +62,10 @@ export default function ScanList() {
     meta: { suppressGlobalError: true },
     onSuccess: (_result, scanId) =>
       applyScanEvent(queryClient, { type: 'scan_deleted', data: { scan_id: scanId } }),
+    // F87: every sibling mutation in this file toasts on failure — this one
+    // didn't, so a delete that 500s (e.g. the file is already missing on
+    // disk) left the row in place with no feedback at all.
+    onError: () => toast.show('Failed to delete scan'),
   });
 
   const paperlessMutation = useMutation({

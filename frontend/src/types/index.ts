@@ -114,7 +114,7 @@ export interface SMBFileEntry {
 
 export interface CloudProvider {
   id: number;
-  provider: 'gdrive' | 'dropbox' | 'onedrive';
+  provider: 'gdrive' | 'dropbox' | 'onedrive' | 'webdav';
   connected_at: string;
 }
 

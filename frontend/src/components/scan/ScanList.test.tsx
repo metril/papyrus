@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -6,6 +6,7 @@ import { http, HttpResponse } from 'msw';
 import type { ReactNode } from 'react';
 import { server } from '../../test/mocks/server';
 import ScanList from './ScanList';
+import { useToastStore } from '../../store/toastStore';
 import type { ScanJob } from '../../types';
 
 function makeWrapper() {
@@ -31,6 +32,32 @@ const scan: ScanJob = {
 };
 
 describe('ScanList', () => {
+  beforeEach(() => {
+    useToastStore.setState({ toasts: [] });
+  });
+
+  it('toasts and keeps the row when a delete fails, instead of failing silently (F87)', async () => {
+    server.use(
+      http.get('/api/scanner/scans', () => HttpResponse.json({ scans: [scan], total: 1 })),
+      http.delete('/api/scanner/scans/scan-abc', () =>
+        HttpResponse.json({ detail: 'File missing on disk' }, { status: 500 }),
+      ),
+    );
+
+    const user = userEvent.setup();
+    render(<ScanList />, { wrapper: makeWrapper() });
+
+    await waitFor(() => expect(screen.getByText(/300 DPI/)).toBeInTheDocument());
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() =>
+      expect(useToastStore.getState().toasts.map((t) => t.message)).toContain('Failed to delete scan'),
+    );
+    // The row is still there — no silent, stuck-looking no-op.
+    expect(screen.getByText(/300 DPI/)).toBeInTheDocument();
+  });
+
   it('deletes a scan, removing its row from the cache without a refetch', async () => {
     let scansGetCount = 0;
     let deleteCalled = false;

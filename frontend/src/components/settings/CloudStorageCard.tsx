@@ -5,13 +5,7 @@ import Button from '../common/Button';
 import { useToast } from '../../hooks/useToast';
 import { disconnectProvider, connectWebdav, getAuthorizeUrl } from '../../api/cloud';
 import { useCloudProviders, queryKeys } from '../../api/queries';
-
-const providerLabels: Record<string, string> = {
-  gdrive: 'Google Drive',
-  dropbox: 'Dropbox',
-  onedrive: 'OneDrive',
-  webdav: 'WebDAV / Nextcloud',
-};
+import { getProviderLabel } from '../../lib/providerLabels';
 
 export default function CloudStorageCard() {
   const toast = useToast();
@@ -65,7 +59,7 @@ export default function CloudStorageCard() {
             {cloudProviders.map((p) => (
               <div key={p.id} className="flex items-center justify-between p-3 rounded-lg border border-gray-200 dark:border-gray-700">
                 <div>
-                  <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{providerLabels[p.provider] || p.provider}</div>
+                  <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{getProviderLabel(p.provider)}</div>
                   <div className="text-xs text-gray-500 dark:text-gray-400">Connected {new Date(p.connected_at).toLocaleDateString()}</div>
                 </div>
                 <Button size="sm" variant="danger" onClick={() => handleDisconnectCloud(p.id)}>Disconnect</Button>

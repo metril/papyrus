@@ -44,3 +44,45 @@ describe('NetworkBrowser (via FilesPage)', () => {
     await waitFor(() => expect(screen.getByText('report.pdf')).toBeInTheDocument());
   });
 });
+
+// F82: a connected webdav provider used to fall through the gdrive/dropbox/
+// onedrive dispatch and hit GET /cloud/files/{id}, which 400s "Unknown
+// provider" — surfaced as "Failed to browse cloud storage" for a provider
+// that's actually reachable. It should route to /webdav/{id}/files instead.
+describe('CloudBrowser webdav dispatch (via FilesPage)', () => {
+  it('browses a webdav provider via /api/webdav/{id}/files, not /api/cloud/files/{id}, and labels it correctly', async () => {
+    let cloudFilesHit = false;
+    server.use(
+      http.get('/api/cloud/providers', () =>
+        HttpResponse.json({
+          providers: [{ id: 3, provider: 'webdav', connected_at: '2026-01-03T00:00:00Z' }],
+        }),
+      ),
+      http.get('/api/cloud/files/3', () => {
+        cloudFilesHit = true;
+        return HttpResponse.json({ detail: 'Unknown provider' }, { status: 400 });
+      }),
+      http.get('/api/webdav/3/files', ({ request }) => {
+        expect(new URL(request.url).searchParams.get('path')).toBe('/');
+        return HttpResponse.json([
+          { name: 'notes.txt', path: '/notes.txt', is_directory: false, size: 12, modified_at: null, mime_type: 'text/plain' },
+        ]);
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<FilesPage />, { wrapper: makeWrapper() });
+
+    await user.click(screen.getByText('Cloud'));
+    await waitFor(() => expect(screen.getByText('WebDAV / Nextcloud')).toBeInTheDocument());
+
+    await user.click(screen.getByText('WebDAV / Nextcloud'));
+
+    await waitFor(() => expect(screen.getByText('notes.txt')).toBeInTheDocument());
+    expect(cloudFilesHit).toBe(false);
+    // No download/print endpoint exists for webdav files — the actions are
+    // hidden rather than offered and 404ing.
+    expect(screen.queryByRole('button', { name: /print/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /view/i })).not.toBeInTheDocument();
+  });
+});

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
+import axios from 'axios';
 import api from '../api/client';
+import { useAuthStore } from '../store/authStore';
 import type { WSMessage } from '../types';
 
 interface UseWebSocketOptions {
@@ -19,10 +21,12 @@ const MAX_RECONNECT_DELAY_MS = 30_000;
 // apart, an expired session would reconnect forever (backoff now has no
 // ceiling) with the realtime UI silently dead and nothing prompting the
 // user to log back in. Every 3rd consecutive failed attempt with no
-// intervening onopen, ping the shared axios client's /auth/me: its response
-// interceptor (api/client.ts) redirects to login on a 401, which breaks the
-// loop for a genuine auth failure while leaving real network blips to keep
-// retrying on their own backoff, uninterrupted.
+// intervening onopen, ping the shared axios client's /auth/me. F16 put
+// /auth/me on the response interceptor's skip-list (api/client.ts), so a
+// 401 there is handled directly below instead -- see the `.catch` in
+// connectImpl -- which breaks the loop for a genuine auth failure while
+// leaving real network blips to keep retrying on their own backoff,
+// uninterrupted.
 const AUTH_PROBE_ATTEMPT_INTERVAL = 3;
 
 export function useWebSocket({
@@ -93,9 +97,18 @@ export function useWebSocket({
       );
       reconnectCount.current++;
       if (reconnectCount.current % AUTH_PROBE_ATTEMPT_INTERVAL === 0) {
-        // Fire-and-forget -- only the interceptor's side effect on 401
-        // matters here, not the response itself.
-        api.get('/auth/me').catch(() => {});
+        // Fire-and-forget. F16 put /auth/me on the interceptor's skip-list
+        // (it 401s as part of the normal "am I logged in" flow, not just on
+        // a genuine session expiry), so the interceptor no longer acts on
+        // this probe's 401 -- handle it here instead: a 401 here really
+        // does mean the session died, so sign out locally. Any other
+        // rejection (network blip, 5xx) is left alone; the socket's own
+        // backoff keeps retrying on its own.
+        api.get('/auth/me').catch((err: unknown) => {
+          if (axios.isAxiosError(err) && err.response?.status === 401) {
+            useAuthStore.getState().signOut();
+          }
+        });
       }
       reconnectTimer.current = setTimeout(connectImpl, delay);
     };

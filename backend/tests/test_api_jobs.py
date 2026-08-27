@@ -134,6 +134,30 @@ async def test_upload_creates_held_job_with_file_on_disk(db, user_client, tmp_pa
     assert get_resp.json()["status"] == "held"
 
 
+@pytest.mark.parametrize("copies", [0, -1, 100])
+async def test_upload_with_out_of_range_copies_is_422(db, user_client, tmp_path, copies):
+    """F89: copies is bounded ge=1/le=99, matching PrintJobUpload/reprint —
+    the frontend previously sent 0 for a cleared field with nothing on the
+    server to reject it."""
+    await _seed_upload_dir(db, tmp_path)
+
+    resp = await user_client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"copies": str(copies)}
+    )
+    assert resp.status_code == 422
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_upload_with_in_range_copies_is_accepted(db, user_client, tmp_path):
+    await _seed_upload_dir(db, tmp_path)
+
+    resp = await user_client.post(
+        "/api/jobs/upload", files=_pdf_file(), data={"copies": "99"}
+    )
+    assert resp.status_code == 201
+    assert resp.json()["copies"] == 99
+
+
 async def test_upload_with_non_digit_pin_is_400_with_no_file_left_on_disk(
     db, user_client, tmp_path
 ):

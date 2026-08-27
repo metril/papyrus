@@ -207,7 +207,19 @@ export function JobRowComponent({
           </div>
           {job.status === 'held' && printers.length > 1 && (
             <div className="mt-1.5">
-              <PrinterSelector job={job} printers={printers} assigning={assigning} onAssign={onAssign} />
+              {/* F150: keyed on printer_id so a remote reassignment (another
+                  admin moving this job, arriving via the WS job_updated
+                  broadcast) remounts the selector instead of leaving its
+                  internal `selected` state pointed at the now-stale printer —
+                  which otherwise showed a live "Move" button that silently
+                  reassigned the job right back on click. */}
+              <PrinterSelector
+                key={job.printer_id ?? 'none'}
+                job={job}
+                printers={printers}
+                assigning={assigning}
+                onAssign={onAssign}
+              />
             </div>
           )}
           {job.error_message && (

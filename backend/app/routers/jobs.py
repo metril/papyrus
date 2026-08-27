@@ -218,7 +218,10 @@ async def _create_print_job_from_upload(
 @router.post("/upload", response_model=PrintJobResponse, status_code=201)
 async def upload_and_create_job(
     file: UploadFile = File(...),
-    copies: int = Form(default=1),
+    # F89: the frontend's Copies field used to send whatever it was given
+    # (0 when cleared, unbounded above) straight through to CUPS —
+    # bounded here to match the `PrintJobUpload`/reprint schemas' ge=1/le=99.
+    copies: int = Form(default=1, ge=1, le=99),
     duplex: bool = Form(default=False),
     media: str = Form(default="A4"),
     hold: bool = Form(default=True),

@@ -55,6 +55,54 @@ export async function downloadCloudFile(
   return data;
 }
 
+// --- WebDAV browsing (F82) ---
+//
+// A WebDAV-connected provider (Nextcloud, ...) is a `CloudProvider` row like
+// any other, but it's served by its own router (`/api/webdav/*`) rather than
+// `/api/cloud/*` — that router has no browse-by-provider-id dispatch for
+// "webdav", so routing a webdav provider through `listFiles`/`getDownloadUrl`
+// above 400s. The WebDAV service also has no generic file-download endpoint
+// (only listing and a scan-upload target), so browsing a webdav provider
+// supports listing/navigating folders but not downloading/printing a file.
+
+interface WebdavRawEntry {
+  name: string;
+  path: string;
+  is_directory: boolean;
+  size: number | null;
+  modified_at: string | null;
+  mime_type: string | null;
+}
+
+export async function listWebdavFiles(providerId: number, path: string): Promise<CloudFileEntry[]> {
+  const { data } = await api.get<WebdavRawEntry[]>(`/webdav/${providerId}/files`, {
+    params: { path },
+  });
+  // The WebDAV service identifies entries by their full server path rather
+  // than an opaque id — reused as CloudFileEntry.id, which is exactly what
+  // list_webdav_files expects back as the next `path` when navigating in.
+  return data.map((entry) => ({
+    name: entry.name,
+    id: entry.path,
+    is_directory: entry.is_directory,
+    size: entry.size,
+    modified_at: entry.modified_at,
+    mime_type: entry.mime_type,
+  }));
+}
+
+export async function uploadScanToWebdav(
+  providerId: number,
+  scanId: string,
+  destinationFolder = '/',
+): Promise<{ message: string }> {
+  const { data } = await api.post(`/webdav/${providerId}/upload`, {
+    scan_id: scanId,
+    destination_folder: destinationFolder,
+  });
+  return data;
+}
+
 export function getDownloadUrl(
   providerId: number,
   fileId: string,

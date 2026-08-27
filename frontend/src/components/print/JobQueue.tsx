@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import axios from 'axios';
 import { Printer } from 'lucide-react';
 import { useJobs, usePrinters, queryKeys } from '../../api/queries';
 import { releaseJob, cancelJob, deleteJob, reprintJob } from '../../api/printer';
@@ -15,11 +16,33 @@ import JobRow from './JobRow';
 import { useToast } from '../../hooks/useToast';
 import type { PrintJob } from '../../types';
 
+// F81: useJobs() now requests up to 200 jobs of *any* status (not just the
+// backend's default newest-50) so a long-held job doesn't fall out of view —
+// but "Print Queue" should only ever show jobs still in flight. Completed/
+// failed/cancelled jobs live in History instead.
+const QUEUE_STATUSES = new Set(['held', 'converting', 'printing']);
+
+/** Maps a release failure to dialog copy (F148): the backend genuinely
+ * distinguishes a wrong PIN (403) from too many attempts (429) from an
+ * unrelated failure (printer offline, conversion error, ...) — the dialog
+ * used to label all of them "Invalid PIN", which sent a user with the
+ * *correct* PIN on a repeated-retry goose chase instead of checking the
+ * printer. */
+function describePinError(err: unknown): string {
+  if (axios.isAxiosError<{ detail?: string }>(err)) {
+    const status = err.response?.status;
+    if (status === 403) return 'Invalid PIN';
+    if (status === 429) return 'Too many attempts';
+    return err.response?.data?.detail || 'Failed to release job';
+  }
+  return 'Failed to release job';
+}
+
 export default function JobQueue() {
   const queryClient = useQueryClient();
   const jobsQuery = useJobs();
   const printersQuery = usePrinters();
-  const jobs = jobsQuery.data?.jobs ?? [];
+  const jobs = (jobsQuery.data?.jobs ?? []).filter((j) => QUEUE_STATUSES.has(j.status));
   const printers = printersQuery.data ?? [];
   // Destructured because `useToast()` returns a fresh object each render while
   // `show` itself is a stable zustand action — depending on `show` keeps the
@@ -110,13 +133,24 @@ export default function JobQueue() {
     try {
       await releaseAsync({ id: pinJobId, pin: pinValue });
       setPinJobId(null);
-    } catch {
-      setPinError('Invalid PIN');
+    } catch (err: unknown) {
+      setPinError(describePinError(err));
       pinInputRef.current?.focus();
     } finally {
       setPinSubmitting(false);
     }
   };
+
+  // F148: the dialog previously had no keyboard exit at all (only a
+  // backdrop click or the Cancel button).
+  useEffect(() => {
+    if (pinJobId === null) return;
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPinJobId(null);
+    };
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [pinJobId]);
 
   const handleAction = useCallback(
     async (action: () => Promise<unknown>, jobId: number) => {

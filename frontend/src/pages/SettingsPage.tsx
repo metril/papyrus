@@ -28,7 +28,21 @@ interface ApiErrorResponse {
   detail?: string;
 }
 
-/** Mirrors the pre-Query GET failure copy, staying silent on 401 (interceptor redirects). */
+/** Shallow-picks only `keys` present on `source` — used to merge a section's
+ * freshly-saved values back into the shared draft (F85) without letting the
+ * untouched keys of other, still-unsaved sections be clobbered by whatever
+ * happens to be in `source`. */
+function pick(source: Record<string, string>, keys: string[]): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const key of keys) {
+    if (key in source) result[key] = source[key];
+  }
+  return result;
+}
+
+/** Mirrors the pre-Query GET failure copy, staying silent on 401 (the
+ * interceptor signs the user out — see api/client.ts — which unmounts this
+ * page entirely in favor of LoginScreen). */
 function describeSettingsLoadError(error: unknown): string | null {
   if (axios.isAxiosError<ApiErrorResponse>(error)) {
     if (error.response?.status === 401) return null;
@@ -75,7 +89,10 @@ export default function SettingsPage() {
       // Refresh settings from backend to reflect actual stored values.
       await queryClient.invalidateQueries({ queryKey: queryKeys.settings });
       const fresh = queryClient.getQueryData<Record<string, string>>(queryKeys.settings);
-      if (fresh) setAppSettings(fresh);
+      // F85: merge back only this section's own keys — replacing the whole
+      // draft with `fresh` silently discarded any unsaved edit sitting in a
+      // different card (fresh reflects only what's actually in the DB).
+      if (fresh) setAppSettings((prev) => (prev ? { ...prev, ...pick(fresh, keys) } : prev));
       setSaveStatus((s) => ({ ...s, [section]: 'saved' }));
       setTimeout(() => setSaveStatus((s) => ({ ...s, [section]: undefined as unknown as 'saved' })), 2000);
     } catch {

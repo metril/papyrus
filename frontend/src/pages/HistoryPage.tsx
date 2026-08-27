@@ -1,9 +1,16 @@
 import { useState, useMemo, useCallback } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query';
 import { History, SearchX, Trash2 } from 'lucide-react';
-import { useJobs, useScans, queryKeys } from '../api/queries';
-import { deleteJob, bulkDeleteJobs } from '../api/printer';
-import { deleteScan, bulkDeleteScans, getScanDownloadUrl, getJobDownloadUrl, getJobPreviewUrl } from '../api/scanner';
+import { queryKeys, HISTORY_PAGE_SIZE } from '../api/queries';
+import { deleteJob, bulkDeleteJobs, listJobs } from '../api/printer';
+import {
+  deleteScan,
+  bulkDeleteScans,
+  listScans,
+  getScanDownloadUrl,
+  getJobDownloadUrl,
+  getJobPreviewUrl,
+} from '../api/scanner';
 import Card from '../components/common/Card';
 import Button from '../components/common/Button';
 import FilePreviewModal from '../components/common/FilePreviewModal';
@@ -45,12 +52,6 @@ function scanMimeType(scan: ScanJob): string {
   return `image/${scan.format}`;
 }
 
-// Stable empty-array fallbacks: a fresh `[] ` literal on every render would
-// change identity even when the underlying query data hasn't, defeating the
-// `items` useMemo below (which depends on `jobs`/`scans` by reference).
-const EMPTY_JOBS: PrintJob[] = [];
-const EMPTY_SCANS: ScanJob[] = [];
-
 function isWithinDate(timeStr: string, filter: DateFilter): boolean {
   if (filter === 'all') return true;
   const date = new Date(timeStr);
@@ -71,15 +72,43 @@ function isWithinDate(timeStr: string, filter: DateFilter): boolean {
 
 export default function HistoryPage() {
   const queryClient = useQueryClient();
-  const jobsQuery = useJobs();
-  const scansQuery = useScans();
-  const jobs = jobsQuery.data?.jobs ?? EMPTY_JOBS;
-  const scans = scansQuery.data?.scans ?? EMPTY_SCANS;
-  // Realtime updates arrive via the app-wide WS→Query bridge (mounted in
-  // AppShell), which upserts into queryKeys.jobs.list() / queryKeys.scans.list()
-  // as events come in — this page just renders whatever's in the cache.
-  const loading = jobsQuery.isPending || scansQuery.isPending;
-  const hasError = jobsQuery.isError || scansQuery.isError;
+
+  // F81: History used to render straight off the same capped, unfiltered
+  // useJobs()/useScans() the live Print Queue uses (backend default
+  // limit=50), so it silently omitted everything past the 50 newest
+  // jobs/scans of any status while still labeling itself "All time" with an
+  // item count. It now owns a real paginated cache: each page is its own
+  // query (queryKeys.jobs/scans.history(page)), and "Load more" fetches one
+  // more page — already-loaded pages stay cached and are just concatenated.
+  const [pageCount, setPageCount] = useState(1);
+  const pageIndexes = useMemo(() => Array.from({ length: pageCount }, (_, i) => i), [pageCount]);
+
+  const jobPages = useQueries({
+    queries: pageIndexes.map((page) => ({
+      queryKey: queryKeys.jobs.history(page),
+      queryFn: () => listJobs({ limit: HISTORY_PAGE_SIZE, offset: page * HISTORY_PAGE_SIZE }),
+    })),
+  });
+  const scanPages = useQueries({
+    queries: pageIndexes.map((page) => ({
+      queryKey: queryKeys.scans.history(page),
+      queryFn: () => listScans({ limit: HISTORY_PAGE_SIZE, offset: page * HISTORY_PAGE_SIZE }),
+    })),
+  });
+
+  const jobs = useMemo(() => jobPages.flatMap((q) => q.data?.jobs ?? []), [jobPages]);
+  const scans = useMemo(() => scanPages.flatMap((q) => q.data?.scans ?? []), [scanPages]);
+  const jobsTotal = jobPages[0]?.data?.total ?? 0;
+  const scansTotal = scanPages[0]?.data?.total ?? 0;
+  const canLoadMore = jobs.length < jobsTotal || scans.length < scansTotal;
+  const loadingMore = pageCount > 1 && (jobPages.some((q) => q.isFetching) || scanPages.some((q) => q.isFetching));
+
+  const loading = jobPages[0]?.isPending || scanPages[0]?.isPending;
+  const hasError = jobPages.some((q) => q.isError) || scanPages.some((q) => q.isError);
+  const refetchAll = () => {
+    jobPages.forEach((q) => q.refetch());
+    scanPages.forEach((q) => q.refetch());
+  };
 
   const [tab, setTab] = useState<Tab>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -88,14 +117,33 @@ export default function HistoryPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [previewItem, setPreviewItem] = useState<HistoryItem | null>(null);
 
+  // F147: pruning the deleted id out of `selected` here (not just
+  // invalidating the list) keeps the "N selected" bar from showing a phantom
+  // count for a row that's already gone.
   const deleteJobMutation = useMutation({
     mutationFn: (jobId: number) => deleteJob(jobId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.jobs.list() }),
+    onSuccess: (_result, jobId) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs.historyAll });
+      setSelected((prev) => {
+        if (!prev.has(`print-${jobId}`)) return prev;
+        const next = new Set(prev);
+        next.delete(`print-${jobId}`);
+        return next;
+      });
+    },
   });
 
   const deleteScanMutation = useMutation({
     mutationFn: (scanId: string) => deleteScan(scanId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.scans.list() }),
+    onSuccess: (_result, scanId) => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.scans.historyAll });
+      setSelected((prev) => {
+        if (!prev.has(`scan-${scanId}`)) return prev;
+        const next = new Set(prev);
+        next.delete(`scan-${scanId}`);
+        return next;
+      });
+    },
   });
 
   const bulkDeleteMutation = useMutation({
@@ -106,8 +154,8 @@ export default function HistoryPage() {
       await Promise.all(promises);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.jobs.list() });
-      queryClient.invalidateQueries({ queryKey: queryKeys.scans.list() });
+      queryClient.invalidateQueries({ queryKey: queryKeys.jobs.historyAll });
+      queryClient.invalidateQueries({ queryKey: queryKeys.scans.historyAll });
       setSelected(new Set());
     },
   });
@@ -287,7 +335,7 @@ export default function HistoryPage() {
         {loading ? (
           <Skeleton variant="row" count={4} />
         ) : hasError ? (
-          <ErrorState onRetry={() => { jobsQuery.refetch(); scansQuery.refetch(); }} />
+          <ErrorState onRetry={refetchAll} />
         ) : filtered.length === 0 ? (
           items.length === 0 ? (
             <EmptyState
@@ -331,6 +379,18 @@ export default function HistoryPage() {
           </div>
         )}
       </Card>
+
+      {!loading && !hasError && canLoadMore && (
+        <div className="flex justify-center">
+          <Button
+            variant="secondary"
+            onClick={() => setPageCount((c) => c + 1)}
+            disabled={loadingMore}
+          >
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </Button>
+        </div>
+      )}
 
       {previewItem && (
         <FilePreviewModal

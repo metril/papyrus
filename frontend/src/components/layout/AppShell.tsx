@@ -1,10 +1,11 @@
 import { Suspense, useEffect, useState } from 'react';
-import { Outlet, NavLink } from 'react-router-dom';
+import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import api from '../../api/client';
 import { useThemeStore } from '../../store/themeStore';
 import { useAuthStore } from '../../store/authStore';
 import { useRealtimeBridge } from '../../hooks/useRealtimeBridge';
 import Skeleton from '../common/Skeleton';
+import ChunkErrorBoundary from '../common/ChunkErrorBoundary';
 import {
   Printer,
   ScanLine,
@@ -16,6 +17,7 @@ import {
   ShieldCheck,
   Settings,
   LogOut,
+  MoreHorizontal,
   Sun,
   Moon,
   Monitor,
@@ -39,6 +41,11 @@ const RouteFallback = () => (
     <Skeleton variant="card" count={3} />
   </div>
 );
+
+// F88: the mobile bottom bar only has room for a handful of items before it
+// gets cramped — the rest (previously entirely unreachable except by typing
+// a URL) live behind a "More" overflow sheet.
+const MOBILE_VISIBLE_COUNT = 4;
 
 const navItems = [
   { to: '/print', label: 'Print', icon: Printer },
@@ -200,6 +207,11 @@ export default function AppShell() {
   useEffect(() => { fetchUser(); }, [fetchUser]);
   const isAdmin = user?.role === 'admin';
   const visibleNavItems = navItems.filter((item) => !item.adminOnly || isAdmin);
+  const mobilePrimaryItems = visibleNavItems.slice(0, MOBILE_VISIBLE_COUNT);
+  const mobileOverflowItems = visibleNavItems.slice(MOBILE_VISIBLE_COUNT);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const location = useLocation();
+  const overflowActive = mobileOverflowItems.some((item) => location.pathname.startsWith(item.to));
 
   if (loading) {
     return <CenteredSpinner />;
@@ -265,15 +277,21 @@ export default function AppShell() {
       {/* Main content */}
       <main className="md:ml-64 flex-1 flex flex-col min-h-screen">
         <div className="flex-1 p-4 md:p-8 pb-20 md:pb-8">
-          <Suspense fallback={<RouteFallback />}>
-            <Outlet />
-          </Suspense>
+          <ChunkErrorBoundary>
+            <Suspense fallback={<RouteFallback />}>
+              <Outlet />
+            </Suspense>
+          </ChunkErrorBoundary>
         </div>
       </main>
 
-      {/* Mobile bottom navigation */}
+      {/* Mobile bottom navigation. F88: previously hardcoded to the first 3
+          items plus a pinned Settings link, with no way at all to reach
+          Files/History (or, for an admin, Dashboard/Users/Audit) on a phone
+          short of typing the URL. Now the first few items stay pinned and
+          everything else — including Settings — lives behind "More". */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 flex items-center justify-around py-1.5 z-50">
-        {visibleNavItems.slice(0, 3).map(({ to, label, icon: Icon }) => (
+        {mobilePrimaryItems.map(({ to, label, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}
@@ -289,21 +307,56 @@ export default function AppShell() {
             {label}
           </NavLink>
         ))}
-        <NavLink
-          to="/settings"
-          className={({ isActive }) =>
-            `flex min-h-11 min-w-11 flex-col items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-              isActive
+        {mobileOverflowItems.length > 0 && (
+          <button
+            onClick={() => setMoreOpen(true)}
+            aria-label="More navigation"
+            className={`flex min-h-11 min-w-11 flex-col items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+              overflowActive
                 ? 'bg-ink-50 text-ink-700 dark:bg-ink-950 dark:text-ink-300'
                 : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
-            }`
-          }
-        >
-          <Settings className="w-5 h-5" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />
-          Settings
-        </NavLink>
+            }`}
+          >
+            <MoreHorizontal className="w-5 h-5" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />
+            More
+          </button>
+        )}
         <ThemeToggle compact />
       </nav>
+
+      {/* "More" overflow sheet: the mobile nav items that don't fit in the
+          bottom bar, including Settings. */}
+      {moreOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-50 flex items-end bg-black/50"
+          onClick={() => setMoreOpen(false)}
+          role="dialog"
+          aria-label="More navigation"
+        >
+          <div
+            className="w-full rounded-t-2xl bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 p-4 pb-8 space-y-1"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {mobileOverflowItems.map(({ to, label, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                onClick={() => setMoreOpen(false)}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                    isActive
+                      ? 'bg-ink-50 text-ink-700 dark:bg-ink-950 dark:text-ink-300'
+                      : 'text-gray-600 hover:bg-gray-50 dark:text-gray-400 dark:hover:bg-gray-800/50'
+                  }`
+                }
+              >
+                <Icon className="w-5 h-5" strokeWidth={ICON_STROKE_WIDTH} aria-hidden="true" />
+                {label}
+              </NavLink>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -42,7 +42,16 @@ interface ScansCache {
   total: number;
 }
 
-/** Apply a jobs-channel event (`job_created`/`job_updated`/`job_deleted`). */
+/**
+ * Apply a jobs-channel event (`job_created`/`job_updated`/`job_deleted`).
+ *
+ * The live queue list (`queryKeys.jobs.list()`) is upserted surgically via
+ * `setQueryData`, same as always. History's own paginated cache
+ * (`queryKeys.jobs.history(page)`) can't be upserted the same way — a new or
+ * deleted job shifts every later page's offset — so instead every event
+ * invalidates the whole `historyAll` prefix (F81), which is a no-op unless
+ * HistoryPage is actually mounted with pages cached.
+ */
 export function applyJobEvent(queryClient: QueryClient, msg: WSMessage): void {
   const key = queryKeys.jobs.list();
 
@@ -61,6 +70,7 @@ export function applyJobEvent(queryClient: QueryClient, msg: WSMessage): void {
       // Unseen job: prepend (list is newest-first) and grow total.
       return { jobs: [incoming, ...prev.jobs], total: prev.total + 1 };
     });
+    queryClient.invalidateQueries({ queryKey: queryKeys.jobs.historyAll });
     return;
   }
 
@@ -74,10 +84,15 @@ export function applyJobEvent(queryClient: QueryClient, msg: WSMessage): void {
       if (!exists) return prev;
       return { jobs: prev.jobs.filter((j) => j.id !== id), total: prev.total - 1 };
     });
+    queryClient.invalidateQueries({ queryKey: queryKeys.jobs.historyAll });
   }
 }
 
-/** Apply a scans-channel event (`scan_completed`/`scan_deleted`), keyed by `scan_id`. */
+/**
+ * Apply a scans-channel event (`scan_completed`/`scan_deleted`), keyed by
+ * `scan_id`. See applyJobEvent above for why history's pages are
+ * invalidated (F81) rather than upserted like the live list.
+ */
 export function applyScanEvent(queryClient: QueryClient, msg: WSMessage): void {
   const key = queryKeys.scans.list();
 
@@ -94,6 +109,7 @@ export function applyScanEvent(queryClient: QueryClient, msg: WSMessage): void {
       }
       return { scans: [incoming, ...prev.scans], total: prev.total + 1 };
     });
+    queryClient.invalidateQueries({ queryKey: queryKeys.scans.historyAll });
     return;
   }
 
@@ -106,6 +122,7 @@ export function applyScanEvent(queryClient: QueryClient, msg: WSMessage): void {
       if (!exists) return prev;
       return { scans: prev.scans.filter((s) => s.scan_id !== scanId), total: prev.total - 1 };
     });
+    queryClient.invalidateQueries({ queryKey: queryKeys.scans.historyAll });
   }
 }
 

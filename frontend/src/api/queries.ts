@@ -18,9 +18,17 @@ export const queryKeys = {
   jobs: {
     all: ['jobs'] as const,
     list: () => ['jobs', 'list'] as const,
+    // F81: History's own paginated view, independent of the live queue's
+    // list() cache. `historyAll` is the shared prefix every `history(page)`
+    // key falls under — invalidateQueries matches it against every loaded
+    // page without needing to know how many pages exist.
+    historyAll: ['jobs', 'history'] as const,
+    history: (page: number) => ['jobs', 'history', page] as const,
   },
   scans: {
     list: () => ['scans', 'list'] as const,
+    historyAll: ['scans', 'history'] as const,
+    history: (page: number) => ['scans', 'history', page] as const,
   },
   printers: {
     list: () => ['printers', 'list'] as const,
@@ -50,11 +58,16 @@ export const queryKeys = {
 /**
  * Print jobs. The cache value keeps the raw `{ jobs, total }` response shape so
  * the WebSocket cache bridge can upsert into it; consumers pick `data.jobs`.
+ *
+ * F81: requests the backend's max page size (200, server-capped) rather than
+ * its 50-row default — JobQueue needs every held/converting/printing job in
+ * view, not just the 50 newest jobs of *any* status. History has its own
+ * paginated `useJobs`/`useScans` equivalent below.
  */
 export function useJobs() {
   return useQuery({
     queryKey: queryKeys.jobs.list(),
-    queryFn: () => listJobs(),
+    queryFn: () => listJobs({ limit: 200 }),
   });
 }
 
@@ -65,6 +78,14 @@ export function useScans() {
     queryFn: () => listScans(),
   });
 }
+
+/**
+ * Page size for HistoryPage's `queryKeys.jobs/scans.history(page)` queries.
+ * A variable, growing number of pages ("Load more") can't be fetched with a
+ * fixed set of hook calls, so HistoryPage builds its own `useQueries` array
+ * against these keys/params directly rather than a single-page hook here.
+ */
+export const HISTORY_PAGE_SIZE = 50;
 
 export function usePrinters() {
   return useQuery({

@@ -19,7 +19,17 @@ export default defineConfig({
     }),
     tailwindcss(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // F101: 'autoUpdate' + skipWaiting/clientsClaim below made a new SW
+      // seize every open tab immediately and purge the old precache — a tab
+      // left open mid-deploy could then have its still-mounted lazy routes'
+      // hashed chunks vanish out from under it with no prompt at all.
+      // 'prompt' waits for the app to call the (auto-injected)
+      // virtual:pwa-register hooks before activating; since nothing in this
+      // app currently does, the new SW simply waits until the next full
+      // reload (a normal navigation) to take over — no forced mid-session
+      // swap. ChunkErrorBoundary (F101) covers the remaining case: a chunk
+      // that goes missing anyway reloads the page once instead of blanking it.
+      registerType: 'prompt',
       manifest: {
         name: 'Papyrus',
         short_name: 'Papyrus',
@@ -66,8 +76,6 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],
-        skipWaiting: true,
-        clientsClaim: true,
       },
     }),
   ],

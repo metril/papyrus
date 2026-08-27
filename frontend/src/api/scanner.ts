@@ -26,8 +26,13 @@ export async function initiateBatchScan(request: ScanRequest): Promise<ScanJob> 
   return data;
 }
 
-export async function listScans(): Promise<{ scans: ScanJob[]; total: number }> {
-  const { data } = await api.get('/scanner/scans');
+export interface ListScansParams {
+  limit?: number;
+  offset?: number;
+}
+
+export async function listScans(params: ListScansParams = {}): Promise<{ scans: ScanJob[]; total: number }> {
+  const { data } = await api.get('/scanner/scans', { params });
   return data;
 }
 

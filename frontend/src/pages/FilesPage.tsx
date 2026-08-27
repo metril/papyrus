@@ -10,9 +10,10 @@ import ErrorState from '../components/common/ErrorState';
 import { queryKeys, useCloudProviders } from '../api/queries';
 import { listSmbShares, browseSmb, downloadSmbFile } from '../api/smb';
 import { uploadPrintJob } from '../api/printer';
-import { listFiles, getDownloadUrl, downloadCloudFile } from '../api/cloud';
+import { listFiles, listWebdavFiles, getDownloadUrl, downloadCloudFile } from '../api/cloud';
 import type { SMBShare, SMBFileEntry, CloudProvider, CloudFileEntry } from '../types';
 import { useToast } from '../hooks/useToast';
+import { getProviderLabel } from '../lib/providerLabels';
 
 type Tab = 'network' | 'cloud';
 
@@ -261,12 +262,6 @@ function NetworkBrowser() {
 
 // --- Cloud Browser ---
 
-const providerLabels: Record<string, string> = {
-  gdrive: 'Google Drive',
-  dropbox: 'Dropbox',
-  onedrive: 'OneDrive',
-};
-
 function formatCloudSize(bytes: number | null): string {
   if (!bytes) return '';
   if (bytes < 1024) return `${bytes} B`;
@@ -302,7 +297,7 @@ function ProviderCard({ provider, onSelect }: ProviderCardProps) {
           </div>
           <div className="min-w-0">
             <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
-              {providerLabels[provider.provider] || provider.provider}
+              {getProviderLabel(provider.provider)}
             </div>
             <div className="font-mono text-xs text-gray-500 dark:text-gray-400">
               Connected {new Date(provider.connected_at).toLocaleDateString()}
@@ -359,19 +354,35 @@ function CloudBrowser() {
     refetch: refetchFiles,
   } = useQuery({
     queryKey: queryKeys.cloudFiles(selectedProvider?.id ?? 0, folderKey),
-    queryFn: () => {
+    queryFn: (): Promise<CloudFileEntry[]> => {
       const provider = selectedProvider!;
-      const params: { folder_id?: string; path?: string } = {};
-      if ((provider.provider === 'gdrive' || provider.provider === 'onedrive') && currentFolderId) {
-        params.folder_id = currentFolderId;
-      } else if (provider.provider === 'dropbox') {
-        params.path = currentFolderId || '';
+      // F82: 'webdav' providers are served by a different backend router
+      // (/api/webdav/*, not /api/cloud/*) with its own path-based, rather
+      // than folder-id-based, navigation — dispatch explicitly instead of
+      // falling through to a generic /cloud/files call that 400s for them.
+      // The `never` default makes adding a provider without updating this
+      // switch a compile error.
+      switch (provider.provider) {
+        case 'gdrive':
+        case 'onedrive':
+          return listFiles(provider.id, currentFolderId ? { folder_id: currentFolderId } : {});
+        case 'dropbox':
+          return listFiles(provider.id, { path: currentFolderId || '' });
+        case 'webdav':
+          return listWebdavFiles(provider.id, currentFolderId || '/');
+        default: {
+          const unreachable: never = provider.provider;
+          throw new Error(`Unhandled cloud provider: ${unreachable}`);
+        }
       }
-      return listFiles(provider.id, params);
     },
     enabled: !!selectedProvider,
   });
   const error = isError ? 'Failed to browse cloud storage' : null;
+  // F82: WebDAV has no generic file-download endpoint (only listing and a
+  // scan-upload target) — hide the Print/View actions for it rather than
+  // offering a button that would 404.
+  const canDownload = selectedProvider?.provider !== 'webdav';
 
   const printMutation = useMutation({
     mutationFn: async (entry: CloudFileEntry) => {
@@ -445,7 +456,7 @@ function CloudBrowser() {
   const crumbs: Crumb[] = [
     { label: 'All Providers', onClick: goToRoot },
     {
-      label: providerLabels[selectedProvider.provider] || selectedProvider.provider,
+      label: getProviderLabel(selectedProvider.provider),
       onClick: folderStack.length > 0 ? () => setFolderStack([]) : undefined,
     },
     ...folderStack.map((folder, i) => ({
@@ -492,7 +503,7 @@ function CloudBrowser() {
                   )}
                 </div>
               </button>
-              {!entry.is_directory && (
+              {!entry.is_directory && canDownload && (
                 <div className="flex flex-wrap gap-2 sm:ml-4 sm:shrink-0">
                   <Button size="sm" variant="ghost" onClick={() => setPreviewFile(entry)}>
                     <Eye className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
