@@ -345,6 +345,26 @@ async def test_ipp_marker_absent_from_cups_still_fills_the_gap(harness):
     assert data["markers"] == [{"name": "Cyan", "level": 3}]
 
 
+async def test_ipp_marker_fills_a_missing_level_cups_reported_as_unknown(harness):
+    """Regression: the F127 dedupe must not suppress a real low-supply alert.
+    CUPS reports the same physical marker but with an unusable level (-1,
+    which CupsService emits whenever marker-levels is shorter than
+    marker-names or absent), while the IPP probe reports a real level for
+    it. The merge must keep the *usable* level, not silently prefer CUPS's
+    unknown one just because CUPS was seen first."""
+    harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": -1}])
+    harness.ipp_by_host["192.168.1.50"] = {
+        "state_reasons": [],
+        "markers": {"names": ["black"], "levels": [5]},
+    }
+    db = _FakeDB([_printer(uri="ipp://192.168.1.50/ipp/print")])
+
+    await alert_service.check_alerts(db)
+
+    events = [e for e, _ in harness.webhooks]
+    assert events == ["printer.supply_low"]
+
+
 # --------------------------------------------------------------------------- #
 # F128 — alert_state is durable after each printer's transitions, not only
 # once at the very end of the sweep.
@@ -366,11 +386,31 @@ async def test_printer1_state_survives_a_crash_dispatching_printer2(harness, mon
     webhook POST that doesn't come back before the container restarts),
     printer 1's already-computed, already-dispatched transition must already
     be durably persisted -- not lost, which would otherwise re-fire printer
-    1's onset again on the next poll even though it already fired once."""
+    1's onset again on the next poll even though it already fired once.
+
+    Also proves the seeding fix: printer 2's *prior* True flag (persisted
+    from an earlier, fully-completed sweep, before this sweep even started)
+    must not be wiped out by printer 1's incremental save just because
+    printer 2 hasn't been re-evaluated yet this cycle. A `new_state` that
+    starts empty and is written in full on every save would truncate the
+    persisted row to only the printers visited so far, silently discarding
+    printer 2's True flags the moment printer 1's save fires.
+    """
     harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 5}])
-    harness.status_by_queue["epson_release"] = _status(markers=[{"name": "Cyan", "level": 5}])
+    # Printer 2's error condition is already active from a prior sweep (no
+    # new transition -> no dispatch for it); its supply_low condition is
+    # what newly transitions this sweep, triggering (and crashing) dispatch.
+    harness.status_by_queue["epson_release"] = _status(
+        markers=[{"name": "Cyan", "level": 5}], state_reasons=["media-jam-warning"]
+    )
     printers = [_printer(pid=1, cups_name="brother"), _printer(pid=2, cups_name="epson")]
     db = _FakeDB(printers)
+
+    prior = {
+        "1": {"supply_low": False, "error": False, "offline": False},
+        "2": {"supply_low": False, "error": True, "offline": False},
+    }
+    db.add(AppConfig(key="alert_state", value=json.dumps(prior)))
 
     async def flaky_dispatch(_db, event, data):
         if data["printer_id"] == 2:
@@ -382,7 +422,13 @@ async def test_printer1_state_survives_a_crash_dispatching_printer2(harness, mon
     with pytest.raises(RuntimeError):
         await alert_service.check_alerts(db)
 
-    assert db.saved_state().get("1", {}).get("supply_low") is True
+    saved = db.saved_state()
+    # Printer 1's own onset this sweep is durable.
+    assert saved.get("1", {}).get("supply_low") is True
+    # Printer 2's prior True flag survives the crash -- not wiped to {} (or
+    # dropped from the map entirely) just because printer 2 was never
+    # successfully reprocessed this sweep.
+    assert saved.get("2", {}).get("error") is True
 
 
 async def test_stale_printer_ids_are_pruned_from_state(harness):

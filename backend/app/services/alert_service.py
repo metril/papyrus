@@ -139,6 +139,13 @@ def _normalize_marker_name(name: object) -> str | None:
     return normalized or None
 
 
+def _is_known_level(level: object) -> bool:
+    """True if `level` is a usable (non-negative, non-bool) integer marker
+    reading. CUPS/IPP report -1 (or omit the level entirely, normalized to
+    -1 by the caller) for "unknown"."""
+    return isinstance(level, int) and not isinstance(level, bool) and level >= 0
+
+
 def _collect_marker_pairs(status: dict, ipp: dict | None) -> list[tuple[str | None, object]]:
     """Merge (name, level) marker pairs from the CUPS status and IPP probe.
 
@@ -148,8 +155,14 @@ def _collect_marker_pairs(status: dict, ipp: dict | None) -> list[tuple[str | No
     both used to be listed twice -- one physical cartridge showing up as two
     "low supply" entries in the message and webhook payload. Pairs are
     merged on a normalized (stripped, lowercased) name: CUPS entries are
-    added first, and an IPP entry is only kept when its normalized name
-    isn't already covered -- i.e. IPP only fills gaps CUPS didn't report.
+    added first, and a same-named IPP entry is only kept when either (a) the
+    normalized name isn't already covered -- IPP fills a *name* gap CUPS
+    didn't report -- or (b) it is covered but with an unusable level (CUPS
+    reported the marker with no/-1 level) while the IPP entry has a usable
+    one -- IPP fills a *level* gap too. Without (b), a printer whose CUPS
+    queue reports a marker with an unknown level would keep that unusable
+    entry and silently swallow a real low-supply reading the IPP probe did
+    have for the same cartridge.
     """
     merged: dict[str, tuple[str | None, object]] = {}
     unnamed: list[tuple[str | None, object]] = []
@@ -158,7 +171,8 @@ def _collect_marker_pairs(status: dict, ipp: dict | None) -> list[tuple[str | No
         key = _normalize_marker_name(name)
         if key is None:
             unnamed.append((name, level))
-        elif key not in merged:
+            return
+        if key not in merged or (_is_known_level(level) and not _is_known_level(merged[key][1])):
             merged[key] = (name, level)
 
     for m in status.get("markers") or []:
@@ -183,9 +197,9 @@ def _low_markers(
     """
     low: list[tuple[str | None, int]] = []
     for name, level in pairs:
-        if isinstance(level, bool) or not isinstance(level, int):
+        if not _is_known_level(level):
             continue
-        if 0 <= level < threshold:
+        if level < threshold:
             low.append((name, level))
     return low
 
@@ -326,7 +340,17 @@ async def check_alerts(db: AsyncSession) -> None:
         return
 
     prev_state = await _load_alert_state(db)
-    new_state: dict[str, dict] = {}
+    # Seeded with every live printer's *persisted* state up front -- not
+    # built up empty as the loop goes. F128's per-printer save writes
+    # `new_state` in full each time; if it started empty, an interrupted
+    # sweep's incremental save would truncate the row to only the printers
+    # visited so far, silently discarding the True flags of printers not
+    # yet reached this cycle (they'd then re-fire their onsets on the very
+    # next poll). Seeding from `printers` (not from `prev_state`'s keys)
+    # still prunes deleted printers, since only live printers get a key here.
+    new_state: dict[str, dict] = {
+        str(printer.id): prev_state.get(str(printer.id), {}) for printer in printers
+    }
 
     for printer in printers:
         pid = str(printer.id)

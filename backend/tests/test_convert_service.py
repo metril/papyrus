@@ -4,6 +4,7 @@ import os
 
 import pytest
 
+from app.services import convert_service
 from app.services.convert_service import convert_to_pdf, is_printable, needs_conversion
 
 
@@ -139,4 +140,50 @@ async def test_convert_to_pdf_cleans_up_temp_dir_when_output_missing(tmp_path, m
         await convert_to_pdf(str(input_path), str(tmp_path))
     after = set(os.listdir(tmp_path))
 
+    assert after == before
+
+
+class _FakeHangingProcess:
+    """Never returns from communicate() on its own -- exercises the real
+    asyncio.wait_for/kill()/wait() path instead of a canned return."""
+
+    def __init__(self):
+        self.killed = False
+        self.waited = False
+
+    async def communicate(self):
+        await asyncio.sleep(1)  # longer than the patched timeout below
+        return b"", b""  # pragma: no cover -- never reached
+
+    def kill(self):
+        self.killed = True
+
+    async def wait(self):
+        self.waited = True
+
+
+async def test_convert_to_pdf_kills_hung_process_and_raises_on_timeout(tmp_path, monkeypatch):
+    """Regression (F24): headless LibreOffice is known to hang on a
+    malformed document or a stale profile lock. A hung child must be
+    bounded, killed, and reaped -- not awaited forever, which would hold the
+    caller's DB connection checked out indefinitely."""
+    fake_process = _FakeHangingProcess()
+
+    async def _fake_hang(*args, **kwargs):
+        return fake_process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_hang)
+    monkeypatch.setattr(convert_service, "_CONVERSION_TIMEOUT_SECONDS", 0.01)
+
+    input_path = tmp_path / "report.docx"
+    input_path.write_bytes(b"fake docx")
+
+    before = set(os.listdir(tmp_path))
+    with pytest.raises(RuntimeError, match="conversion timed out"):
+        await convert_to_pdf(str(input_path), str(tmp_path))
+    after = set(os.listdir(tmp_path))
+
+    assert fake_process.killed is True
+    assert fake_process.waited is True
+    # Same as every other failure path: the temp dir is cleaned up, not leaked.
     assert after == before
