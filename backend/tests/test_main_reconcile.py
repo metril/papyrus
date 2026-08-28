@@ -147,7 +147,7 @@ async def test_default_queue_is_reasserted_even_when_it_already_exists(db, monke
     monkeypatch.setattr(cups_admin, "ensure_default_queue", _record)
 
     class _FakeConn:
-        def getPrinters(self):
+        def getPrinters(self):  # noqa: N802 -- matches pycups' real method name
             # Queue already present (and, invisibly to getPrinters' keys,
             # possibly stopped) -- the pre-fix code skipped reassertion here.
             return {cups_admin.DEFAULT_QUEUE_NAME: {"printer-state": 5}}
