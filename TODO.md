@@ -109,7 +109,6 @@ Lower-severity findings confirmed during the 2026-08-26 audit remediation but no
 - WebDAV entries in Files still have no download/print route (browse-only); percent-encoded folder names aren't normalized against server-returned hrefs
 
 ### Docker / CI
-- cupsd readiness in `entrypoint.sh` is a blind `sleep 2` rather than a bounded `lpstat -r` poll
 - Every tag push runs CI twice (`push` + `workflow_call` from `release.yml`)
 - `release.yml`'s `package.json`/`main.py` version extraction is unanchored (unlike the `pyproject.toml` one)
 - `config.py`'s `db_url` default still embeds `papyrus:secret@localhost` (non-compose deployments only)

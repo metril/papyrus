@@ -74,6 +74,13 @@ docker compose -f docker/compose.yaml up --build
 
 The web UI will be available at `http://localhost:8080`.
 
+The container supervises its internal daemons: if cupsd or avahi-daemon dies,
+the entrypoint exits non-zero and compose's `restart: unless-stopped` brings
+the container back automatically (a rising `docker inspect papyrus --format
+'{{.RestartCount}}'` is the tell). If AirPrint clients report the printer as
+offline, work through [docs/troubleshooting.md](docs/troubleshooting.md)
+before restarting the container — a bounce destroys the evidence.
+
 ### Development Setup
 
 ```bash
