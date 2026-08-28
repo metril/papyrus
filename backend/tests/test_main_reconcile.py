@@ -128,3 +128,32 @@ async def test_no_stale_scanning_rows_is_a_noop(db, monkeypatch):
 
     # Must not raise with an empty scan_jobs table.
     await _reconcile_on_startup()
+
+
+async def test_default_queue_is_reasserted_even_when_it_already_exists(db, monkeypatch):
+    """printers.conf lives in the container's writable layer, so a `Papyrus`
+    queue that cupsd left stopped/rejecting survives a plain restart -- and a
+    reconcile that only checks *existence* never heals it. `lpadmin` is
+    create-or-modify, so `ensure_default_queue` must run unconditionally:
+    it re-enables the queue and re-asserts printer-error-policy=abort-job
+    on every boot, existing queue or not."""
+    import cups
+
+    calls: list[str] = []
+
+    async def _record():
+        calls.append("ensure_default_queue")
+
+    monkeypatch.setattr(cups_admin, "ensure_default_queue", _record)
+
+    class _FakeConn:
+        def getPrinters(self):
+            # Queue already present (and, invisibly to getPrinters' keys,
+            # possibly stopped) -- the pre-fix code skipped reassertion here.
+            return {cups_admin.DEFAULT_QUEUE_NAME: {"printer-state": 5}}
+
+    monkeypatch.setattr(cups, "Connection", lambda: _FakeConn())
+
+    await _reconcile_on_startup()
+
+    assert calls == ["ensure_default_queue"]

@@ -57,16 +57,21 @@ async def _reconcile_on_startup() -> None:
             existing_cups = set()
 
         # Built-in zero-config hold queue backing the static AirPrint advert.
-        # printers.conf is not persisted, so recreate it every boot if missing.
-        if cups_admin.DEFAULT_QUEUE_NAME not in existing_cups:
-            try:
-                await cups_admin.ensure_default_queue()
-                logger.info(
-                    "Created built-in default hold queue: %s",
-                    cups_admin.DEFAULT_QUEUE_NAME,
-                )
-            except Exception as exc:
-                logger.warning("Failed to create default hold queue: %s", exc)
+        # printers.conf is not persisted across container *recreation*, but it
+        # DOES survive a plain restart -- including a queue cupsd left stopped
+        # or rejecting, which nothing else ever re-enables (the printer then
+        # looks offline to AirPrint clients until a manual down/up). lpadmin
+        # is create-or-modify, so run unconditionally: this creates the queue
+        # when missing and re-enables + re-asserts printer-error-policy=
+        # abort-job when it already exists.
+        try:
+            await cups_admin.ensure_default_queue()
+            logger.info(
+                "Ensured built-in default hold queue: %s",
+                cups_admin.DEFAULT_QUEUE_NAME,
+            )
+        except Exception as exc:
+            logger.error("Failed to ensure default hold queue: %s", exc)
 
         result = await db.execute(select(Printer))
         for printer_obj in result.scalars():
