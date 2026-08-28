@@ -48,7 +48,9 @@ trap 'SHUTTING_DOWN=1; kill -TERM $UVICORN_PID $CUPS_PID $AVAHI_PID 2>/dev/null 
 # Start Avahi mDNS daemon for network discovery (AirPrint + eSCL scanner).
 # Foreground (backgrounded here, not --daemonize) so this script owns its
 # PID directly instead of losing track of it behind avahi's own fork.
-mkdir -p /run/avahi-daemon
+# (mkdir is best-effort: in the container /run is always root-writable; the
+# guard only matters for the unprivileged test harness.)
+mkdir -p /run/avahi-daemon 2>/dev/null || true
 avahi-daemon --no-chroot --no-drop-root &
 AVAHI_PID=$!
 
@@ -61,18 +63,32 @@ CUPS_PID=$!
 # endpoint (F7) and hand it to both sides: the app reads it from the
 # environment, and the papyrus CUPS backend script reads it from this file at
 # request time (it runs as a separate process CUPS invokes, not a child of
-# this shell).
+# this shell). The file path is overridable the same way the backend script's
+# is, so tests don't need the real root-owned /run/papyrus.
+INGEST_TOKEN_FILE="${PAPYRUS_INGEST_TOKEN_FILE:-/run/papyrus/ingest.token}"
 export PAPYRUS_INGEST_TOKEN=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
-mkdir -p /run/papyrus && printf '%s' "$PAPYRUS_INGEST_TOKEN" > /run/papyrus/ingest.token && chmod 600 /run/papyrus/ingest.token
+mkdir -p "$(dirname "$INGEST_TOKEN_FILE")" && printf '%s' "$PAPYRUS_INGEST_TOKEN" > "$INGEST_TOKEN_FILE" && chmod 600 "$INGEST_TOKEN_FILE"
 
-# Wait for CUPS to be ready
-sleep 2
+# Wait for cupsd to actually answer (bounded poll, ~15s worst case) instead
+# of the old blind `sleep 2` -- a slow cupsd start left the app's startup
+# reconcile probing a half-up scheduler and silently skipping queue creation.
+CUPS_READY=""
+for _ in $(seq 1 30); do
+    if lpstat -r 2>/dev/null | grep -q "^scheduler is running"; then
+        CUPS_READY=1
+        break
+    fi
+    sleep 0.5
+done
+if [ -z "$CUPS_READY" ]; then
+    echo "WARN: cupsd is not answering after 15s; continuing startup anyway" >&2
+fi
 
 # Create data directories
 mkdir -p "${PAPYRUS_SCAN_DIR:-/app/data/scans}" "${PAPYRUS_UPLOAD_DIR:-/app/data/uploads}"
 
 # Run database migrations
-cd /app/backend
+cd "${PAPYRUS_APP_DIR:-/app/backend}"
 python -m alembic upgrade head
 
 # A signal received during any step above is deferred by bash until that
@@ -93,8 +109,56 @@ fi
 # every daemon to actually finish exiting before this shell does.
 uvicorn app.main:app --host 0.0.0.0 --port 8080 &
 UVICORN_PID=$!
-wait_for_pid "$UVICORN_PID"
-rc=$WAIT_RC
+
+# Supervision. cupsd and avahi-daemon are long-lived peers of uvicorn, but
+# historically only uvicorn was ever waited on: a crashed cupsd or avahi
+# left the container happily serving the web app with printing dead --
+# AirPrint clients saw "printer is offline" until someone manually bounced
+# the container. Block until ANY of the three exits: uvicorn exiting is the
+# normal end-of-life path; cupsd or avahi exiting outside a shutdown is
+# fatal, so stop the survivors cleanly and exit non-zero to make compose's
+# `restart: unless-stopped` recreate the container in a known-good state.
+# `wait -n -p` (bash >= 5.1; bookworm ships 5.2) reaps exactly one child and
+# names it, so uvicorn's real exit code survives being reaped in the loop.
+DEAD_DAEMON=""
+UVICORN_RC=""
+while [ "$SHUTTING_DOWN" != "1" ] && [ -z "$DEAD_DAEMON" ] && [ -z "$UVICORN_RC" ]; do
+    if ! kill -0 "$UVICORN_PID" 2>/dev/null; then
+        break  # exited before any wait reaped it; wait_for_pid below collects it
+    elif ! kill -0 "$CUPS_PID" 2>/dev/null; then
+        DEAD_DAEMON="cupsd"
+    elif ! kill -0 "$AVAHI_PID" 2>/dev/null; then
+        DEAD_DAEMON="avahi-daemon"
+    else
+        REAPED=""
+        if wait -n -p REAPED "$UVICORN_PID" "$CUPS_PID" "$AVAHI_PID" 2>/dev/null; then
+            RC_N=0
+        else
+            RC_N=$?
+        fi
+        if [ "$REAPED" = "$UVICORN_PID" ]; then
+            UVICORN_RC=$RC_N
+        fi
+        # An empty REAPED with RC_N > 128 means the TERM/INT trap interrupted
+        # the wait; the loop condition sees SHUTTING_DOWN and exits.
+    fi
+done
+
+if [ -n "$DEAD_DAEMON" ] && [ "$SHUTTING_DOWN" != "1" ]; then
+    echo "FATAL: $DEAD_DAEMON exited unexpectedly; stopping remaining services so the container restarts" >&2
+    kill -TERM $UVICORN_PID $CUPS_PID $AVAHI_PID 2>/dev/null || true
+    wait_for_pid "$UVICORN_PID"
+    wait_for_pid "$CUPS_PID"
+    wait_for_pid "$AVAHI_PID"
+    exit 1
+fi
+
+if [ -n "$UVICORN_RC" ]; then
+    rc=$UVICORN_RC
+else
+    wait_for_pid "$UVICORN_PID"
+    rc=$WAIT_RC
+fi
 kill -TERM $CUPS_PID $AVAHI_PID 2>/dev/null || true
 wait_for_pid "$CUPS_PID"
 wait_for_pid "$AVAHI_PID"
