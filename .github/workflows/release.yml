@@ -2,8 +2,15 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 env:
   REGISTRY: ghcr.io
@@ -11,19 +18,55 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  version:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release: ${{ steps.v.outputs.release }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Read and verify version, check for existing tag
+        id: v
+        run: |
+          set -e
+          VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' backend/pyproject.toml)
+          PACKAGE_VERSION=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' frontend/package.json)
+          MAIN_VERSION=$(sed -n 's/.*version="\([^"]*\)".*/\1/p' backend/app/main.py)
+          echo "pyproject.toml=$VERSION package.json=$PACKAGE_VERSION main.py=$MAIN_VERSION"
+          if [ -z "$VERSION" ] || [ "$VERSION" != "$PACKAGE_VERSION" ] || [ "$VERSION" != "$MAIN_VERSION" ]; then
+            echo "::error::Version mismatch: backend/pyproject.toml ($VERSION), frontend/package.json ($PACKAGE_VERSION), backend/app/main.py ($MAIN_VERSION)"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$VERSION" >/dev/null; then
+            echo "::notice::Tag v$VERSION already exists; skipping release"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
+    needs: version
+    if: needs.version.outputs.release == 'true'
     uses: ./.github/workflows/ci.yml
 
   build-and-release:
     runs-on: ubuntu-latest
-    needs: test
+    needs: [version, test]
     permissions:
       contents: write
       packages: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -35,23 +78,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract version from tag
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Verify tag matches project version
-        run: |
-          set -e
-          TAG_VERSION="${{ steps.version.outputs.version }}"
-          PYPROJECT_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' backend/pyproject.toml)
-          PACKAGE_VERSION=$(sed -n 's/.*"version": "\([^"]*\)".*/\1/p' frontend/package.json)
-          MAIN_VERSION=$(sed -n 's/.*version="\([^"]*\)".*/\1/p' backend/app/main.py)
-          echo "tag=$TAG_VERSION pyproject.toml=$PYPROJECT_VERSION package.json=$PACKAGE_VERSION main.py=$MAIN_VERSION"
-          if [ "$TAG_VERSION" != "$PYPROJECT_VERSION" ] || [ "$TAG_VERSION" != "$PACKAGE_VERSION" ] || [ "$TAG_VERSION" != "$MAIN_VERSION" ]; then
-            echo "::error::Tag version ($TAG_VERSION) does not match backend/pyproject.toml ($PYPROJECT_VERSION), frontend/package.json ($PACKAGE_VERSION), and/or backend/app/main.py ($MAIN_VERSION)"
-            exit 1
-          fi
-
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
         with:
@@ -61,24 +87,26 @@ jobs:
           platforms: linux/amd64
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
           labels: |
             org.opencontainers.image.title=Papyrus
             org.opencontainers.image.description=Web-based print and scan server for network printers
             org.opencontainers.image.source=https://github.com/metril/papyrus
-            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.version=${{ env.VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
           generate_release_notes: true
           body: |
             ## Docker Image
 
             ```bash
-            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION }}
             ```
 
             See the [README](https://github.com/metril/papyrus#readme) for setup instructions.

@@ -156,3 +156,13 @@ def test_avahi_service_xml_well_formed_for_plain_name():
     xml_str = cups_admin._avahi_service_xml("Office Brother", "Office_Brother")
     root = ET.fromstring(xml_str)
     assert root.find("name").text == "Office Brother @ %h"
+
+
+def test_avahi_service_path_rejects_unsafe_names():
+    import pytest
+
+    from app.services.cups_admin import _avahi_service_path
+
+    for bad in ("../x", ""):
+        with pytest.raises(ValueError):
+            _avahi_service_path(bad)

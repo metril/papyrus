@@ -110,7 +110,9 @@ function LoginScreen() {
   const fetchUser = useAuthStore((s) => s.fetchUser);
 
   useEffect(() => {
-    api.get('/auth/providers').then(({ data }) => setProviders(data)).catch(() => setProviders({ local_enabled: true, oidc_enabled: false, admin_override: false }));
+    let cancelled = false;
+    api.get('/auth/providers').then(({ data }) => { if (!cancelled) setProviders(data); }).catch(() => { if (!cancelled) setProviders({ local_enabled: true, oidc_enabled: false, admin_override: false }); });
+    return () => { cancelled = true; };
   }, []);
 
   const handleLocalLogin = async (e: React.FormEvent) => {

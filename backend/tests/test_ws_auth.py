@@ -90,6 +90,11 @@ async def test_no_credentials_returns_none(db):
     assert await authenticate_websocket(ws, db) is None
 
 
+async def test_malformed_session_user_id_returns_none(db):
+    ws = FakeWebSocket(session={"user_id": "not-a-uuid"})
+    assert await authenticate_websocket(ws, db) is None
+
+
 async def test_valid_bearer_header_returns_identity(db):
     user, plaintext = await _make_user_with_token(db, permissions=("print", "scan"))
     ws = FakeWebSocket(headers={"authorization": f"Bearer {plaintext}"})
@@ -384,3 +389,19 @@ def test_authenticated_socket_releases_its_db_connection_before_accept(path, ws_
     ):
         assert engine.pool.checkedout() == 0
     asyncio.run(engine.dispose())
+
+
+async def test_get_current_user_malformed_session_is_401(db):
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from app.auth.dependencies import get_current_user
+
+    req = SimpleNamespace(
+        headers=Headers({}), query_params=QueryParams({}),
+        session={"user_id": "not-a-uuid"}, state=SimpleNamespace(),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await get_current_user(req, db)
+    assert exc.value.status_code == 401
