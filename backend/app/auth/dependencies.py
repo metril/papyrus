@@ -46,11 +46,16 @@ async def get_current_user(
     # Check for session cookie
     user_id = request.session.get("user_id")
     if user_id:
-        result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
-        user = result.scalar_one_or_none()
-        if user:
-            request.state.token_permissions = None  # Full access via session
-            return user
+        try:
+            session_uuid = uuid.UUID(user_id)
+        except (ValueError, TypeError, AttributeError):
+            session_uuid = None
+        if session_uuid is not None:
+            result = await db.execute(select(User).where(User.id == session_uuid))
+            user = result.scalar_one_or_none()
+            if user:
+                request.state.token_permissions = None  # Full access via session
+                return user
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

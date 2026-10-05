@@ -156,6 +156,10 @@ After first login, configure everything else via **Settings**:
 - **Retention**: Scan and print job cleanup periods
 - **Alerts**: Enable supply/error alerts, toner threshold percentage, notification email, and poll interval
 
+## Releasing
+
+Bump the version in `backend/pyproject.toml`, `frontend/package.json`, and `backend/app/main.py`, then merge to `main`. The Release workflow tags `v<version>`, builds and pushes the ghcr.io image, and creates the GitHub Release automatically.
+
 ## License
 
 TBD

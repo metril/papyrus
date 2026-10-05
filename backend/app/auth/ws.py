@@ -84,7 +84,11 @@ async def authenticate_websocket(ws: WebSocket, db: AsyncSession) -> WebSocketId
 
     user_id = ws.session.get("user_id")
     if user_id:
-        result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+        try:
+            session_uuid = uuid.UUID(user_id)
+        except (ValueError, TypeError, AttributeError):
+            return None
+        result = await db.execute(select(User).where(User.id == session_uuid))
         user = result.scalar_one_or_none()
         if user is None:
             return None
