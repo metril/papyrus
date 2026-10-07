@@ -75,3 +75,5 @@ sudo cupsctl --no-debug-logging
 | `dns-sd` fails to resolve, avahi alive | mDNS conflict — host-level avahi/systemd-resolved competing on 5353 | Disable the host responder (`systemctl disable --now avahi-daemon`, or set `MulticastDNS=no` for systemd-resolved) |
 | Queue shows "disabled" in `lpstat -p -l` | cupsd stopped the queue; startup re-enables it on every boot — seeing it mid-run means a new stop event | error_log has the reason (LogLevel info) |
 | Mac error_log shows a 401 on Send-Document/Cancel-Job | The `Require user @OWNER @SYSTEM` policy rejected the client's requesting-user-name | See TODO.md (tracked); relax the policy group |
+
+No AirPrint/eSCL discovery at all? Check `PAPYRUS_DISABLE_MDNS` is not set (it stops avahi-daemon and all adverts).
