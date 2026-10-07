@@ -16,6 +16,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
+from app.config import settings
 from app.services import cups_admin
 
 
@@ -166,3 +167,42 @@ def test_avahi_service_path_rejects_unsafe_names():
     for bad in ("../x", ""):
         with pytest.raises(ValueError):
             _avahi_service_path(bad)
+
+
+@pytest.fixture
+def mdns_disabled(monkeypatch, tmp_path, run_calls):
+    """mDNS off, real ``_write_avahi_service`` pointed at a tmp services dir."""
+    monkeypatch.setattr(settings, "disable_mdns", True)
+    monkeypatch.setattr(cups_admin, "AVAHI_SERVICES_DIR", str(tmp_path))
+    return tmp_path
+
+
+def _no_avahi_activity(services_dir, run_calls):
+    assert list(services_dir.glob("*.service")) == []
+    assert ["avahi-daemon", "--reload"] not in run_calls
+
+
+async def test_disable_mdns_add_network_queue_writes_no_advert(mdns_disabled, run_calls):
+    await cups_admin.add_network_queue("Office_Brother", "Office Brother")
+    _no_avahi_activity(mdns_disabled, run_calls)
+
+
+async def test_disable_mdns_add_physical_printer_writes_no_advert(mdns_disabled, run_calls):
+    await cups_admin.add_physical_printer("Office_Brother", "Office Brother", "ipp://10.0.0.5/ipp/print")
+    _no_avahi_activity(mdns_disabled, run_calls)
+
+
+async def test_disable_mdns_update_and_rename_write_no_advert(mdns_disabled, run_calls):
+    await cups_admin.update_physical_printer("Office_Brother", "Office Brother", "ipp://10.0.0.6/ipp/print")
+    await cups_admin.rename_network_queue("Office_Brother", "Renamed")
+    _no_avahi_activity(mdns_disabled, run_calls)
+
+
+async def test_disable_mdns_remove_deletes_stale_file_without_reload(mdns_disabled, run_calls):
+    stale = mdns_disabled / "Office_Brother.service"
+    stale.write_text("<service-group/>")
+
+    await cups_admin.remove_printer("Office_Brother")
+
+    assert not stale.exists()
+    assert ["avahi-daemon", "--reload"] not in run_calls

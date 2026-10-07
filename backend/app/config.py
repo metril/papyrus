@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # Development
     dev_mode: bool = False
 
+    # Stop Avahi mDNS advertising (AirPrint, eSCL, per-printer adverts).
+    disable_mdns: bool = False
+
     # Shared secret the papyrus CUPS backend script sends on every
     # /api/jobs/internal/ingest POST (F7). Generated per-container by
     # docker/entrypoint.sh; empty (default) only in local/dev setups that

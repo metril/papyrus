@@ -16,6 +16,7 @@ services:
       - PAPYRUS_ADMIN_USERNAME=${PAPYRUS_ADMIN_USERNAME:-admin}
       - PAPYRUS_ADMIN_PASSWORD=${PAPYRUS_ADMIN_PASSWORD}
       - PAPYRUS_DEV_MODE=${PAPYRUS_DEV_MODE:-false}
+      - PAPYRUS_DISABLE_MDNS=${PAPYRUS_DISABLE_MDNS:-false}
     labels:
       - traefik.enable=true
       - traefik.http.routers.papyrus.rule=Host(`${PAPYRUS_HOSTNAME:-papyrus.localhost}`)
