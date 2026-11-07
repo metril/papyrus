@@ -97,7 +97,7 @@ SMTP, cloud OAuth, scanner/printer config, OCR, FTP/SFTP, Paperless-ngx, retenti
 **Webhook events** (`app/services/webhook_service.py`'s `WEBHOOK_EVENTS`): `print.release`, `print.delete`, `print.upload` (every job created through the upload helper — `POST /upload`, share-target, inbound email — held or auto-printed, `{id, title, user_id, source_type}`; network-ingest jobs fire only `print.held`, not this), `print.held` (a job lands in the hold queue — dispatched from the shared upload helper for both `POST /upload` and `POST /api/share-target`, and from network ingest when `auto_release` is off), `print.test_page`, `scan.complete`, `scan.delete`, `settings.update` (`{"keys": [...]}`, fired once per `PUT /api/settings` call that actually changes a value), `printer.supply_low`, `printer.error` (also fired for offline/stopped printers) — the last two are alert_service's onset/resolved notifications.
 
 ## Development Rules
-- **Commits**: Commit frequently as work progresses. Never mention AI assistants in commit messages.
+- **Commits**: Commit frequently as work progresses.
 - **README.md**: Keep updated with any significant changes to setup, features, or architecture.
 - **CLAUDE.md**: Keep updated with any changes to project structure, commands, or conventions.
 - **Security**: Never use `shell=True` in subprocess calls. Always use argument lists. Validate file uploads server-side. Encrypt sensitive data at rest (Fernet).
