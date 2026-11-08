@@ -322,7 +322,8 @@ class SaneBackend:
 
 BROTHERNET_PREFIX = "brothernet:"
 FEEDER_PDF_ONLY_DETAIL = (
-    "Feeder scans on this scanner take every sheet at once, so they can only be saved as PDF. Choose PDF or scan from the glass."
+    "Feeder scans on this scanner take every sheet at once, so they can only be "
+    "saved as PDF. Choose PDF or scan from the glass."
 )
 _NATIVE_MODES = {"Color": "CGRAY", "Gray": "GRAY64", "Lineart": "TEXT"}
 _HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
@@ -700,29 +701,15 @@ class ScanService:
 
         success = False
         try:
-            await self._guard(device)
-            await self._backend_for(device).acquire_batch(
-                device=device,
-                resolution=resolution,
-                mode=mode,
-                page_dir=page_dir,
-                scan_id=scan_id,
-                progress_callback=progress_callback,
+            pages = await self._acquire_feeder_tiffs(
+                device=device, resolution=resolution, mode=mode, page_dir=page_dir,
+                scan_id=scan_id, progress_callback=progress_callback,
             )
-
-            # scanimage returns non-zero when ADF runs out of paper, which is expected
-            # Check if we got any pages
-            pages = sorted(f for f in os.listdir(page_dir) if f.endswith(".tiff"))
-
-            if not pages:
-                raise ScanError("No pages scanned from ADF")
-
             pdf_file = os.path.join(scan_dir, f"{scan_id}.pdf")
-            page_paths = [os.path.join(page_dir, p) for p in pages]
-            await _merge_pages_to_pdf(page_paths, pdf_file)
+            await _merge_pages_to_pdf(pages, pdf_file)
 
             # Clean up individual page files
-            for p in page_paths:
+            for p in pages:
                 os.unlink(p)
             os.rmdir(page_dir)
 
@@ -735,6 +722,80 @@ class ScanService:
             # the DB, so retention can never reclaim it either.
             if not success:
                 shutil.rmtree(page_dir, ignore_errors=True)
+
+    async def _acquire_feeder_tiffs(
+        self, *, device: str, resolution: int, mode: str, page_dir: str, scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None,
+    ) -> list[str]:
+        await self._guard(device)
+        await self._backend_for(device).acquire_batch(
+            device=device,
+            resolution=resolution,
+            mode=mode,
+            page_dir=page_dir,
+            scan_id=scan_id,
+            progress_callback=progress_callback,
+        )
+
+        # scanimage returns non-zero when ADF runs out of paper, which is expected
+        # Check if we got any pages
+        pages = sorted(f for f in os.listdir(page_dir) if f.endswith(".tiff"))
+        if not pages:
+            raise ScanError("No pages scanned from ADF")
+        return [os.path.join(page_dir, p) for p in pages]
+
+    async def scan_feeder_pages(
+        self,
+        resolution: int = 300,
+        mode: str = "Color",
+        fmt: str = "jpeg",
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        device: str | None = None,
+        scan_dir: str | None = None,
+    ) -> tuple[str, str, str, list[str]]:
+        """Scan every feeder sheet and keep each as its own `fmt` file.
+
+        Returns (scan_id, pdf_path, page_dir, page_files): the pages sit in
+        `page_dir`, which the caller owns from here on; `pdf_path` is a merged
+        copy for history. Nothing is left behind if this fails or is cancelled.
+        """
+        if self._lock.locked():
+            raise ScanError("Scanner is busy. Try again later.")
+
+        async with self._lock:
+            scan_id = str(uuid.uuid4())
+            _scan_dir = scan_dir or self._scan_dir
+            _device = device or self._scanner_device
+            page_dir = os.path.join(_scan_dir, f"pages_{scan_id}")
+            pdf_file = os.path.join(_scan_dir, f"{scan_id}.pdf")
+            os.makedirs(page_dir, exist_ok=True)
+
+            success = False
+            try:
+                tiffs = await self._acquire_feeder_tiffs(
+                    device=_device, resolution=resolution, mode=mode, page_dir=page_dir,
+                    scan_id=scan_id, progress_callback=progress_callback,
+                )
+                await _merge_pages_to_pdf(tiffs, pdf_file)
+                if fmt == "tiff":
+                    files = tiffs
+                else:
+                    ext = {"jpeg": "jpg"}.get(fmt, fmt)
+                    files = []
+                    for i, tiff in enumerate(tiffs, 1):
+                        out = os.path.join(page_dir, f"page_{i:04d}.{ext}")
+                        await asyncio.to_thread(
+                            self._convert_scan_sync, tiff, out, fmt, resolution
+                        )
+                        os.unlink(tiff)
+                        files.append(out)
+                success = True
+                return scan_id, pdf_file, page_dir, files
+            finally:
+                if not success:
+                    shutil.rmtree(page_dir, ignore_errors=True)
+                    if os.path.exists(pdf_file):
+                        os.unlink(pdf_file)
 
     async def scan_batch(
         self,

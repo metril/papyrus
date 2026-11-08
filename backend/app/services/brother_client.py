@@ -152,7 +152,7 @@ class BrotherScanClient:
         try:
             return await asyncio.wait_for(reader.read(n), timeout or self.idle_timeout)
         except asyncio.TimeoutError:
-            raise _ReadTimeout("The scanner stopped responding.") from None
+            raise _ReadTimeoutError("The scanner stopped responding.") from None
         except OSError:
             raise ExternalServiceError("The connection to the scanner was lost.") from None
 
@@ -205,7 +205,7 @@ class BrotherScanClient:
             if prefix[1]:
                 body = await self._read_exact(reader, prefix[1], timeout) or b""
             return bp.parse_lease(prefix + body)
-        except _ReadTimeout:
+        except _ReadTimeoutError:
             raise _BusyError from None
 
     async def _handshake(self, dpi: int, mode: str):
@@ -223,7 +223,7 @@ class BrotherScanClient:
                 await self._send(writer, bp.CMD_FEEDER_QUERY)
                 try:
                     reply = await self._read_exact(reader, 1, self.handshake_timeout)
-                except _ReadTimeout:
+                except _ReadTimeoutError:
                     raise _BusyError from None
                 if reply is None or reply[0] not in (bp.FEEDER_LOADED, bp.FEEDER_EMPTY):
                     raise bp.BrotherProtocolError(f"unexpected feeder reply: {reply!r}")
@@ -417,7 +417,7 @@ class BrotherScanClient:
             pass
 
 
-class _ReadTimeout(ExternalServiceError):
+class _ReadTimeoutError(ExternalServiceError):
     """Internal: a read timed out."""
 
 

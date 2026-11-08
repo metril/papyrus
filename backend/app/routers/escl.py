@@ -9,6 +9,7 @@ import contextlib
 import ipaddress
 import logging
 import os
+import shutil
 import time
 import uuid
 from datetime import datetime, timezone
@@ -17,13 +18,18 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 
 from app.database import async_session, get_db
 from app.exceptions import ScannerBusyError
 from app.models import ScanJob
 from app.routers.settings import get_setting
 from app.schemas import serialize_scan_job
-from app.services.scan_service import get_default_scanner_device, scan_service
+from app.services.scan_service import (
+    feeder_takes_every_sheet,
+    get_default_scanner_device,
+    scan_service,
+)
 from app.services.ws_manager import ws_manager
 
 _log = logging.getLogger(__name__)
@@ -115,6 +121,25 @@ _JOB_TTL_SECONDS = 3600.0  # 1 hour
 _TERMINAL_STATES = frozenset({"Completed", "Canceled"})
 
 
+def _discard_job_files(job: dict) -> None:
+    """Delete a job's held page files (its per-job directory)."""
+    page_dir = job.get("page_dir")
+    if page_dir:
+        shutil.rmtree(page_dir, ignore_errors=True)
+    job["pages"] = []
+
+
+def _pages_remaining(job: dict) -> int:
+    return len(job.get("pages") or [])
+
+
+def _reported_state(job: dict) -> str:
+    """A finished job still holding unserved pages is still Processing."""
+    if job["state"] == "Completed" and _pages_remaining(job):
+        return "Processing"
+    return job["state"]
+
+
 def _purge_stale_jobs() -> None:
     """Evict terminal-state jobs whose ``terminal_at`` stamp is older than
     ``_JOB_TTL_SECONDS``. Called opportunistically on every access/mutation of
@@ -131,7 +156,7 @@ def _purge_stale_jobs() -> None:
         and now - job["terminal_at"] > _JOB_TTL_SECONDS
     ]
     for job_id in stale_ids:
-        _scan_jobs.pop(job_id, None)
+        _discard_job_files(_scan_jobs.pop(job_id))
 
 
 async def _device_resolutions(db) -> tuple[int, ...] | None:
@@ -314,7 +339,12 @@ async def scanner_status(db: AsyncSession = Depends(get_db)):
             SubElement(job_info, "pwg:JobUri").text = f"/eSCL/ScanJobs/{job_id}"
             SubElement(job_info, "pwg:JobUuid").text = job_id
             SubElement(job_info, "scan:Age").text = "0"
-            SubElement(job_info, "pwg:JobState").text = job["state"]
+            if job.get("held"):
+                SubElement(job_info, "pwg:ImagesCompleted").text = str(
+                    job["pages_total"] - _pages_remaining(job)
+                )
+                SubElement(job_info, "pwg:ImagesToTransfer").text = str(_pages_remaining(job))
+            SubElement(job_info, "pwg:JobState").text = _reported_state(job)
 
     return _xml_response(root)
 
@@ -374,29 +404,47 @@ async def _run_scan(job_id: str) -> None:
         )
 
         page_count = 1
+        held = (
+            job["source"] == "ADF"
+            and job["format"] != "pdf"
+            and feeder_takes_every_sheet(device)
+        )
 
         def set_page_count(count: int) -> None:
             nonlocal page_count
             page_count = count
 
-        scan_id, filepath = await scan_service.scan(
-            page_count_callback=set_page_count,
-            resolution=res,
-            mode=job["color_mode"],
-            fmt=job["format"],
-            source=job["source"],
-            device=device,
-            scan_dir=scan_dir,
-            left_mm=left_mm,
-            top_mm=top_mm,
-            width_mm=width_mm,
-            height_mm=height_mm,
-        )
+        if held:
+            scan_id, filepath, page_dir, pages = await scan_service.scan_feeder_pages(
+                resolution=res,
+                mode=job["color_mode"],
+                fmt=job["format"],
+                device=device,
+                scan_dir=scan_dir,
+            )
+            job["page_dir"] = page_dir
+            job["pages"] = list(pages)
+            job["pages_total"] = page_count = len(pages)
+            job["held"] = True
+        else:
+            scan_id, filepath = await scan_service.scan(
+                page_count_callback=set_page_count,
+                resolution=res,
+                mode=job["color_mode"],
+                fmt=job["format"],
+                source=job["source"],
+                device=device,
+                scan_dir=scan_dir,
+                left_mm=left_mm,
+                top_mm=top_mm,
+                width_mm=width_mm,
+                height_mm=height_mm,
+            )
 
         # Always re-save JPEG/PNG with correct DPI and exact dimensions.
         # ICA pre-allocates an exact buffer (width×height×3 bytes) and will
         # corrupt the saved file if our dimensions don't match precisely.
-        if req_w and req_h and job["format"] in ("jpeg", "png"):
+        if not held and req_w and req_h and job["format"] in ("jpeg", "png"):
             from PIL import Image as _PILImage
 
             def _trim() -> None:
@@ -428,6 +476,8 @@ async def _run_scan(job_id: str) -> None:
                 result.filepath = filepath
                 result.file_size = file_size
                 result.page_count = page_count
+                if held:
+                    result.format = "pdf"
                 result.status = "completed"
                 result.completed_at = datetime.now(timezone.utc)
                 await db.commit()
@@ -450,6 +500,7 @@ async def _run_scan(job_id: str) -> None:
         job["terminal_at"] = time.monotonic()
 
     except asyncio.CancelledError:
+        _discard_job_files(job)
         if db_job_id is not None:
             try:
                 async with async_session() as db:
@@ -463,6 +514,7 @@ async def _run_scan(job_id: str) -> None:
         raise
     except Exception as e:
         _log.error("eSCL scan %s failed: %s", job_id, e, exc_info=True)
+        _discard_job_files(job)
         if db_job_id is not None:
             try:
                 async with async_session() as db:
@@ -566,6 +618,10 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
         "scan_region": scan_region,
         "filepath": None,
         "served": False,
+        "held": False,
+        "pages": [],
+        "pages_total": 0,
+        "page_dir": None,
         "error": None,
         "terminal_at": None,
     }
@@ -597,6 +653,14 @@ async def get_next_document(job_id: str):
         raise HTTPException(status_code=503, detail="Scan in progress")
 
     # state == "Completed"
+    if job.get("held"):
+        if not job["pages"]:
+            raise HTTPException(status_code=404, detail="No more pages")
+        page = job["pages"].pop(0)
+        job["terminal_at"] = time.monotonic()
+        page_dir = None if job["pages"] else job["page_dir"]
+        return _file_response(job, page, BackgroundTask(_remove_served_page, page, page_dir))
+
     if job["served"]:
         # No more pages — signal end of job to client
         raise HTTPException(status_code=404, detail="No more pages")
@@ -628,6 +692,8 @@ async def cancel_scan_job(job_id: str):
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
+    _discard_job_files(job)
+
     # Only delete the file for canceled/failed scans; completed scans live in the web UI
     if job.get("state") != "Completed" and job.get("filepath") and os.path.exists(job["filepath"]):
         os.unlink(job["filepath"])
@@ -635,9 +701,18 @@ async def cancel_scan_job(job_id: str):
     return Response(status_code=200)
 
 
-def _file_response(job: dict) -> FileResponse:
+def _remove_served_page(path: str, page_dir: str | None) -> None:
+    with contextlib.suppress(OSError):
+        os.unlink(path)
+    if page_dir:
+        shutil.rmtree(page_dir, ignore_errors=True)
+
+
+def _file_response(
+    job: dict, filepath: str | None = None, background: BackgroundTask | None = None
+) -> FileResponse:
     """Return the scanned file with appropriate MIME type."""
-    filepath = job["filepath"]
+    filepath = filepath or job["filepath"]
     fmt = job["format"]
 
     media_types = {
@@ -650,4 +725,5 @@ def _file_response(job: dict) -> FileResponse:
         path=filepath,
         media_type=media_types.get(fmt, "application/octet-stream"),
         filename=f"scan.{fmt}",
+        background=background,
     )

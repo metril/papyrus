@@ -265,12 +265,14 @@ async def test_scan_endpoint_records_page_count_for_native_feeder(db, admin_clie
 
 
 async def test_scan_endpoint_native_feeder_jpeg_is_422_without_connecting(
-    db, admin_client, native
+    db, admin_client, native  # noqa: F811
 ):
     await _add(db)
     async with FakeScanner([]) as srv:
         native(srv)
-        resp = await admin_client.post("/api/scanner/scan", json={"source": "ADF", "format": "jpeg"})
+        resp = await admin_client.post(
+            "/api/scanner/scan", json={"source": "ADF", "format": "jpeg"}
+        )
     assert resp.status_code == 422 and "PDF" in resp.json()["detail"] and srv.accepted == 0
 
 
@@ -289,16 +291,6 @@ async def _run_escl_job(db, fmt, source="ADF"):
     row = (await db.execute(select(ScanJob))).scalars().first()
     await db.refresh(row)
     return job, row
-
-
-async def test_escl_native_feeder_jpeg_job_fails_without_feeding(db, native):
-    await _add(db)
-    async with FakeScanner([]) as srv:
-        native(srv)
-        job, row = await _run_escl_job(db, "jpeg")
-    assert srv.accepted == 0
-    assert job["state"] == "Canceled" and "PDF" in job["error"]
-    assert row.status == "failed"
 
 
 async def test_escl_native_feeder_pdf_job_sets_page_count(db, monkeypatch, tmp_path):
