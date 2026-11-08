@@ -22,6 +22,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Template Naming**: Configurable filename templates for delivered scans using variables ({date}, {time}, {id}, etc.)
 - **Network Printer**: Appears as an AirPrint/IPP printer on the LAN; network print jobs enter the hold-release queue. A built-in zero-config **Papyrus** printer works out of the box — jobs sent to it are held and routed to your default printer — and each configured printer is also advertised under its own name. All managed queues use CUPS's `abort-job` error policy, so a single failed job is dropped rather than disabling the queue for everyone.
 - **Printer Discovery**: mDNS scan pick-list to add printers, IP probe with IPP auto-enrichment (model/location), and a one-page test print to confirm which physical device a configured printer maps to
+- **Native Brother Scanning**: `brothernet:<ip>` devices talk Brother's scanner protocol (TCP 54921) directly, with no SANE driver, so scanning works on ARM hosts where brscan4 isn't available. Currently only the DCP-L2540DW is supported (Color/Gray/Lineart, 100–600 dpi, glass and feeder); other Brother models found over mDNS are listed as untested and can't be added
 - **Network Scanner**: Appears as an eSCL/AirScan scanner on the LAN; devices can scan directly via the eSCL protocol. The protocol has no authentication of its own, so requests are restricted to LAN source addresses — behind a same-host reverse proxy, the rightmost `X-Forwarded-For` entry is what's checked
 - **Webhooks**: Outgoing HTTP notifications with HMAC-SHA256 signing for print/scan events
 - **Printer Status**: Live toner/ink levels and state display from CUPS marker attributes, pushed to clients over WebSocket as changes are detected (no polling)
@@ -52,7 +53,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, TanStack Query (server state), Zustand (client state), lazy-loaded routes, vitest/Testing Library (unit tests)
 - **Design**: "Paper & ink" design system — warm paper-toned grays with a process-cyan ink accent, IBM Plex Sans/Mono type (mono for data readouts), LED status dots and perforation dividers as an office-machine motif, full light/dark parity
 - **Printing**: CUPS (driverless/IPP Everywhere), AirPrint via Avahi mDNS, printer discovery via python-zeroconf
-- **Scanning**: SANE via scanimage (sane-airscan for WSD), eSCL server for network scanning
+- **Scanning**: SANE via scanimage (sane-airscan for WSD), native Brother network protocol (`brothernet:` devices), eSCL server for network scanning
 - **Deployment**: Docker with multi-stage build (`network_mode: host` for mDNS), behind Traefik
 
 ## Quick Start
@@ -146,7 +147,7 @@ See [.env.example](.env.example) for the full list.
 
 After first login, configure everything else via **Settings**:
 - **Printers**: Add/manage CUPS printers — discover via mDNS pick-list (`GET /api/printers/discover`), probe an IP with IPP enrichment (`GET /api/printers/probe`), refresh a configured printer's device info (`POST /api/printers/{id}/refresh-info`), or print a test page (`POST /api/printers/{id}/test-page`)
-- **Scanners**: Register Brother scanners (brscan4), probe by IP, or discover via mDNS
+- **Scanners**: Add a Brother scanner with the native driver (typed IP or mDNS discovery, no registration step) or register it through brscan4, probe by IP, or discover via mDNS
 - **OIDC**: Admin group mapping, groups claim name, scopes
 - **Email**: SMTP, webhook secret
 - **Cloud**: Google Drive, Dropbox, OneDrive OAuth credentials
