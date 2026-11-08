@@ -3,7 +3,8 @@
 One ``scan()`` call is one connection: handshake (with bounded retries while
 the device is busy), safety checks on the feeder, then the page stream, each
 page spooled to disk and converted to a lossless TIFF. Host validation is the
-caller's job. Dropping the connection at any point is safe for the device.
+caller's job. A feeder request always pulls every sheet; hanging up does not
+stop it.
 """
 from __future__ import annotations
 
@@ -119,8 +120,10 @@ class BrotherScanClient:
         *,
         connect_timeout: float = 5.0,
         idle_timeout: float = 30.0,
-        busy_retries: int = 5,
-        retry_delay: float = 2.0,
+        busy_retries: int = 32,
+        retry_delay: float = 3.0,
+        handshake_timeout: float = 10.0,
+        probe_timeout: float = 3.0,
     ) -> None:
         self.host = host
         self.port = port
@@ -128,6 +131,8 @@ class BrotherScanClient:
         self.idle_timeout = idle_timeout
         self.busy_retries = max(1, busy_retries)
         self.retry_delay = retry_delay
+        self.handshake_timeout = handshake_timeout
+        self.probe_timeout = probe_timeout
 
     # -- connection ---------------------------------------------------------
 
@@ -139,20 +144,25 @@ class BrotherScanClient:
         except (OSError, asyncio.TimeoutError):
             raise ExternalServiceError("Could not connect to the scanner.") from None
 
-    async def _read(self, reader: asyncio.StreamReader, n: int) -> bytes:
-        """Read up to n bytes (at least 1 unless EOF), bounded by the idle timeout."""
+    async def _read(
+        self, reader: asyncio.StreamReader, n: int, timeout: float | None = None
+    ) -> bytes:
+        """Read up to n bytes (at least 1 unless EOF), bounded by ``timeout``
+        (default: the idle timeout)."""
         try:
-            return await asyncio.wait_for(reader.read(n), self.idle_timeout)
+            return await asyncio.wait_for(reader.read(n), timeout or self.idle_timeout)
         except asyncio.TimeoutError:
-            raise ExternalServiceError("The scanner stopped responding.") from None
+            raise _ReadTimeout("The scanner stopped responding.") from None
         except OSError:
             raise ExternalServiceError("The connection to the scanner was lost.") from None
 
-    async def _read_exact(self, reader: asyncio.StreamReader, n: int) -> bytes | None:
+    async def _read_exact(
+        self, reader: asyncio.StreamReader, n: int, timeout: float | None = None
+    ) -> bytes | None:
         """Exactly n bytes; None on clean EOF before the first byte."""
         buf = b""
         while len(buf) < n:
-            chunk = await self._read(reader, n - len(buf))
+            chunk = await self._read(reader, n - len(buf), timeout)
             if not chunk:
                 if not buf:
                     return None
@@ -178,26 +188,46 @@ class BrotherScanClient:
         except Exception:  # best effort; the device tolerates a dropped session
             pass
 
+    async def _read_lease(self, reader, writer, dpi: int, mode: str, timeout: float):
+        """Greeting and lease; raises ``_BusyError`` for every busy signal,
+        including a silent scanner."""
+        try:
+            greeting = await self._read_exact(reader, len(bp.GREETING_OK), timeout)
+            if greeting is None or greeting == bp.GREETING_BUSY:
+                raise _BusyError
+            if greeting != bp.GREETING_OK:
+                raise bp.BrotherProtocolError(f"unexpected greeting: {greeting!r}")
+            await self._send(writer, bp.encode_lease_request(dpi, mode))
+            prefix = await self._read_exact(reader, 3, timeout)
+            if prefix is None or prefix[:2] == b"\x00\x00" or prefix[0] == bp.LEASE_NOT_READY:
+                raise _BusyError
+            body = b""
+            if prefix[1]:
+                body = await self._read_exact(reader, prefix[1], timeout) or b""
+            return bp.parse_lease(prefix + body)
+        except _ReadTimeout:
+            raise _BusyError from None
+
     async def _handshake(self, dpi: int, mode: str):
-        """Return (reader, writer, lease); retries while the scanner is busy."""
+        """Return (reader, writer, lease, feeder_has_paper).
+
+        Retries while the scanner is busy or silent. The feeder query is part
+        of the session: no caller sees a session before its reply was read.
+        """
         for attempt in range(self.busy_retries):
             if attempt:
                 await asyncio.sleep(self.retry_delay)
             reader, writer = await self._open()
             try:
-                greeting = await self._read_exact(reader, len(bp.GREETING_OK))
-                if greeting is None or greeting == bp.GREETING_BUSY:
-                    raise _BusyError
-                if greeting != bp.GREETING_OK:
-                    raise bp.BrotherProtocolError(f"unexpected greeting: {greeting!r}")
-                await self._send(writer, bp.encode_lease_request(dpi, mode))
-                prefix = await self._read_exact(reader, 3)
-                if prefix is None or prefix[:2] == b"\x00\x00" or prefix[0] == bp.LEASE_NOT_READY:
-                    raise _BusyError
-                body = b""
-                if prefix[1]:
-                    body = await self._read_exact(reader, prefix[1]) or b""
-                return reader, writer, bp.parse_lease(prefix + body)
+                lease = await self._read_lease(reader, writer, dpi, mode, self.handshake_timeout)
+                await self._send(writer, bp.CMD_FEEDER_QUERY)
+                try:
+                    reply = await self._read_exact(reader, 1, self.handshake_timeout)
+                except _ReadTimeout:
+                    raise _BusyError from None
+                if reply is None or reply[0] not in (bp.FEEDER_LOADED, bp.FEEDER_EMPTY):
+                    raise bp.BrotherProtocolError(f"unexpected feeder reply: {reply!r}")
+                return reader, writer, lease, reply[0] == bp.FEEDER_LOADED
             except _BusyError:
                 await self._close(writer)
             except BaseException:
@@ -208,25 +238,16 @@ class BrotherScanClient:
     async def probe(self) -> dict:
         """Connect and take a lease without scanning.
 
-        Returns ``{"available": True, "busy": bool}``; a busy scanner is
-        reachable. Raises ``ExternalServiceError`` if it cannot be reached.
+        Returns ``{"available": True, "busy": bool}``; a busy or silent
+        scanner is reachable. Raises ``ExternalServiceError`` if it cannot be
+        reached.
         """
         reader, writer = await self._open()
         try:
-            greeting = await self._read_exact(reader, len(bp.GREETING_OK))
-            if greeting is None or greeting == bp.GREETING_BUSY:
-                return {"available": True, "busy": True}
-            if greeting != bp.GREETING_OK:
-                raise bp.BrotherProtocolError(f"unexpected greeting: {greeting!r}")
-            await self._send(writer, bp.encode_lease_request(300, "TEXT"))
-            prefix = await self._read_exact(reader, 3)
-            if prefix is None or prefix[:2] == b"\x00\x00" or prefix[0] == bp.LEASE_NOT_READY:
-                return {"available": True, "busy": True}
-            body = b""
-            if prefix[1]:
-                body = await self._read_exact(reader, prefix[1]) or b""
-            bp.parse_lease(prefix + body)
+            await self._read_lease(reader, writer, 300, "TEXT", self.probe_timeout)
             return {"available": True, "busy": False}
+        except _BusyError:
+            return {"available": True, "busy": True}
         finally:
             await self._close(writer)
 
@@ -241,12 +262,11 @@ class BrotherScanClient:
         out_dir: str,
         area_mm: tuple[float, float, float, float] | None = None,
         progress: ProgressCallback | None = None,
-        max_pages: int | None = None,
     ) -> list[ScannedPage]:
         """Scan and return one TIFF per page, written into ``out_dir``.
 
-        With ``max_pages`` the connection is dropped after that many complete
-        pages; the device feeds every sheet from a single request otherwise.
+        A feeder request always delivers every sheet; the device cannot be
+        stopped after the first.
 
         ``source`` is ``"flatbed"`` or ``"adf"``; ``area_mm`` is
         ``(left, top, width, height)`` and flatbed only (None = whole bed).
@@ -261,12 +281,7 @@ class BrotherScanClient:
         created: list[str] = []
         writer = None
         try:
-            reader, writer, lease = await self._handshake(dpi, mode)
-            await self._send(writer, bp.CMD_FEEDER_QUERY)
-            reply = await self._read_exact(reader, 1)
-            if reply is None or reply[0] not in (bp.FEEDER_LOADED, bp.FEEDER_EMPTY):
-                raise bp.BrotherProtocolError(f"unexpected feeder reply: {reply!r}")
-            paper = reply[0] == bp.FEEDER_LOADED
+            reader, writer, lease, paper = await self._handshake(dpi, mode)
 
             if source == "flatbed" and (paper or lease.paper_in_feeder):
                 raise ScanSourceError(
@@ -288,8 +303,7 @@ class BrotherScanClient:
 
             await self._send(writer, bp.encode_start(lease.xdpi, lease.ydpi, mode, area))
             return await self._receive(
-                reader, writer, spec, lease, area, source, out_dir, created, progress,
-                max_pages,
+                reader, writer, spec, lease, area, source, out_dir, created, progress
             )
         except BaseException as exc:
             for path in created:
@@ -303,8 +317,7 @@ class BrotherScanClient:
         finally:
             await self._close(writer)
 
-    async def _receive(self, reader, writer, spec, lease, area, source, out_dir, created, progress,
-                       max_pages=None):
+    async def _receive(self, reader, writer, spec, lease, area, source, out_dir, created, progress):
         width = area[2] - area[0]
         want_height = area[3] - area[1]
         row_bytes = spec.row_bytes(width)
@@ -379,8 +392,6 @@ class BrotherScanClient:
                         created.remove(spool_path)
                         pages.append(ScannedPage(out, w, h, lease.xdpi, spec.pil_mode))
                         await report(current, 100)
-                        if max_pages is not None and len(pages) >= max_pages:
-                            return pages
                     elif isinstance(ev, bp.DeviceError):
                         logger.warning("Brother scanner reported error status 0x%02x", ev.code)
                         await self._reset(writer)
@@ -404,6 +415,10 @@ class BrotherScanClient:
             await asyncio.wait_for(writer.drain(), 2)
         except Exception:
             pass
+
+
+class _ReadTimeout(ExternalServiceError):
+    """Internal: a read timed out."""
 
 
 class _BusyError(Exception):

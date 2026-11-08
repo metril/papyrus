@@ -342,20 +342,6 @@ async def test_connect_refused(tmp_path):
         await client(port).scan(out_dir=str(tmp_path), **fixture_args("20-fixture-mode-01"))
 
 
-async def test_max_pages_stops_after_first_page_and_hangs_up(tmp_path):
-    name = "20-fixture-mode-01"
-    frames, _ = split_stream(load(name)[-1][1])
-    stream = b"".join(with_page(f, 1) for f in frames) + page_end(1)
-    stream += b"".join(with_page(f, 2) for f in frames) + page_end(2) + b"\x80"
-    script = load(name)[:-1] + [("S>C", stream)]
-    async with FakeScanner([script]) as srv:
-        pages = await client(srv.port).scan(
-            out_dir=str(tmp_path), max_pages=1, **fixture_args(name)
-        )
-    assert len(pages) == 1 and srv.errors == []
-    assert listing(tmp_path) == ["page-001.tiff"]
-
-
 async def test_probe_takes_lease_without_scanning():
     script = [OK, ("C>S", bp.encode_lease_request(300, "TEXT")), ("S>C", lease_reply())]
     async with FakeScanner([script]) as srv:
@@ -389,3 +375,74 @@ async def test_probe_unreachable_raises():
         port = srv.port
     with pytest.raises(ExternalServiceError):
         await client(port).probe()
+
+
+def feeder_session(lease_extra=()):
+    return [
+        OK,
+        ("C>S", bp.encode_lease_request(300, "TEXT")),
+        ("S>C", lease_reply()),
+        ("C>S", bp.CMD_FEEDER_QUERY),
+        *lease_extra,
+    ]
+
+
+async def test_silent_greeting_is_busy_and_retried(tmp_path):
+    name = "20-fixture-mode-01"
+    async with FakeScanner([[HOLD], load(name)]) as srv:
+        pages = await client(srv.port, handshake_timeout=0.2).scan(
+            out_dir=str(tmp_path), **fixture_args(name)
+        )
+    assert srv.accepted == 2 and len(pages) == 1 and srv.errors == []
+
+
+async def test_silent_lease_reply_is_busy_and_retried(tmp_path):
+    name = "20-fixture-mode-01"
+    silent = [OK, ("C>S", bp.encode_lease_request(300, "TEXT")), HOLD]
+    async with FakeScanner([silent, load(name)]) as srv:
+        pages = await client(srv.port, handshake_timeout=0.2).scan(
+            out_dir=str(tmp_path), **fixture_args(name)
+        )
+    assert srv.accepted == 2 and len(pages) == 1
+
+
+async def test_silent_feeder_reply_reconnects_before_scanning(tmp_path):
+    name = "20-fixture-mode-01"
+    silent = feeder_session([HOLD])
+    async with FakeScanner([silent, load(name)]) as srv:
+        pages = await client(srv.port, handshake_timeout=0.2).scan(
+            out_dir=str(tmp_path), **fixture_args(name)
+        )
+    assert srv.accepted == 2 and len(pages) == 1 and srv.errors == []
+
+
+async def test_always_silent_exhausts_as_busy(tmp_path):
+    async with FakeScanner([[HOLD]] * 3) as srv:
+        with pytest.raises(ScannerBusyError):
+            await client(srv.port, handshake_timeout=0.1, busy_retries=3).scan(
+                out_dir=str(tmp_path), **fixture_args("20-fixture-mode-01")
+            )
+    assert srv.accepted == 3
+
+
+def test_default_retries_span_at_least_ninety_seconds():
+    c = BrotherScanClient("127.0.0.1")
+    assert (c.busy_retries - 1) * c.retry_delay >= 90 and c.handshake_timeout == 10
+
+
+async def test_probe_silent_scanner_is_busy_within_bound():
+    async with FakeScanner([[HOLD]]) as srv:
+        result = await client(srv.port, probe_timeout=0.2).probe()
+    assert result == {"available": True, "busy": True}
+    assert BrotherScanClient("h").probe_timeout < 5
+
+
+async def test_mid_stream_silence_still_raises_after_handshake_retries(tmp_path):
+    name = "20-fixture-mode-01"
+    script = load(name)[:-1] + [HOLD]
+    async with FakeScanner([script]) as srv:
+        with pytest.raises(ExternalServiceError) as ei:
+            await client(srv.port, idle_timeout=0.3, handshake_timeout=5).scan(
+                out_dir=str(tmp_path), **fixture_args(name)
+            )
+    assert "stopped responding" in ei.value.detail and srv.accepted == 1
