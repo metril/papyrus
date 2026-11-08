@@ -59,7 +59,7 @@ describe('ScanBacksDialog', () => {
       }),
     );
     renderDialog();
-    await userEvent.click(screen.getByLabelText(/short edge/i));
+    await userEvent.click(screen.getByLabelText(/short-edge flip/i));
     await userEvent.click(screen.getByLabelText(/remove blank backs/i));
     await userEvent.click(screen.getByRole('button', { name: 'Start' }));
     await waitFor(() => expect(body).toEqual({ rotate_backs: true, skip_blank_backs: true }));
