@@ -67,9 +67,13 @@ async def get_scanner_status(
 
 
 @router.get("/options")
-async def get_scanner_options(user: User = Depends(get_current_user)):
-    """Get available scan options."""
-    return await scan_service.get_options()
+async def get_scanner_options(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get available scan options for the default scanner."""
+    scanner = await get_default_scanner(db)
+    return await scan_service.get_options(scanner.device if scanner else None)
 
 
 @router.post("/scan", response_model=ScanResponse, status_code=201)

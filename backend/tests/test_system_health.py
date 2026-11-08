@@ -36,6 +36,11 @@ def _fake_cups_connection(monkeypatch):
 
     monkeypatch.setattr(cups, "Connection", _FakeConnection)
 
+    async def _no_native_device():
+        return None
+
+    monkeypatch.setattr(system_router, "_default_native_device", _no_native_device)
+
 
 class _FakeProcess:
     async def communicate(self):
