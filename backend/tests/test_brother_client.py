@@ -331,3 +331,45 @@ async def test_connect_refused(tmp_path):
         port = srv.port
     with pytest.raises(ExternalServiceError):
         await client(port).scan(out_dir=str(tmp_path), **fixture_args("20-fixture-mode-01"))
+
+
+async def test_max_pages_stops_after_first_page_and_hangs_up(tmp_path):
+    name = "20-fixture-mode-01"
+    frames, _ = split_stream(load(name)[-1][1])
+    stream = b"".join(with_page(f, 1) for f in frames) + page_end(1)
+    stream += b"".join(with_page(f, 2) for f in frames) + page_end(2) + b"\x80"
+    script = load(name)[:-1] + [("S>C", stream)]
+    async with FakeScanner([script]) as srv:
+        pages = await client(srv.port).scan(
+            out_dir=str(tmp_path), max_pages=1, **fixture_args(name)
+        )
+    assert len(pages) == 1 and srv.errors == []
+    assert listing(tmp_path) == ["page-001.tiff"]
+
+
+async def test_probe_takes_lease_without_scanning():
+    script = [OK, ("C>S", bp.encode_lease_request(300, "TEXT")), ("S>C", lease_reply())]
+    async with FakeScanner([script]) as srv:
+        result = await client(srv.port).probe()
+    assert result == {"available": True, "busy": False}
+    assert srv.errors == [] and srv.trailing == [b""]
+
+
+async def test_probe_busy_counts_as_reachable():
+    async with FakeScanner([[NG]]) as srv:
+        result = await client(srv.port).probe()
+    assert result == {"available": True, "busy": True}
+
+
+async def test_probe_empty_lease_is_busy():
+    script = [OK, ("C>S", bp.encode_lease_request(300, "TEXT")), CLOSE]
+    async with FakeScanner([script]) as srv:
+        result = await client(srv.port).probe()
+    assert result["busy"] is True
+
+
+async def test_probe_unreachable_raises():
+    async with FakeScanner([]) as srv:
+        port = srv.port
+    with pytest.raises(ExternalServiceError):
+        await client(port).probe()

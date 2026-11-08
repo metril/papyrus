@@ -198,6 +198,32 @@ class BrotherScanClient:
                 raise
         raise ScannerBusyError(_BUSY_DETAIL)
 
+    async def probe(self) -> dict:
+        """Connect and take a lease without scanning.
+
+        Returns ``{"available": True, "busy": bool}``; a busy scanner is
+        reachable. Raises ``ExternalServiceError`` if it cannot be reached.
+        """
+        reader, writer = await self._open()
+        try:
+            greeting = await self._read_exact(reader, len(bp.GREETING_OK))
+            if greeting is None or greeting == bp.GREETING_BUSY:
+                return {"available": True, "busy": True}
+            if greeting != bp.GREETING_OK:
+                raise bp.BrotherProtocolError(f"unexpected greeting: {greeting!r}")
+            writer.write(bp.encode_lease_request(300, "TEXT"))
+            await writer.drain()
+            prefix = await self._read_exact(reader, 3)
+            if prefix is None or prefix[:2] == b"\x00\x00":
+                return {"available": True, "busy": True}
+            body = b""
+            if prefix[1]:
+                body = await self._read_exact(reader, prefix[1]) or b""
+            bp.parse_lease(prefix + body)
+            return {"available": True, "busy": False}
+        finally:
+            await self._close(writer)
+
     # -- scan ---------------------------------------------------------------
 
     async def scan(
@@ -209,8 +235,12 @@ class BrotherScanClient:
         out_dir: str,
         area_mm: tuple[float, float, float, float] | None = None,
         progress: ProgressCallback | None = None,
+        max_pages: int | None = None,
     ) -> list[ScannedPage]:
         """Scan and return one TIFF per page, written into ``out_dir``.
+
+        With ``max_pages`` the connection is dropped after that many complete
+        pages; the device feeds every sheet from a single request otherwise.
 
         ``source`` is ``"flatbed"`` or ``"adf"``; ``area_mm`` is
         ``(left, top, width, height)`` and flatbed only (None = whole bed).
@@ -254,7 +284,8 @@ class BrotherScanClient:
             writer.write(bp.encode_start(lease.xdpi, lease.ydpi, mode, area))
             await writer.drain()
             return await self._receive(
-                reader, writer, spec, lease, area, source, out_dir, created, progress
+                reader, writer, spec, lease, area, source, out_dir, created, progress,
+                max_pages,
             )
         except BaseException as exc:
             for path in created:
@@ -268,7 +299,8 @@ class BrotherScanClient:
         finally:
             await self._close(writer)
 
-    async def _receive(self, reader, writer, spec, lease, area, source, out_dir, created, progress):
+    async def _receive(self, reader, writer, spec, lease, area, source, out_dir, created, progress,
+                       max_pages=None):
         width = area[2] - area[0]
         want_height = area[3] - area[1]
         row_bytes = spec.row_bytes(width)
@@ -343,6 +375,8 @@ class BrotherScanClient:
                         created.remove(spool_path)
                         pages.append(ScannedPage(out, w, h, lease.xdpi, spec.pil_mode))
                         await report(current, 100)
+                        if max_pages is not None and len(pages) >= max_pages:
+                            return pages
                     elif isinstance(ev, bp.DeviceError):
                         logger.warning("Brother scanner reported error status 0x%02x", ev.code)
                         await self._reset(writer)
