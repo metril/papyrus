@@ -18,7 +18,7 @@ Papyrus is a web-based print and scan server for network-connected Brother DCP-L
 - **FTP/SFTP**: stdlib ftplib + optional paramiko for file uploads
 - **Image Processing**: Pillow + numpy for brightness/contrast/rotation/crop/deskew
 - **PWA**: vite-plugin-pwa with workbox service worker
-- **Deploy**: Docker multi-stage build (`network_mode: host` for mDNS) behind Traefik
+- **Deploy**: Docker multi-stage build, amd64 and arm64 (release.yml builds each natively and merges digests into one manifest; the arm64 image has no brscan4, so `brother4:` devices need amd64 and ARM hosts use `brothernet:`; ci.yml's `arm64` job builds the image, runs the suite and checks `/health` on `ubuntu-24.04-arm`); (`network_mode: host` for mDNS) behind Traefik
 
 ## Project Structure
 - `backend/app/` — FastAPI application
