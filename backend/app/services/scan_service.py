@@ -3,13 +3,17 @@ import logging
 import os
 import re
 import shutil
+import tempfile
 import uuid
 from typing import Awaitable, Callable, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.exceptions import PapyrusError, ScannerBusyError
+from app.exceptions import PapyrusError, ScannerBusyError, ScanRequestError
+from app.services import brother_protocol as bp
+from app.services.brother_client import BrotherScanClient
+from app.services.net_guard import UnsafeHostError, assert_safe_host
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +111,6 @@ class ScanBackend(Protocol):
         tiff_file: str,
         scan_id: str,
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
-        on_process_start: Callable[[asyncio.subprocess.Process], None] | None = None,
         left_mm: float | None = None,
         top_mm: float | None = None,
         width_mm: float | None = None,
@@ -133,8 +136,8 @@ class ScanBackend(Protocol):
         """Report whether `device` is reachable (see `ScanService.check_device`)."""
         ...
 
-    async def options(self) -> dict:
-        """Supported resolutions/modes/formats/sources."""
+    async def options(self, device: str) -> dict:
+        """Supported resolutions/modes/formats/sources for `device`."""
         ...
 
 
@@ -165,7 +168,7 @@ class SaneBackend:
             "output": output.strip(),
         }
 
-    async def options(self) -> dict:
+    async def options(self, device: str) -> dict:
         return {
             "resolutions": [75, 100, 150, 200, 300, 600],
             "modes": ["Color", "Gray", "Lineart"],
@@ -183,7 +186,6 @@ class SaneBackend:
         tiff_file: str,
         scan_id: str,
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
-        on_process_start: Callable[[asyncio.subprocess.Process], None] | None = None,
         left_mm: float | None = None,
         top_mm: float | None = None,
         width_mm: float | None = None,
@@ -217,8 +219,6 @@ class SaneBackend:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        if on_process_start is not None:
-            on_process_start(process)
 
         stderr_lines = await self._read_scan_output(process, scan_id, progress_callback)
 
@@ -314,7 +314,136 @@ class SaneBackend:
             )
 
 
+BROTHERNET_PREFIX = "brothernet:"
+_NATIVE_MODES = {"Color": "CGRAY", "Gray": "GRAY64", "Lineart": "TEXT"}
+_HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
+
+
+def is_native_device(device: str) -> bool:
+    return device.startswith(BROTHERNET_PREFIX)
+
+
+def parse_native_device(device: str) -> str:
+    """Return the host of a `brothernet:<host>` device string."""
+    host = device[len(BROTHERNET_PREFIX):] if is_native_device(device) else ""
+    if not _HOST_RE.match(host):
+        raise ScanRequestError("The scanner address is not valid.")
+    return host
+
+
+class BrotherNetBackend:
+    """Native Brother network protocol backend (`brothernet:<host>` devices)."""
+
+    def __init__(self, port: int = bp.PORT, **client_kwargs) -> None:
+        self._port = port
+        self._client_kwargs = client_kwargs
+
+    def _client(self, device: str) -> BrotherScanClient:
+        return BrotherScanClient(parse_native_device(device), self._port, **self._client_kwargs)
+
+    @staticmethod
+    def _progress(scan_id: str, callback):
+        if callback is None:
+            return None
+
+        async def adapt(_page: int, percent: int) -> None:
+            await callback(scan_id, float(percent))
+
+        return adapt
+
+    @staticmethod
+    def _protocol_mode(mode: str) -> str:
+        try:
+            return _NATIVE_MODES[mode]
+        except KeyError:
+            raise ScanRequestError("Unsupported scan mode.") from None
+
+    async def probe(self, device: str) -> dict:
+        try:
+            result = await self._client(device).probe()
+        except ScanRequestError:
+            raise
+        except PapyrusError:
+            return {"available": False, "busy": False, "device": device, "output": ""}
+        return {"available": result["available"], "busy": result["busy"],
+                "device": device, "output": ""}
+
+    async def options(self, device: str) -> dict:
+        return {
+            "resolutions": list(bp.RESOLUTIONS),
+            "modes": ["Color", "Gray", "Lineart"],
+            "formats": ["png", "jpeg", "tiff", "pdf"],
+            "sources": ["Flatbed", "ADF"],
+        }
+
+    async def acquire_page(
+        self,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        source: str,
+        tiff_file: str,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        left_mm: float | None = None,
+        top_mm: float | None = None,
+        width_mm: float | None = None,
+        height_mm: float | None = None,
+    ) -> None:
+        client = self._client(device)
+        feeder = source.lower() == "adf"
+        area = None
+        if not feeder and width_mm and height_mm:
+            area = (left_mm or 0.0, top_mm or 0.0, width_mm, height_mm)
+        work = tempfile.mkdtemp(prefix="native_", dir=os.path.dirname(tiff_file) or None)
+        try:
+            pages = await asyncio.wait_for(
+                client.scan(
+                    mode=self._protocol_mode(mode),
+                    dpi=resolution,
+                    source="adf" if feeder else "flatbed",
+                    out_dir=work,
+                    area_mm=area,
+                    progress=self._progress(scan_id, progress_callback),
+                    max_pages=1,
+                ),
+                timeout=_SCAN_TIMEOUT_SECONDS,
+            )
+            os.replace(pages[0].path, tiff_file)
+        except asyncio.TimeoutError:
+            raise ScanError("Scan timed out") from None
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    async def acquire_batch(
+        self,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        page_dir: str,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+    ) -> None:
+        client = self._client(device)
+        try:
+            await asyncio.wait_for(
+                client.scan(
+                    mode=self._protocol_mode(mode),
+                    dpi=resolution,
+                    source="adf",
+                    out_dir=page_dir,
+                    progress=self._progress(scan_id, progress_callback),
+                ),
+                timeout=_BATCH_SCAN_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            raise ScanError("Batch scan timed out") from None
+
+
 _sane_backend = SaneBackend()
+_brothernet_backend = BrotherNetBackend()
 
 
 class ScanService:
@@ -354,15 +483,27 @@ class ScanService:
         empty/unconfigured one.
         """
         _device = device if device is not None else self._scanner_device
+        await self._guard(_device)
         return await self._backend_for(_device).probe(_device)
 
-    async def get_options(self) -> dict:
-        """Get available scanner options for the configured device."""
-        return await self._backend_for(self._scanner_device).options()
+    async def get_options(self, device: str | None = None) -> dict:
+        """Get available scanner options for `device` (default: the configured one)."""
+        _device = device if device is not None else self._scanner_device
+        return await self._backend_for(_device).options(_device)
 
     def _backend_for(self, device: str) -> ScanBackend:
-        """Pick the backend that drives `device`. Only SANE exists for now."""
-        return _sane_backend
+        """Pick the backend that drives `device`."""
+        return _brothernet_backend if is_native_device(device) else _sane_backend
+
+    async def _guard(self, device: str) -> None:
+        """Validate a native device's address before any connection to it."""
+        if not is_native_device(device):
+            return
+        host = parse_native_device(device)
+        try:
+            await assert_safe_host(host)
+        except UnsafeHostError:
+            raise ScanRequestError("The scanner address is not allowed.") from None
 
     # ------------------------------------------------------------------
     # Synchronous bodies (run inside a worker thread).
@@ -409,7 +550,6 @@ class ScanService:
         device: str | None = None,
         scan_dir: str | None = None,
         filename_template: str | None = None,
-        on_process_start: Callable[[asyncio.subprocess.Process], None] | None = None,
         left_mm: float | None = None,
         top_mm: float | None = None,
         width_mm: float | None = None,
@@ -431,10 +571,6 @@ class ScanService:
                 not consumed here, since the intermediate/output files are
                 always named from `scan_id`; callers use it for the
                 delivered filename (see `run_post_scan_actions`).
-            on_process_start: optional callback invoked with the running
-                `scanimage` subprocess as soon as it's spawned, so a caller
-                that tracks in-flight jobs (eSCL) can keep a handle to kill
-                it directly if needed (F110).
 
         Returns:
             Tuple of (scan_id, output_filepath)
@@ -452,6 +588,7 @@ class ScanService:
 
             keep_tiff = False
             try:
+                await self._guard(_device)
                 await self._backend_for(_device).acquire_page(
                     device=_device,
                     resolution=resolution,
@@ -460,7 +597,6 @@ class ScanService:
                     tiff_file=tiff_file,
                     scan_id=scan_id,
                     progress_callback=progress_callback,
-                    on_process_start=on_process_start,
                     left_mm=left_mm,
                     top_mm=top_mm,
                     width_mm=width_mm,
@@ -519,6 +655,7 @@ class ScanService:
 
             success = False
             try:
+                await self._guard(_device)
                 await self._backend_for(_device).acquire_batch(
                     device=_device,
                     resolution=resolution,

@@ -361,13 +361,6 @@ async def _run_scan(job_id: str) -> None:
             req_w, req_h, width_mm or 0, height_mm or 0,
         )
 
-        def _capture_process(proc: asyncio.subprocess.Process) -> None:
-            # F110: keep a handle to the running scanimage subprocess so
-            # DELETE /ScanJobs/{id} has one available, alongside the task
-            # handle set on job creation, even though scan()'s own
-            # CancelledError handling is what actually kills it.
-            job["process"] = proc
-
         scan_id, filepath = await scan_service.scan(
             resolution=res,
             mode=job["color_mode"],
@@ -375,7 +368,6 @@ async def _run_scan(job_id: str) -> None:
             source=job["source"],
             device=device,
             scan_dir=scan_dir,
-            on_process_start=_capture_process,
             left_mm=left_mm,
             top_mm=top_mm,
             width_mm=width_mm,
@@ -547,8 +539,7 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
     }
 
     # Start scan immediately in background — clients poll ScannerStatus for
-    # Completed. The task handle is kept on the job entry (alongside the
-    # subprocess handle _run_scan captures once scanning starts) so
+    # Completed. The task handle is kept on the job entry so
     # DELETE /ScanJobs/{id} can actually cancel an in-flight scan (F110).
     task = asyncio.create_task(_run_scan(job_id))
     _scan_jobs[job_id]["task"] = task
@@ -587,9 +578,10 @@ async def cancel_scan_job(job_id: str):
     """Cancel a scan job and clean up.
 
     F110: a Pending/Processing job's background task is actually cancelled
-    (not just forgotten) — `scan_service.scan`'s own CancelledError handling
-    kills the scanimage subprocess and removes any partial output before the
-    cancellation propagates back here, so a client that cancels no longer
+    (not just forgotten) — the backend's CancelledError handling stops the
+    scan (killing scanimage, or dropping the native connection) and
+    `scan_service.scan` removes any partial output before the cancellation
+    propagates back here, so a client that cancels no longer
     gets a 200 while the scan silently keeps running, holds the scanner
     lock, and shows up in the web UI anyway.
     """
