@@ -10,6 +10,7 @@ export async function getScannerOptions(): Promise<{
   resolutions: number[];
   modes: string[];
   formats: string[];
+  feeder_formats?: string[];
   sources: string[];
 }> {
   const { data } = await api.get('/scanner/options');

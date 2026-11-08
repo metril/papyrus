@@ -18,7 +18,7 @@ import type { ScanJob, ScanRequest } from '../../types';
 export default function ScanForm() {
   const [resolution, setResolution] = useState(300);
   const [mode, setMode] = useState('Color');
-  const [format, setFormat] = useState('pdf');
+  const [chosenFormat, setFormat] = useState('pdf');
   const [source, setSource] = useState('Flatbed');
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +39,11 @@ export default function ScanForm() {
   const queryClient = useQueryClient();
   const profilesQuery = useScanProfiles();
   const profiles = profilesQuery.data ?? [];
-  const resolutions = useScannerOptions().data?.resolutions ?? [100, 150, 200, 300, 600];
+  const scannerOptions = useScannerOptions().data;
+  const resolutions = scannerOptions?.resolutions ?? [100, 150, 200, 300, 600];
+  const feederFormats = source === 'ADF' ? scannerOptions?.feeder_formats : undefined;
+  const feederPdfOnly = !!feederFormats && feederFormats.length < (scannerOptions?.formats.length ?? 0);
+  const format = feederPdfOnly && !feederFormats.includes(chosenFormat) ? feederFormats[0] : chosenFormat;
 
   const loadProfile = (profileId: number | '') => {
     setSelectedProfileId(profileId);
@@ -223,10 +227,19 @@ export default function ScanForm() {
             className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
           >
             <option value="pdf">PDF</option>
-            <option value="png">PNG</option>
-            <option value="jpeg">JPEG</option>
-            <option value="tiff">TIFF</option>
+            {!feederPdfOnly && (
+              <>
+                <option value="png">PNG</option>
+                <option value="jpeg">JPEG</option>
+                <option value="tiff">TIFF</option>
+              </>
+            )}
           </select>
+          {feederPdfOnly && (
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              The feeder scans every sheet at once, so it saves as PDF only.
+            </p>
+          )}
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Source</label>
