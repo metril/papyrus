@@ -402,6 +402,92 @@ async def test_scan_batch_cleans_up_page_dir_when_merge_fails(tmp_path, monkeypa
     assert not page_dir.exists()
 
 
+def _option(cmd, name):
+    return cmd[cmd.index(name) + 1]
+
+
+@pytest.mark.parametrize(
+    "device, mode, expected_mode, expected_source",
+    [
+        ("brother4:net1;dev0", "Color", "24bit Color", "Automatic Document Feeder(left aligned)"),
+        ("brother4:net1;dev0", "Lineart", "Black & White", "Automatic Document Feeder(left aligned)"),
+        ("test:device", "Color", "Color", "ADF"),
+    ],
+)
+async def test_scan_batch_uses_driver_option_names(
+    tmp_path, monkeypatch, device, mode, expected_mode, expected_source
+):
+    """brscan4 rejects "Color" and "ADF", which failed every batch before a page fed."""
+    commands = []
+
+    async def fake_exec(*args, **kwargs):
+        commands.append(args)
+        return _FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(ScanError, match="No pages"):
+        await scan_service.scan_batch(mode=mode, scan_dir=str(tmp_path), device=device)
+
+    assert _option(commands[0], "--mode") == expected_mode
+    assert _option(commands[0], "--source") == expected_source
+
+
+async def test_scan_batch_passes_output_pattern_in_equals_form(tmp_path, monkeypatch):
+    """scanimage rejects `--batch PATH` as "argument without option"."""
+    commands = []
+
+    async def fake_exec(*args, **kwargs):
+        commands.append(args)
+        return _FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(ScanError, match="No pages"):
+        await scan_service.scan_batch(scan_dir=str(tmp_path), device="test:device")
+
+    batch = [a for a in commands[0] if a.startswith("--batch")]
+    assert len(batch) == 1
+    assert batch[0].startswith("--batch=") and batch[0].endswith("page_%04d.tiff")
+
+
+async def test_scan_maps_adf_source_for_brscan4(tmp_path, monkeypatch):
+    commands = []
+
+    async def fake_exec(*args, **kwargs):
+        commands.append(args)
+        return _FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(ScanError, match="no output"):
+        await scan_service.scan(
+            fmt="tiff", source="ADF", scan_dir=str(tmp_path), device="brother4:net1;dev0"
+        )
+
+    assert _option(commands[0], "--source") == "Automatic Document Feeder(left aligned)"
+
+
+async def test_scan_batch_logs_scanimage_error_when_no_pages(tmp_path, monkeypatch, caplog):
+    class _Stderr(_EmptyAsyncIter):
+        lines = [b"scanimage: setting of option --mode failed (Invalid argument)\n"]
+
+        async def __anext__(self):
+            if self.lines:
+                return self.lines.pop(0)
+            raise StopAsyncIteration
+
+    async def fake_exec(*args, **kwargs):
+        return _FakeProcess(returncode=1, stderr=_Stderr())
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with caplog.at_level(logging.WARNING), pytest.raises(ScanError, match="No pages"):
+        await scan_service.scan_batch(scan_dir=str(tmp_path), device="test:device")
+
+    assert "setting of option --mode failed" in caplog.text
+
+
 # --------------------------------------------------------------------------- #
 # F41: scan_batch()'s two subprocesses (scanimage --batch, img2pdf) are
 # timeout-bounded and cancellation-safe, exactly like scan()'s. A hung batch

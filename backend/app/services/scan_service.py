@@ -54,6 +54,21 @@ def _scanimage_match_candidates(device: str) -> list[str]:
     return candidates
 
 
+def _driver_options(device: str, mode: str, source: str) -> tuple[str, str]:
+    """Translate Papyrus's mode and source names into what `device`'s driver
+    accepts. brscan4 rejects the generic names outright (scanimage: "setting
+    of option --mode failed"); other drivers take them as they are."""
+    if not device.startswith("brother4:"):
+        return mode, source
+    return (
+        {"Color": "24bit Color", "Gray": "True Gray", "Lineart": "Black & White"}.get(mode, mode),
+        {
+            "flatbed": "FlatBed",
+            "adf": "Automatic Document Feeder(left aligned)",
+        }.get(source.lower(), source),
+    )
+
+
 async def _await_with_timeout(coro, process: asyncio.subprocess.Process,
                                timeout: float, timeout_message: str):
     """Await `coro` (which itself awaits/reads from `process`), bounded
@@ -174,17 +189,7 @@ class SaneBackend:
         width_mm: float | None = None,
         height_mm: float | None = None,
     ) -> None:
-        # brscan4 uses "FlatBed" (capital B); map common "Flatbed" spelling
-        _source = source
-        if device.startswith("brother4:") and source.lower() == "flatbed":
-            _source = "FlatBed"
-
-        # brscan4 uses different mode names than standard SANE
-        _mode = mode
-        if device.startswith("brother4:"):
-            _mode = {
-                "Color": "24bit Color", "Gray": "True Gray", "Lineart": "Black & White",
-            }.get(mode, mode)
+        _mode, _source = _driver_options(device, mode, source)
 
         cmd = [
             "scanimage",
@@ -261,15 +266,18 @@ class SaneBackend:
         scan_id: str,
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
     ) -> None:
+        _mode, _source = _driver_options(device, mode, "ADF")
+
         # scanimage --batch mode scans all pages from ADF
         cmd = [
             "scanimage",
             "-d", device,
             "--resolution", str(resolution),
-            "--mode", mode,
+            "--mode", _mode,
             "--format=tiff",
-            "--source", "ADF",
-            "--batch", os.path.join(page_dir, "page_%04d.tiff"),
+            "--source", _source,
+            # --batch takes its optional value only in the = form.
+            f"--batch={os.path.join(page_dir, 'page_%04d.tiff')}",
             "--progress",
         ]
 
@@ -279,18 +287,31 @@ class SaneBackend:
             stderr=asyncio.subprocess.PIPE,
         )
 
+        stderr_lines: list[str] = []
+
         async def _read_batch() -> None:
             if process.stderr:
                 async for line in process.stderr:
                     text = line.decode().strip()
                     match = re.search(r"Progress: (\d+\.?\d*)%", text)
-                    if match and progress_callback:
-                        await progress_callback(scan_id, float(match.group(1)))
+                    if match:
+                        if progress_callback:
+                            await progress_callback(scan_id, float(match.group(1)))
+                    elif text:
+                        stderr_lines.append(text)
             await process.wait()
 
         await _await_with_timeout(
             _read_batch(), process, _BATCH_SCAN_TIMEOUT_SECONDS, "Batch scan timed out"
         )
+
+        # A non-zero exit is normal once the feeder runs out, so it can't fail
+        # the batch here, but with no pages it's the only clue to what went wrong.
+        if process.returncode != 0 and not any(f.endswith(".tiff") for f in os.listdir(page_dir)):
+            logger.warning(
+                "scanimage batch exited %s with no pages: %s",
+                process.returncode, "; ".join(stderr_lines[-5:]),
+            )
 
 
 _sane_backend = SaneBackend()
