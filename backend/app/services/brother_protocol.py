@@ -44,9 +44,9 @@ ERROR_CODES = (0xC3, 0xC5)
 FEEDER_LOADED = 0x80
 FEEDER_EMPTY = 0xC2
 
-# Commands. ESC R (reset) is not in our captures; the framing follows ESC Q/D/I.
+# Commands. The driver sends ESC R as these two bytes, unframed, after a device error.
 CMD_FEEDER_QUERY = b"\x1bD\nADF\n\x80"
-CMD_RESET = b"\x1bR\n\x80"
+CMD_RESET = b"\x1bR"
 
 _FRAME_HEADER = 12
 _PAGE_END_LEN = 10
