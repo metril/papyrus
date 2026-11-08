@@ -94,6 +94,7 @@ PWG_NS = "http://www.pwg.org/schemas/2010/12/sm"
 
 # F4: matches the DiscreteResolutions advertised in ScannerCapabilities.
 ESCL_RESOLUTIONS = (75, 100, 150, 200, 300, 600)
+_NEXT_DOCUMENT_WAIT_SECONDS = 20
 # F4: matches the Max{Width,Height} advertised in ScannerCapabilities (A4 at
 # the caps' 300dpi coordinate system) -- the platen/ADF caps this module
 # advertises, in px at that same 300dpi basis.
@@ -663,11 +664,23 @@ async def get_next_document(job_id: str):
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
 
+    # Hold the request while the scan runs, as real scanners do. Clients retry a
+    # 503 only so many times (sane-airscan gives up after about 30), and a feeder
+    # stack can take far longer than that many immediate answers would cover.
+    task = job.get("task")
+    if job["state"] in ("Pending", "Processing") and task is not None:
+        await asyncio.wait({task}, timeout=_NEXT_DOCUMENT_WAIT_SECONDS)
+        job = _scan_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Scan job not found")
+
     if job["state"] == "Canceled":
         raise HTTPException(status_code=503, detail=job.get("error") or "Scan failed")
 
     if job["state"] in ("Pending", "Processing"):
-        raise HTTPException(status_code=503, detail="Scan in progress")
+        raise HTTPException(
+            status_code=503, detail="Scan in progress", headers={"Retry-After": "1"}
+        )
 
     # state == "Completed"
     if job.get("held"):
