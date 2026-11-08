@@ -171,7 +171,7 @@ class SaneBackend:
     async def options(self, device: str) -> dict:
         return {
             "resolutions": (
-                [100, 150, 200, 300, 600] if device.startswith("brother4:")
+                [100, 150, 200, 300, 400, 600] if device.startswith("brother4:")
                 else [75, 100, 150, 200, 300, 600]
             ),
             "modes": ["Color", "Gray", "Lineart"],
