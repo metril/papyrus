@@ -2,6 +2,7 @@ import io
 import logging
 import os
 
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -11,6 +12,7 @@ from app.exceptions import (
     ScanRequestError,
     ScanSourceError,
 )
+from app.services import brother_client
 from app.services import brother_protocol as bp
 from app.services.brother_client import BrotherScanClient
 from tests.brother_helpers import (
@@ -218,7 +220,6 @@ async def test_bad_request_rejected_before_connecting(kw, tmp_path):
 
 
 def jpeg_bytes(width, real_rows, total_rows):
-    import numpy as np
 
     arr = np.full((total_rows, width, 3), 128, np.uint8)
     arr[:real_rows, :, 0] = (np.arange(real_rows)[:, None] * 7 + 10) % 200 + 20
@@ -456,3 +457,22 @@ async def test_mid_stream_silence_still_raises_after_handshake_retries(tmp_path)
                 out_dir=str(tmp_path), **fixture_args(name)
             )
     assert "stopped responding" in ei.value.detail and srv.accepted == 1
+
+
+def _page_with_band(partial_width):
+    """White page, then a 16-row band decoded only for `partial_width` pixels, then fill."""
+    arr = np.full((64, 160, 3), 255, dtype=np.uint8)
+    arr[32:] = 128
+    arr[32:48, :partial_width] = 250
+    return Image.fromarray(arr, "RGB")
+
+
+@pytest.mark.parametrize("partial_width", [0, 16, 80, 144])
+def test_trim_removes_partly_decoded_band(partial_width):
+    assert brother_client._trim_fill_rows(_page_with_band(partial_width)).size == (160, 32)
+
+
+def test_trim_keeps_gray_content_that_stops_short_of_the_right_edge():
+    arr = np.full((64, 160, 3), 255, dtype=np.uint8)
+    arr[40:, :100] = 128
+    assert brother_client._trim_fill_rows(Image.fromarray(arr, "RGB")).size == (160, 64)

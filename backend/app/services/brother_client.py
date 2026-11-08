@@ -32,6 +32,7 @@ _BUSY_DETAIL = "The scanner is busy. Try again in a moment."
 _TRUNCATED_LOCK = threading.Lock()
 _MAX_PAGE_BYTES = 128 * 1024 * 1024
 _FILL_VALUE = 128
+_FILL_EDGE_PIXELS = 16  # one JPEG block
 
 
 @dataclass(frozen=True)
@@ -51,11 +52,15 @@ _INVERT = _invert_table()
 
 
 def _trim_fill_rows(img):
-    """Drop trailing rows that are exactly the decoder's fill colour."""
+    """Drop trailing rows the decoder filled in.
+
+    The data can stop partway across a row of JPEG blocks, leaving the rest of
+    that band filled through to the right edge, so the right edge decides.
+    """
     import numpy as np
 
     arr = np.asarray(img)
-    filled = (arr == _FILL_VALUE).all(axis=(1, 2))
+    filled = (arr[:, -_FILL_EDGE_PIXELS:] == _FILL_VALUE).all(axis=(1, 2))
     keep = len(filled)
     while keep > 0 and filled[keep - 1]:
         keep -= 1
