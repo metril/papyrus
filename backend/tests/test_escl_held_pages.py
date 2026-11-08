@@ -29,6 +29,11 @@ XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
+class _ConnectedRequest:
+    async def is_disconnected(self):
+        return False
+
+
 class FakeBackend:
     def __init__(self, pages=3, hold=False):
         self.pages = pages
@@ -214,7 +219,7 @@ async def test_page_stays_queued_until_send_completes_and_is_reserved_after_fail
 
     # A send that never finishes: the response is built but its background
     # task (the delete) never runs.
-    await escl.get_next_document(job_id)
+    await escl.get_next_document(job_id, _ConnectedRequest())
     assert job["pages"][0] == first and os.path.exists(first)
     assert len(job["pages"]) == 3
 
@@ -228,8 +233,8 @@ async def test_superseded_send_does_not_delete_the_page(client, db, setup):
     job_id = await _start(client, db, "brothernet:127.0.0.1", "image/jpeg")
     await _finish(job_id)
     job = escl._scan_jobs[job_id]
-    old = await escl.get_next_document(job_id)
-    await escl.get_next_document(job_id)
+    old = await escl.get_next_document(job_id, _ConnectedRequest())
+    await escl.get_next_document(job_id, _ConnectedRequest())
     await old.background()
     assert len(job["pages"]) == 3
 

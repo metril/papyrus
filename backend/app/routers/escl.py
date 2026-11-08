@@ -657,7 +657,7 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/ScanJobs/{job_id}/NextDocument")
-async def get_next_document(job_id: str):
+async def get_next_document(job_id: str, request: Request):
     """Return the scanned document once the background scan has completed."""
     _purge_stale_jobs()
     job = _scan_jobs.get(job_id)
@@ -670,6 +670,9 @@ async def get_next_document(job_id: str):
     task = job.get("task")
     if job["state"] in ("Pending", "Processing") and task is not None:
         await asyncio.wait({task}, timeout=_NEXT_DOCUMENT_WAIT_SECONDS)
+        # A client that left during the hold must not use up the page; its retry gets it.
+        if await request.is_disconnected():
+            return Response(status_code=499)
         job = _scan_jobs.get(job_id)
         if job is None:
             raise HTTPException(status_code=404, detail="Scan job not found")
