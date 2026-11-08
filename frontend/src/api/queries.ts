@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { listJobs, getPrinterStatus } from './printer';
-import { listScans, listScanProfiles } from './scanner';
+import { listScans, listScanProfiles, getScannerOptions } from './scanner';
 import { listPrinters } from './printers';
 import { useConnectionStore } from '../store/connectionStore';
 import { getSettings, getEmailWebhookInfo } from './settings';
@@ -37,6 +37,7 @@ export const queryKeys = {
   printerDiscovery: ['printerDiscovery'] as const,
   scanners: {
     list: () => ['scanners', 'list'] as const,
+    options: () => ['scanners', 'options'] as const,
   },
   settings: ['settings'] as const,
   emailWebhook: ['emailWebhook'] as const,
@@ -141,6 +142,14 @@ export function useScanners() {
   return useQuery({
     queryKey: queryKeys.scanners.list(),
     queryFn: () => listScanners(),
+  });
+}
+
+/** Resolutions/modes/sources the default scanner supports. */
+export function useScannerOptions() {
+  return useQuery({
+    queryKey: queryKeys.scanners.options(),
+    queryFn: () => getScannerOptions(),
   });
 }
 

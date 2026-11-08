@@ -10,7 +10,7 @@ import {
   deleteScanProfile,
 } from '../../api/scanner';
 import type { ScanProfileCreate } from '../../api/scanner';
-import { useScanProfiles, queryKeys } from '../../api/queries';
+import { useScanProfiles, useScannerOptions, queryKeys } from '../../api/queries';
 import { useScanStore } from '../../store/scanStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import type { ScanJob, ScanRequest } from '../../types';
@@ -39,6 +39,7 @@ export default function ScanForm() {
   const queryClient = useQueryClient();
   const profilesQuery = useScanProfiles();
   const profiles = profilesQuery.data ?? [];
+  const resolutions = useScannerOptions().data?.resolutions ?? [100, 150, 200, 300, 600];
 
   const loadProfile = (profileId: number | '') => {
     setSelectedProfileId(profileId);
@@ -195,7 +196,7 @@ export default function ScanForm() {
             disabled={scanning}
             className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
           >
-            {[75, 100, 150, 200, 300, 600].map((r) => (
+            {resolutions.map((r) => (
               <option key={r} value={r}>{r} DPI</option>
             ))}
           </select>

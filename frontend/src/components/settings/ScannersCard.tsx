@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import axios from 'axios';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Card from '../common/Card';
 import Button from '../common/Button';
@@ -49,7 +50,10 @@ export default function ScannersCard() {
   // Test existing scanner state
   const [testResults, setTestResults] = useState<Record<number, ScannerTestResult | 'testing' | 'error'>>({});
 
-  const invalidateScanners = () => queryClient.invalidateQueries({ queryKey: queryKeys.scanners.list() });
+  const invalidateScanners = () => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.scanners.list() });
+    queryClient.invalidateQueries({ queryKey: queryKeys.scanners.options() });
+  };
 
   const addMutation = useMutation({
     mutationFn: (body: ManagedScannerCreate) => addScanner(body),
@@ -153,9 +157,11 @@ export default function ScannersCard() {
         setBrotherRegisterStatus('error');
         setBrotherError(result.error ?? 'Unknown error');
       }
-    } catch {
+    } catch (err) {
       setBrotherRegisterStatus('error');
-      setBrotherError('Request failed');
+      setBrotherError(
+        (axios.isAxiosError<{ detail?: string }>(err) && err.response?.data?.detail) || 'Request failed',
+      );
     }
   };
 
