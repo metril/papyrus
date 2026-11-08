@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import select
 
 from app.auth.tokens import hash_token
+from app.database import async_session
 from app.exceptions import ScannerBusyError
 from app.models import APIToken, ScanJob, Scanner, User
 from app.routers import scanner as scanner_router
@@ -21,14 +22,19 @@ class _FakeScanService:
     def __init__(self, tmp_path, specs, error=None):
         self.tmp_path, self.specs, self.error = tmp_path, specs, error
         self.calls: list[dict] = []
+        self.during_scan = None  # async hook: something happening while paper moves
 
     async def scan_batch(self, **kwargs):
         self.calls.append(kwargs)
         if self.error:
             raise self.error
-        path = str(self.tmp_path / "backs.pdf")
+        n = len(self.calls)
+        suffix = "" if n == 1 else f"-{n}"
+        path = str(self.tmp_path / f"backs{suffix}.pdf")
         make_pdf(path, self.specs)
-        return "backs-scan-id", path, len(self.specs)
+        if self.during_scan:
+            await self.during_scan()
+        return f"backs-scan-id{suffix}", path, len(self.specs)
 
 
 async def _fake_device(_db) -> str:
@@ -126,7 +132,8 @@ async def test_broadcasts_scan_completed_per_row(db, user_client, monkeypatch, t
         if c == "scans" and m["type"] == "scan_completed"
     ]
     merged_id = resp.json()["merged"]["scan_id"]
-    assert sorted(ids) == sorted(["front-scan-id", "backs-scan-id", merged_id])
+    # fronts, backs and merged right after the commit, merged again after delivery
+    assert ids == ["front-scan-id", "backs-scan-id", merged_id, merged_id]
 
 
 async def test_blank_removal_is_off_by_default_and_opt_in(db, user_client, monkeypatch, tmp_path):
@@ -362,3 +369,155 @@ async def test_token_without_scan_permission_is_403(db, client, monkeypatch, tmp
     )
     assert resp.status_code == 403
     assert fake.calls == []
+
+
+async def _delete_via_other_session(model, **where):
+    async with async_session() as other:
+        row = (await other.execute(select(model).filter_by(**where))).scalar_one()
+        await other.delete(row)
+        await other.commit()
+
+
+async def _merge(user_client) -> str:
+    resp = await user_client.post(URL, json={})
+    assert resp.status_code == 200
+    return resp.json()["merged"]["scan_id"]
+
+
+async def test_backs_row_carries_source_and_is_refused(db, user_client, monkeypatch, tmp_path):
+    await _seed(db, tmp_path, FRONTS)
+    fake = _patch(monkeypatch, tmp_path, BACKS)
+    body = (await user_client.post(URL, json={})).json()
+    assert body["backs"]["duplex_source_scan_id"] == "front-scan-id"
+    assert body["merged"]["duplex_source_scan_id"] == "front-scan-id"
+    calls = len(fake.calls)
+    resp = await user_client.post("/api/scanner/scans/backs-scan-id/backs", json={})
+    assert resp.status_code == 400 and len(fake.calls) == calls
+
+
+async def test_deleting_merged_scan_frees_fronts_for_redo(db, user_client, monkeypatch, tmp_path):
+    await _seed(db, tmp_path, FRONTS)
+    _patch(monkeypatch, tmp_path, BACKS)
+    merged_id = await _merge(user_client)
+    assert (await user_client.post(URL, json={})).status_code == 400
+    assert (await user_client.delete(f"/api/scanner/scans/{merged_id}")).status_code == 204
+    assert (await _row(db, "front-scan-id")).duplex_merged is False
+    second = await user_client.post(URL, json={})
+    assert second.status_code == 200 and second.json()["merged"]["scan_id"] != merged_id
+
+
+async def test_bulk_deleting_merged_scan_frees_fronts(db, user_client, monkeypatch, tmp_path):
+    await _seed(db, tmp_path, FRONTS)
+    _patch(monkeypatch, tmp_path, BACKS)
+    merged_id = await _merge(user_client)
+    resp = await user_client.post("/api/scanner/scans/bulk-delete", json={"scan_ids": [merged_id]})
+    assert resp.status_code == 200
+    assert (await _row(db, "front-scan-id")).duplex_merged is False
+
+
+async def test_deleting_backs_or_fronts_leaves_the_rest_alone(
+    db, user_client, monkeypatch, tmp_path
+):
+    await _seed(db, tmp_path, FRONTS)
+    _patch(monkeypatch, tmp_path, BACKS)
+    merged_id = await _merge(user_client)
+    assert (await user_client.delete("/api/scanner/scans/backs-scan-id")).status_code == 204
+    assert (await _row(db, "front-scan-id")).duplex_merged is True
+    assert (await user_client.delete("/api/scanner/scans/front-scan-id")).status_code == 204
+    assert (await _row(db, merged_id)).duplex_merged is True
+    # Deleting the merged scan once the fronts are gone must not fail.
+    assert (await user_client.delete(f"/api/scanner/scans/{merged_id}")).status_code == 204
+
+
+async def test_retention_frees_fronts_of_expired_merge(db, user_client, monkeypatch, tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    from app.services.retention_service import cleanup_old_scans
+
+    await _seed(db, tmp_path, FRONTS)
+    _patch(monkeypatch, tmp_path, BACKS)
+    merged = await _row(db, await _merge(user_client))
+    merged.created_at = datetime.now(timezone.utc) - timedelta(days=100)
+    await db.commit()
+    assert await cleanup_old_scans(db, 30) == 1
+    assert (await _row(db, "front-scan-id")).duplex_merged is False
+
+
+async def test_fronts_deleted_during_scan_keeps_backs(db, user_client, monkeypatch, tmp_path):
+    await _seed(db, tmp_path, FRONTS)
+    fake = _patch(monkeypatch, tmp_path, BACKS)
+
+    async def hook():
+        await _delete_via_other_session(ScanJob, scan_id="front-scan-id")
+
+    fake.during_scan = hook
+    resp = await user_client.post(URL, json={})
+    assert resp.status_code == 409
+    assert "unchanged" not in resp.json()["detail"]
+    kept = await _row(db, "backs-scan-id")
+    assert kept.status == "completed" and os.path.exists(kept.filepath)
+    assert sorted(os.listdir(tmp_path)) == ["backs.pdf", "fronts.pdf"]
+    assert len(await _all(db)) == 1
+
+
+async def test_scanner_deleted_during_scan_does_not_lose_the_merge(
+    db, user_client, monkeypatch, tmp_path
+):
+    scanner = await _seed_scanner(db, {})
+    scanner.auto_deliver = False
+    await db.commit()
+    await _seed(db, tmp_path, FRONTS, scanner_id=scanner.id)
+    fake = _patch(monkeypatch, tmp_path, BACKS)
+
+    async def hook():
+        await _delete_via_other_session(Scanner, name="s")
+
+    fake.during_scan = hook
+    body = (await user_client.post(URL, json={})).json()
+    assert (await _row(db, body["merged"]["scan_id"])).scanner_id is None
+    assert (await _row(db, "backs-scan-id")).scanner_id is None
+
+
+async def test_scanner_deleted_and_mismatch_still_keeps_backs(
+    db, user_client, monkeypatch, tmp_path
+):
+    scanner = await _seed_scanner(db, {})
+    await _seed(db, tmp_path, FRONTS, scanner_id=scanner.id)
+    fake = _patch(monkeypatch, tmp_path, [(11, "text")])
+
+    async def hook():
+        await _delete_via_other_session(Scanner, name="s")
+
+    fake.during_scan = hook
+    assert (await user_client.post(URL, json={})).status_code == 409
+    assert (await _row(db, "backs-scan-id")).scanner_id is None
+
+
+async def test_delivery_errors_do_not_turn_a_finished_merge_into_a_500(
+    db, user_client, monkeypatch, tmp_path
+):
+    await _seed(db, tmp_path, FRONTS)
+    _patch(monkeypatch, tmp_path, BACKS)
+
+    async def boom(*a, **k):
+        raise RuntimeError("webhook exploded")
+
+    monkeypatch.setattr(scanner_router, "dispatch_webhook", boom)
+    resp = await user_client.post(URL, json={})
+    assert resp.status_code == 200 and resp.json()["merged"]["page_count"] == 6
+
+
+async def test_merged_row_deleted_during_delivery_still_returns(
+    db, user_client, monkeypatch, tmp_path
+):
+    scanner = await _seed_scanner(db, {"folder": str(tmp_path)})
+    await _seed(db, tmp_path, FRONTS, scanner_id=scanner.id)
+    _patch(monkeypatch, tmp_path, BACKS)
+
+    async def delete_during_delivery(merged_row, *a, **k):
+        await _delete_via_other_session(ScanJob, scan_id=merged_row.scan_id)
+        os.unlink(merged_row.filepath)
+
+    monkeypatch.setattr(scanner_router, "run_post_scan_actions", delete_during_delivery)
+    resp = await user_client.post(URL, json={})
+    assert resp.status_code == 200 and resp.json()["merged"]["page_count"] == 6

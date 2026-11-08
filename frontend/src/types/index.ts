@@ -67,6 +67,7 @@ export interface ScanJob {
   created_at: string;
   completed_at: string | null;
   duplex_merged: boolean;
+  duplex_source_scan_id: string | null;
 }
 
 export interface ScanRequest {

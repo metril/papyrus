@@ -9,11 +9,16 @@ import io
 import os
 import stat
 import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import numpy as np
 from PIL import Image
 from pypdf import PageObject, PdfReader, PdfWriter
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import ScanJob
 
 # A back page is dropped only if it is bright, flat paper with almost no
 # darker marks. Losing real content is far worse than keeping a blank page,
@@ -161,3 +166,33 @@ def merge_backs_atomic(
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
+
+
+async def release_fronts(db: AsyncSession, deleting: Iterable[ScanJob]) -> list[ScanJob]:
+    """Clear ``duplex_merged`` on the fronts of any merge result being deleted,
+    so they can be merged again. Call before the commit that deletes the rows;
+    returns the fronts rows that changed (for broadcasting)."""
+    rows = list(deleting)
+    gone = {r.scan_id for r in rows}
+    sources = {
+        r.duplex_source_scan_id for r in rows if r.duplex_merged and r.duplex_source_scan_id
+    } - gone
+    freed: list[ScanJob] = []
+    for source in sources:
+        other = await db.execute(
+            select(ScanJob.id).where(
+                ScanJob.duplex_merged.is_(True),
+                ScanJob.duplex_source_scan_id == source,
+                ScanJob.scan_id.notin_(gone),
+            ).limit(1)
+        )
+        if other.first() is not None:
+            continue
+        result = await db.execute(
+            select(ScanJob).where(ScanJob.scan_id == source, ScanJob.duplex_merged.is_(True))
+        )
+        fronts = result.scalar_one_or_none()
+        if fronts is not None:
+            fronts.duplex_merged = False
+            freed.append(fronts)
+    return freed

@@ -132,6 +132,9 @@ class ScanJob(Base):
     duplex_merged: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
+    # On a merge result and on its back-side scan: scan_id of the fronts they
+    # belong to. Deleting the merge result frees the fronts for a redo.
+    duplex_source_scan_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="scan_jobs")
 

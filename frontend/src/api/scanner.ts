@@ -34,8 +34,8 @@ export interface ScanBacksOptions {
 
 export interface ScanBacksResult {
   merged: ScanJob;
-  backs: ScanJob;
-  fronts: ScanJob;
+  backs: ScanJob | null;
+  fronts: ScanJob | null;
   blanks_dropped: number;
 }
 

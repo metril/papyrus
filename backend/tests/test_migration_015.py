@@ -19,6 +19,18 @@ def _run(scratch_url, fn, revision):
     return asyncio.to_thread(fn, cfg, revision)
 
 
+async def _columns(url) -> list[str]:
+    eng = create_async_engine(url)
+    try:
+        async with eng.connect() as conn:
+            return list((await conn.execute(text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='scan_jobs'"
+            ))).scalars().all())
+    finally:
+        await eng.dispose()
+
+
 async def test_migration_015_up_and_down(migrated_db):
     maint = create_async_engine(_maintenance_url(), isolation_level="AUTOCOMMIT")
     name = f"papyrus_migration015_{uuid.uuid4().hex[:10]}"
@@ -56,6 +68,7 @@ async def test_migration_015_up_and_down(migrated_db):
         finally:
             await eng.dispose()
         assert value is False and nullable == "NO"
+        assert "duplex_source_scan_id" in await _columns(url)
         await _run(url, command.downgrade, "014")
         eng = create_async_engine(url)
         try:
@@ -66,7 +79,7 @@ async def test_migration_015_up_and_down(migrated_db):
                 ))).scalars().all()
         finally:
             await eng.dispose()
-        assert "duplex_merged" not in cols
+        assert "duplex_merged" not in cols and "duplex_source_scan_id" not in cols
     finally:
         cleanup = create_async_engine(_maintenance_url(), isolation_level="AUTOCOMMIT")
         async with cleanup.connect() as conn:

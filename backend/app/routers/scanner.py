@@ -585,10 +585,16 @@ class BacksRequest(BaseModel):
     reverse_backs: bool = True
 
 
+_BACKS_KEPT_MESSAGE = (
+    "The pages could not be combined, so nothing was merged. "
+    "The back-side scan was saved to your history."
+)
+
+
 class BacksResponse(BaseModel):
     merged: ScanResponse
-    backs: ScanResponse
-    fronts: ScanResponse
+    backs: ScanResponse | None
+    fronts: ScanResponse | None
     blanks_dropped: int
 
 
@@ -625,6 +631,10 @@ async def scan_backs(
             "This scan is already part of a double-sided merge. "
             "Delete the merged scan first if you want to redo it."
         )
+    if job.duplex_source_scan_id:
+        raise BacksNotEligibleError(
+            "This is the back side of a double-sided merge, so it has no other side to scan."
+        )
 
     scanner = await db.get(Scanner, job.scanner_id) if job.scanner_id else None
     if scanner is None:
@@ -634,7 +644,8 @@ async def scan_backs(
     filename_template = (
         await get_setting(db, "scan_filename_template") or "scan_{date}_{time}_{id}"
     )
-    front_path, resolution, mode = job.filepath, job.resolution, job.mode
+    front_scan_id, front_path = job.scan_id, job.filepath
+    resolution, mode = job.resolution, job.mode
     scanner_id = job.scanner_id
     # Release the transaction before the long feeder scan, like /scan does.
     await db.commit()
@@ -644,7 +655,14 @@ async def scan_backs(
         resolution=resolution, mode=mode, device=device, scan_dir=scan_dir,
     )
 
-    def new_row(row_scan_id: str, path: str, pages: int, merged: bool) -> ScanJob:
+    async def live_scanner_id() -> int | None:
+        """The scanner may have been deleted while the feeder was scanning."""
+        if scanner_id is None:
+            return None
+        found = await db.execute(select(Scanner.id).where(Scanner.id == scanner_id))
+        return found.scalar_one_or_none()
+
+    async def new_row(row_scan_id: str, path: str, pages: int, merged: bool) -> ScanJob:
         return ScanJob(
             user_id=user.id,
             scan_id=row_scan_id,
@@ -657,22 +675,31 @@ async def scan_backs(
             file_size=os.path.getsize(path),
             status="completed",
             completed_at=datetime.now(timezone.utc),
-            scanner_id=scanner_id,
+            scanner_id=await live_scanner_id(),
             duplex_merged=merged,
+            duplex_source_scan_id=front_scan_id,
         )
 
-    async def broadcast(*rows: ScanJob) -> None:
+    async def snapshot(row: ScanJob) -> ScanResponse | None:
+        """Fresh copy of a row, or None if it was deleted meanwhile."""
+        try:
+            await db.refresh(row)
+        except Exception:
+            return None
+        return ScanResponse.model_validate(row, from_attributes=True)
+
+    async def broadcast(*rows: ScanResponse | None) -> None:
         for row in rows:
-            await ws_manager.broadcast("scans", {
-                "type": "scan_completed", "data": serialize_scan_job(row)
-            })
+            if row is not None:
+                await ws_manager.broadcast("scans", {
+                    "type": "scan_completed", "data": row.model_dump(mode="json")
+                })
 
     async def keep_backs_only() -> None:
-        kept = new_row(backs_id, backs_path, backs_count, False)
+        kept = await new_row(backs_id, backs_path, backs_count, False)
         db.add(kept)
         await db.commit()
-        await db.refresh(kept)
-        await broadcast(kept)
+        await broadcast(await snapshot(kept))
 
     merged_id = str(uuid.uuid4())
     merged_path = os.path.join(scan_dir, f"{merged_id}.pdf")
@@ -696,41 +723,61 @@ async def scan_backs(
     except Exception:
         logger.exception("Merging back sides failed")
         await keep_backs_only()
-        raise BacksMismatchError(
-            "The pages could not be combined. The original scan is unchanged and "
-            "the back-side scan was saved to your history."
-        )
+        raise BacksMismatchError(_BACKS_KEPT_MESSAGE)
 
-    await db.refresh(job)
-    job.duplex_merged = True
-    backs_row = new_row(backs_id, backs_path, backs_count, False)
-    merged_row = new_row(merged_id, merged_path, outcome.page_count, True)
-    db.add_all([backs_row, merged_row])
-    await db.commit()
-    await db.refresh(merged_row)
-
-    await log_event(db, "scan.complete", "scan_job", merged_id, user_id=user.id,
-                    detail={"format": "pdf", "pages": outcome.page_count, "duplex": True})
-    await db.commit()
-    await dispatch_webhook(
-        db, "scan.complete", {"scan_id": merged_id, "format": "pdf", "pages": outcome.page_count}
-    )
-    scanner = await db.get(Scanner, scanner_id) if scanner_id else None
-    if scanner is None:
-        scanner = await get_default_scanner(db)
-    if scanner and scanner.auto_deliver:
-        await run_post_scan_actions(
-            merged_row, scanner, db, default_filename_template=filename_template
-        )
-        merged_row.file_size = os.path.getsize(merged_path)
+    try:
+        await db.refresh(job)
+        if job.duplex_merged:
+            raise RuntimeError("fronts were merged by a concurrent request")
+        job.duplex_merged = True
+        backs_row = await new_row(backs_id, backs_path, backs_count, False)
+        merged_row = await new_row(merged_id, merged_path, outcome.page_count, True)
+        db.add_all([backs_row, merged_row])
         await db.commit()
+    except Exception:
+        logger.exception("Recording the merged scan failed")
+        await db.rollback()
+        await asyncio.to_thread(cleanup_file, merged_path)
+        await keep_backs_only()
+        raise BacksMismatchError(_BACKS_KEPT_MESSAGE)
 
-    await db.refresh(job)
-    await db.refresh(backs_row)
-    await db.refresh(merged_row)
-    await broadcast(job, backs_row, merged_row)
+    fronts_resp = await snapshot(job)
+    backs_resp = await snapshot(backs_row)
+    merged_resp = await snapshot(merged_row)
+    await broadcast(fronts_resp, backs_resp, merged_resp)
+
+    # Everything below is best effort: the merge itself is already done.
+    try:
+        await log_event(db, "scan.complete", "scan_job", merged_id, user_id=user.id,
+                        detail={"format": "pdf", "pages": outcome.page_count, "duplex": True})
+        await db.commit()
+        await dispatch_webhook(
+            db, "scan.complete",
+            {"scan_id": merged_id, "format": "pdf", "pages": outcome.page_count},
+        )
+        scanner = await db.get(Scanner, scanner_id) if scanner_id else None
+        if scanner is None:
+            scanner = await get_default_scanner(db)
+        if scanner and scanner.auto_deliver:
+            await run_post_scan_actions(
+                merged_row, scanner, db, default_filename_template=filename_template
+            )
+            if os.path.exists(merged_path):
+                merged_row.file_size = os.path.getsize(merged_path)
+            await db.commit()
+        refreshed = await snapshot(merged_row)
+        if refreshed is not None:
+            merged_resp = refreshed
+            await broadcast(refreshed)
+    except Exception:
+        logger.exception("Post-merge delivery failed for scan %s", merged_id)
+        await db.rollback()
+
+    if merged_resp is None:
+        raise NotFoundError("The merged scan was deleted before it could be returned.")
     return BacksResponse(
-        merged=merged_row, backs=backs_row, fronts=job, blanks_dropped=outcome.blanks_dropped
+        merged=merged_resp, backs=backs_resp, fronts=fronts_resp,
+        blanks_dropped=outcome.blanks_dropped,
     )
 
 
@@ -788,6 +835,7 @@ async def bulk_delete_scans(
             filepaths.append(job.filepath)
         await db.delete(job)
         deleted += 1
+    freed = await duplex_service.release_fronts(db, jobs)
 
     # F44: rows are deleted and committed before their files are unlinked, so
     # a slow/failing unlink can never leave a committed row pointing at a
@@ -800,6 +848,10 @@ async def bulk_delete_scans(
     for scan_id in body.scan_ids:
         await ws_manager.broadcast("scans", {
             "type": "scan_deleted", "data": {"scan_id": scan_id}
+        })
+    for fronts in freed:
+        await ws_manager.broadcast("scans", {
+            "type": "scan_completed", "data": serialize_scan_job(fronts)
         })
 
     return BulkDeleteResponse(deleted=deleted)
@@ -932,6 +984,7 @@ async def delete_scan(
     filepath = job.filepath
     scan_id_copy = job.scan_id
     await db.delete(job)
+    freed = await duplex_service.release_fronts(db, [job])
     # F44: commit before unlinking, so a slow/failing unlink can never leave
     # a committed row pointing at a file that's already gone.
     await db.commit()
@@ -946,6 +999,10 @@ async def delete_scan(
     await ws_manager.broadcast("scans", {
         "type": "scan_deleted", "data": {"scan_id": scan_id_copy}
     })
+    for fronts in freed:
+        await ws_manager.broadcast("scans", {
+            "type": "scan_completed", "data": serialize_scan_job(fronts)
+        })
 
 
 # --- Scan Profiles ---
