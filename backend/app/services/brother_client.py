@@ -185,7 +185,7 @@ class BrotherScanClient:
                 writer.write(bp.encode_lease_request(dpi, mode))
                 await writer.drain()
                 prefix = await self._read_exact(reader, 3)
-                if prefix is None or prefix[:2] == b"\x00\x00":
+                if prefix is None or prefix[:2] == b"\x00\x00" or prefix[0] == bp.LEASE_NOT_READY:
                     raise _BusyError
                 body = b""
                 if prefix[1]:
@@ -214,7 +214,7 @@ class BrotherScanClient:
             writer.write(bp.encode_lease_request(300, "TEXT"))
             await writer.drain()
             prefix = await self._read_exact(reader, 3)
-            if prefix is None or prefix[:2] == b"\x00\x00":
+            if prefix is None or prefix[:2] == b"\x00\x00" or prefix[0] == bp.LEASE_NOT_READY:
                 return {"available": True, "busy": True}
             body = b""
             if prefix[1]:

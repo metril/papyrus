@@ -140,6 +140,15 @@ async def test_empty_lease_then_ok(tmp_path):
     assert srv.accepted == 2 and len(pages) == 1 and srv.errors == []
 
 
+async def test_not_ready_lease_prefix_then_ok(tmp_path):
+    name = "20-fixture-mode-01"
+    segs = load(name)
+    not_ready = [OK, segs[1], ("S>C", b"\x83\x00\x1d"), CLOSE]
+    async with FakeScanner([not_ready, segs]) as srv:
+        pages = await client(srv.port).scan(out_dir=str(tmp_path), **fixture_args(name))
+    assert srv.accepted == 2 and len(pages) == 1 and srv.errors == []
+
+
 async def test_busy_exhausted(tmp_path):
     async with FakeScanner([[NG], [NG], [NG]]) as srv:
         with pytest.raises(ScannerBusyError):
@@ -357,6 +366,13 @@ async def test_probe_takes_lease_without_scanning():
 
 async def test_probe_busy_counts_as_reachable():
     async with FakeScanner([[NG]]) as srv:
+        result = await client(srv.port).probe()
+    assert result == {"available": True, "busy": True}
+
+
+async def test_probe_not_ready_lease_prefix_is_busy():
+    script = [OK, ("C>S", bp.encode_lease_request(300, "TEXT")), ("S>C", b"\x83\x00\x1d"), CLOSE]
+    async with FakeScanner([script]) as srv:
         result = await client(srv.port).probe()
     assert result == {"available": True, "busy": True}
 

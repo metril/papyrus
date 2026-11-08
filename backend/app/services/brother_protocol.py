@@ -40,6 +40,9 @@ KIND_JOB_END = 0x80
 ROW_KINDS = (KIND_RAW_ROW, KIND_PACKBITS_ROW)
 DATA_KINDS = (*ROW_KINDS, KIND_JPEG)
 ERROR_CODES = (0xC3, 0xC5)
+# Seen ahead of the lease reply just after a feeder session was dropped; a later
+# session gets a normal reply. The byte's exact meaning is unknown.
+LEASE_NOT_READY = 0x83
 
 FEEDER_LOADED = 0x80
 FEEDER_EMPTY = 0xC2
