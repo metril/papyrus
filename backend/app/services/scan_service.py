@@ -512,6 +512,31 @@ class BrotherNetBackend:
         )
 
 
+_LEFTOVER_DIR_RE = re.compile(
+    r"^(?:(?:pages|batch)_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"|native_[A-Za-z0-9_]{8})$"
+)
+
+
+def remove_scan_leftovers(scan_dir: str) -> int:
+    """Delete transient per-scan directories a previous run left behind.
+
+    Only real directories whose names match the exact patterns this module
+    creates are touched. Returns how many were removed.
+    """
+    removed = 0
+    try:
+        names = os.listdir(scan_dir)
+    except OSError:
+        return 0
+    for name in names:
+        path = os.path.join(scan_dir, name)
+        if _LEFTOVER_DIR_RE.match(name) and os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path, ignore_errors=True)
+            removed += 1
+    return removed
+
+
 async def _merge_pages_to_pdf(page_paths: list[str], pdf_file: str) -> None:
     pdf_process = await asyncio.create_subprocess_exec(
         "img2pdf", *page_paths, "-o", pdf_file,
