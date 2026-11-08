@@ -202,3 +202,73 @@ async def test_flatbed_unchanged(client, db, setup):
     r = await client.get(f"/eSCL/ScanJobs/{job_id}/NextDocument")
     assert r.status_code == 200
     assert (await client.get(f"/eSCL/ScanJobs/{job_id}/NextDocument")).status_code == 404
+
+
+async def test_page_stays_queued_until_send_completes_and_is_reserved_after_failure(
+    client, db, setup
+):
+    job_id = await _start(client, db, "brothernet:127.0.0.1", "image/jpeg")
+    await _finish(job_id)
+    job = escl._scan_jobs[job_id]
+    first = job["pages"][0]
+
+    # A send that never finishes: the response is built but its background
+    # task (the delete) never runs.
+    await escl.get_next_document(job_id)
+    assert job["pages"][0] == first and os.path.exists(first)
+    assert len(job["pages"]) == 3
+
+    r = await client.get(f"/eSCL/ScanJobs/{job_id}/NextDocument")
+    assert r.status_code == 200 and Image.open(io.BytesIO(r.content)).size[0] == 30
+    await asyncio.sleep(0.05)
+    assert len(job["pages"]) == 2 and not os.path.exists(first)
+
+
+async def test_superseded_send_does_not_delete_the_page(client, db, setup):
+    job_id = await _start(client, db, "brothernet:127.0.0.1", "image/jpeg")
+    await _finish(job_id)
+    job = escl._scan_jobs[job_id]
+    old = await escl.get_next_document(job_id)
+    await escl.get_next_document(job_id)
+    await old.background()
+    assert len(job["pages"]) == 3
+
+
+async def test_held_pages_are_fitted_to_the_requested_region(client, db, setup):
+    await _add(db, device="brothernet:127.0.0.1")
+    xml = XML.decode().format(fmt="image/jpeg", src="Feeder").replace(
+        "</scan:ScanSettings>",
+        "<pwg:ScanRegions><pwg:ScanRegion><pwg:Width>300</pwg:Width>"
+        "<pwg:Height>450</pwg:Height><pwg:XOffset>0</pwg:XOffset><pwg:YOffset>0</pwg:YOffset>"
+        "</pwg:ScanRegion></pwg:ScanRegions></scan:ScanSettings>",
+    )
+    resp = await client.post("/eSCL/ScanJobs", content=xml.encode())
+    job_id = resp.headers["Location"].rsplit("/", 1)[1]
+    await _finish(job_id)
+    sizes = []
+    for _ in range(3):
+        r = await client.get(f"/eSCL/ScanJobs/{job_id}/NextDocument")
+        sizes.append(Image.open(io.BytesIO(r.content)).size)
+    assert sizes == [(300, 450)] * 3
+
+
+async def test_unowned_output_is_removed_when_post_processing_fails(
+    client, db, setup, monkeypatch
+):
+    await _add(db, device="brothernet:127.0.0.1")
+
+    def boom(*a, **k):
+        raise RuntimeError("resize")
+
+    monkeypatch.setattr(escl, "_fit_image", boom)
+    xml = XML.decode().format(fmt="image/jpeg", src="Platen").replace(
+        "</scan:ScanSettings>",
+        "<pwg:ScanRegions><pwg:ScanRegion><pwg:Width>300</pwg:Width>"
+        "<pwg:Height>450</pwg:Height><pwg:XOffset>0</pwg:XOffset><pwg:YOffset>0</pwg:YOffset>"
+        "</pwg:ScanRegion></pwg:ScanRegions></scan:ScanSettings>",
+    )
+    resp = await client.post("/eSCL/ScanJobs", content=xml.encode())
+    job_id = resp.headers["Location"].rsplit("/", 1)[1]
+    await _finish(job_id)
+    assert escl._scan_jobs[job_id]["state"] == "Canceled"
+    assert _files(setup) == []

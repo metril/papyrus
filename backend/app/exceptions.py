@@ -31,6 +31,11 @@ class PapyrusError(Exception):
         super().__init__(detail)
 
 
+def user_message(exc: BaseException, fallback: str = "Scan failed") -> str:
+    """Text safe to store or show: a domain error's detail, else a fixed message."""
+    return exc.detail if isinstance(exc, PapyrusError) else fallback
+
+
 class NotFoundError(PapyrusError):
     status_code = 404
 

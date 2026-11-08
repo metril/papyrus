@@ -215,14 +215,14 @@ async def test_create_scan_job_scan_failure_marks_job_canceled_and_db_row_failed
     await asyncio.gather(*_captured_tasks)
 
     assert escl._scan_jobs[job_id]["state"] == "Canceled"
-    assert "scanner jammed" in escl._scan_jobs[job_id]["error"]
+    assert escl._scan_jobs[job_id]["error"] == "Scan failed"
 
     await db.rollback()
     result = await db.execute(select(ScanJob))
     jobs = result.scalars().all()
     assert len(jobs) == 1
     assert jobs[0].status == "failed"
-    assert "scanner jammed" in jobs[0].error_message
+    assert jobs[0].error_message == "Scan failed"
 
 
 # --------------------------------------------------------------------------- #
@@ -465,3 +465,19 @@ async def test_delete_cancels_in_flight_scan_task(db, client, monkeypatch, _capt
     # Let the (now-cancelled) background task actually finish unwinding so
     # nothing leaks past the end of the test.
     await asyncio.gather(*_captured_tasks, return_exceptions=True)
+
+
+async def test_document_format_ext_is_honoured_over_plain_format(db, client, monkeypatch,
+                                                                _captured_tasks, tmp_path):
+    await _enable_escl(db)
+    fake = _patch_scan(monkeypatch, str(tmp_path / "x"))
+    body = _MINIMAL_SCAN_SETTINGS_XML.replace(
+        b"<pwg:DocumentFormat>application/pdf</pwg:DocumentFormat>",
+        b"<pwg:DocumentFormat>application/pdf</pwg:DocumentFormat>"
+        b"<scan:DocumentFormatExt>image/jpeg</scan:DocumentFormatExt>",
+    )
+    resp = await client.post("/eSCL/ScanJobs", content=body)
+    job_id = resp.headers["location"].rsplit("/", 1)[-1]
+    assert escl._scan_jobs[job_id]["format"] == "jpeg"
+    await asyncio.gather(*_captured_tasks, return_exceptions=True)
+    assert fake is not None

@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 
 from app.database import async_session, get_db
-from app.exceptions import ScannerBusyError
+from app.exceptions import ScannerBusyError, user_message
 from app.models import ScanJob
 from app.routers.settings import get_setting
 from app.schemas import serialize_scan_job
@@ -349,6 +349,24 @@ async def scanner_status(db: AsyncSession = Depends(get_db)):
     return _xml_response(root)
 
 
+def _fit_image(path: str, fmt: str, req_w: int, req_h: int, res: int, job_id: str) -> None:
+    """Re-save an image at exactly req_w x req_h (white padding / cropping)."""
+    from PIL import Image as _PILImage
+
+    with _PILImage.open(path) as img:
+        actual = img.size
+        _log.info(
+            "eSCL job %s: actual=%s expected=%sx%s dpi=%s",
+            job_id, actual, req_w, req_h, img.info.get("dpi"),
+        )
+        if actual != (req_w, req_h):
+            canvas = _PILImage.new(img.mode, (req_w, req_h), (255,) * len(img.mode))
+            canvas.paste(img.copy(), (0, 0))
+        else:
+            canvas = img.copy()
+        canvas.save(path, format="JPEG" if fmt == "jpeg" else "PNG", dpi=(res, res))
+
+
 async def _run_scan(job_id: str) -> None:
     """Background task: execute scan, persist to DB, and update job state."""
     _purge_stale_jobs()
@@ -358,6 +376,13 @@ async def _run_scan(job_id: str) -> None:
     job["state"] = "Processing"
 
     db_job_id: int | None = None
+    filepath: str | None = None
+    row_owns_file = False
+
+    def drop_unowned_file() -> None:
+        if filepath and not row_owns_file and os.path.exists(filepath):
+            with contextlib.suppress(OSError):
+                os.unlink(filepath)
 
     try:
         async with async_session() as db:
@@ -444,26 +469,12 @@ async def _run_scan(job_id: str) -> None:
         # Always re-save JPEG/PNG with correct DPI and exact dimensions.
         # ICA pre-allocates an exact buffer (width×height×3 bytes) and will
         # corrupt the saved file if our dimensions don't match precisely.
-        if not held and req_w and req_h and job["format"] in ("jpeg", "png"):
-            from PIL import Image as _PILImage
-
-            def _trim() -> None:
-                with _PILImage.open(filepath) as img:
-                    actual = img.size
-                    _log.info(
-                        "eSCL job %s: actual=%s expected=%sx%s dpi=%s",
-                        job_id, actual, req_w, req_h, img.info.get("dpi"),
-                    )
-                    if actual != (req_w, req_h):
-                        canvas = _PILImage.new(img.mode, (req_w, req_h),
-                                               (255,) * len(img.mode))
-                        canvas.paste(img.copy(), (0, 0))
-                    else:
-                        canvas = img.copy()
-                    fmt_str = "JPEG" if job["format"] == "jpeg" else "PNG"
-                    canvas.save(filepath, format=fmt_str, dpi=(res, res))
-
-            await asyncio.get_event_loop().run_in_executor(None, _trim)
+        if req_w and req_h and job["format"] in ("jpeg", "png"):
+            targets = job["pages"] if held else [filepath]
+            for target in targets:
+                await asyncio.get_event_loop().run_in_executor(
+                    None, _fit_image, target, job["format"], req_w, req_h, res, job_id
+                )
 
         file_size = os.path.getsize(filepath)
 
@@ -481,6 +492,7 @@ async def _run_scan(job_id: str) -> None:
                 result.status = "completed"
                 result.completed_at = datetime.now(timezone.utc)
                 await db.commit()
+                row_owns_file = True
                 await db.refresh(result)
                 scan_payload = serialize_scan_job(result)
 
@@ -501,6 +513,7 @@ async def _run_scan(job_id: str) -> None:
 
     except asyncio.CancelledError:
         _discard_job_files(job)
+        drop_unowned_file()
         if db_job_id is not None:
             try:
                 async with async_session() as db:
@@ -515,18 +528,19 @@ async def _run_scan(job_id: str) -> None:
     except Exception as e:
         _log.error("eSCL scan %s failed: %s", job_id, e, exc_info=True)
         _discard_job_files(job)
+        drop_unowned_file()
         if db_job_id is not None:
             try:
                 async with async_session() as db:
                     result = await db.get(ScanJob, db_job_id)
                     if result:
                         result.status = "failed"
-                        result.error_message = str(e)
+                        result.error_message = user_message(e)
                         await db.commit()
             except Exception:
                 pass
         job["state"] = "Canceled"
-        job["error"] = str(e)
+        job["error"] = user_message(e)
         job["terminal_at"] = time.monotonic()
 
 
@@ -559,7 +573,9 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
         if elem is not None and elem.text:
             color_mode = ESCL_COLOR_MAP.get(elem.text, "Color")
 
-        elem = _find_local(root, "DocumentFormatExt") or _find_local(root, "DocumentFormat")
+        elem = _find_local(root, "DocumentFormatExt")
+        if elem is None:
+            elem = _find_local(root, "DocumentFormat")
         if elem is not None and elem.text:
             mime = elem.text.lower()
             if "jpeg" in mime:
@@ -622,6 +638,7 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
         "pages": [],
         "pages_total": 0,
         "page_dir": None,
+        "in_flight": None,
         "error": None,
         "terminal_at": None,
     }
@@ -656,10 +673,11 @@ async def get_next_document(job_id: str):
     if job.get("held"):
         if not job["pages"]:
             raise HTTPException(status_code=404, detail="No more pages")
-        page = job["pages"].pop(0)
+        page = job["pages"][0]
+        token = object()
+        job["in_flight"] = token
         job["terminal_at"] = time.monotonic()
-        page_dir = None if job["pages"] else job["page_dir"]
-        return _file_response(job, page, BackgroundTask(_remove_served_page, page, page_dir))
+        return _file_response(job, page, BackgroundTask(_finish_page, job, token, page))
 
     if job["served"]:
         # No more pages — signal end of job to client
@@ -701,11 +719,17 @@ async def cancel_scan_job(job_id: str):
     return Response(status_code=200)
 
 
-def _remove_served_page(path: str, page_dir: str | None) -> None:
+def _finish_page(job: dict, token: object, path: str) -> None:
+    """Runs only after the page was fully sent; only the latest send counts."""
+    if job.get("in_flight") is not token or not job["pages"] or job["pages"][0] != path:
+        return
+    job["pages"].pop(0)
+    job["in_flight"] = None
+    job["terminal_at"] = time.monotonic()
     with contextlib.suppress(OSError):
         os.unlink(path)
-    if page_dir:
-        shutil.rmtree(page_dir, ignore_errors=True)
+    if not job["pages"] and job.get("page_dir"):
+        shutil.rmtree(job["page_dir"], ignore_errors=True)
 
 
 def _file_response(

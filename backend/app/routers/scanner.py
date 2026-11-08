@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -12,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user, require_permission
 from app.auth.ws import authenticate_websocket, has_ws_permission
 from app.database import async_session, get_db
-from app.exceptions import PapyrusError
+from app.exceptions import PapyrusError, user_message
 from app.models import CloudProvider, ScanJob, ScanProfile, SMBShare, User
 from app.schemas import (
     BulkDeleteResponse,
@@ -46,6 +47,7 @@ from app.services.thumbnail_service import (
 from app.services.webhook_service import dispatch_webhook
 from app.services.ws_manager import ws_manager
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -179,7 +181,8 @@ async def initiate_scan(
         raise
     except Exception as e:
         job.status = "failed"
-        job.error_message = f"{type(e).__name__}: {e}"
+        logger.exception("Scan failed")
+        job.error_message = user_message(e)
         try:
             await db.commit()
         except Exception:
@@ -281,7 +284,8 @@ async def initiate_batch_scan(
         raise
     except Exception as e:
         job.status = "failed"
-        job.error_message = f"{type(e).__name__}: {e}"
+        logger.exception("Scan failed")
+        job.error_message = user_message(e)
         try:
             await db.commit()
         except Exception:

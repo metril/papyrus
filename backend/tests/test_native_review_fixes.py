@@ -305,3 +305,45 @@ async def test_escl_native_feeder_pdf_job_sets_page_count(db, monkeypatch, tmp_p
     monkeypatch.setattr(escl.scan_service, "scan", fake_scan)
     job, row = await _run_escl_job(db, "pdf")
     assert job["state"] == "Completed" and row.page_count == 5
+
+
+async def test_unexpected_scan_error_is_stored_as_fixed_text(db, admin_client, monkeypatch):
+    await _add(db, device="airscan:e:x")
+
+    async def explode(**kw):
+        raise RuntimeError("secret /dev/path")
+
+    monkeypatch.setattr(ss.scan_service, "scan", explode)
+    with pytest.raises(RuntimeError):
+        await admin_client.post("/api/scanner/scan", json={})
+    row = (await db.execute(select(ScanJob))).scalars().first()
+    await db.refresh(row)
+    assert row.error_message == "Scan failed"
+
+
+async def test_copy_print_failure_keeps_the_scan_in_history(db, admin_client, monkeypatch):
+    await _add(db)
+
+    async def fake_scan(**kw):
+        return "sid-1", "/tmp/scan.tiff"
+
+    class Cups:
+        def __init__(self, **kw):
+            pass
+
+        async def create_held_job(self, **kw):
+            raise RuntimeError("cups down")
+
+    async def queue(_db):
+        return "q"
+
+    from app.routers import copy as copy_router
+    from app.services import copy_service as cs
+
+    monkeypatch.setattr(cs.scan_service, "scan", fake_scan)
+    monkeypatch.setattr(copy_router, "CupsService", Cups)
+    monkeypatch.setattr(copy_router, "get_default_release_queue_name", queue)
+    resp = await admin_client.post("/api/copy", json={})
+    assert resp.status_code == 502 and "scan history" in resp.json()["detail"]
+    row = (await db.execute(select(ScanJob))).scalars().first()
+    assert row is not None and row.scan_id == "sid-1" and row.status == "completed"
