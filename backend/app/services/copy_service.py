@@ -2,7 +2,7 @@ import logging
 
 from app.exceptions import PapyrusError
 from app.services.cups_service import CupsService
-from app.services.scan_service import ScanError, scan_service
+from app.services.scan_service import ScanError, feeder_takes_every_sheet, scan_service
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +37,22 @@ class CopyService:
 
         Returns dict with scan_id and cups_job_id.
         """
+        # These feeders take every sheet and are PDF-only.
+        native_feeder = feeder_takes_every_sheet(device) and source.lower() == "adf"
+        fmt = "pdf" if native_feeder else "tiff"
+        page_count = 1
+
+        def set_page_count(count: int) -> None:
+            nonlocal page_count
+            page_count = count
+
         # Step 1: Scan
         try:
             scan_id, filepath = await scan_service.scan(
                 resolution=resolution,
                 mode=mode,
-                fmt="tiff",  # Use TIFF for best print quality
+                fmt=fmt,  # TIFF for best print quality
+                **({"page_count_callback": set_page_count} if native_feeder else {}),
                 source=source,
                 progress_callback=progress_callback,
                 device=device,
@@ -70,6 +80,8 @@ class CopyService:
             "scan_id": scan_id,
             "cups_job_id": cups_job_id,
             "filepath": filepath,
+            "format": fmt,
+            "page_count": page_count,
         }
 
 

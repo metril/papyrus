@@ -3,6 +3,7 @@ on a port-0 localhost socket. ``assert_safe_host`` rejects loopback, so tests
 that reach the fake patch the guard out; the guard itself is tested unpatched."""
 import asyncio
 import os
+import re
 import sys
 
 import pytest
@@ -126,50 +127,82 @@ async def test_scan_converts_to_pdf(tmp_path, native):
     assert os.listdir(tmp_path) == [os.path.basename(path)]
 
 
-async def test_adf_single_page_request_stops_after_first_page(tmp_path, native):
-    data = jpeg_bytes(64, 100, 100)
+def _feeder_script(code, pages):
+    spec = bp.get_mode(code)
 
-    def jpg(n):
-        return jpeg_frames(data, page=n)
+    def body(n):
+        if spec.jpeg:
+            return jpeg_frames(jpeg_bytes(64, 40, 40), page=n)
+        return b"".join(
+            frame(bp.KIND_RAW_ROW, n, bytes(spec.row_bytes(64))) for _ in range(40)
+        )
 
-    script = [
+    stream = b"".join(body(n) + page_end(n) for n in range(1, pages + 1)) + b"\x80"
+    return [
         OK,
-        ("C>S", bp.encode_lease_request(300, "CGRAY")),
+        ("C>S", bp.encode_lease_request(300, code)),
         ("S>C", lease_reply(adf=1, w_px=64, h_mm=0, h_px=0)),
         ("C>S", bp.CMD_FEEDER_QUERY),
         ("S>C", bytes([bp.FEEDER_LOADED])),
-        ("C>S", bp.encode_start(300, 300, "CGRAY", (0, 0, 64, 4175))),
-        ("S>C", jpg(1) + page_end(1) + jpg(2) + page_end(2) + b"\x80"),
+        ("C>S", bp.encode_start(300, 300, code, (0, 0, 64, 4175))),
+        ("S>C", stream),
     ]
-    async with FakeScanner([script]) as srv:
+
+
+@pytest.fixture
+def real_img2pdf(monkeypatch):
+    pytest.importorskip("img2pdf")
+    real_exec = asyncio.create_subprocess_exec
+
+    async def exec_(*args, **kw):
+        if args[0] == "img2pdf":
+            args = (sys.executable, "-m", "img2pdf", *args[1:])
+        return await real_exec(*args, **kw)
+
+    monkeypatch.setattr(ss.asyncio, "create_subprocess_exec", exec_)
+
+
+async def test_adf_pdf_scan_merges_every_sheet_and_reports_count(
+    tmp_path, native, real_img2pdf
+):
+    counts = []
+    async with FakeScanner([_feeder_script("CGRAY", 3)]) as srv:
         native(srv)
         scan_id, path = await ScanService().scan(
-            resolution=300, mode="Color", fmt="tiff", source="ADF", device=DEVICE,
-            scan_dir=str(tmp_path),
+            resolution=300, mode="Color", fmt="pdf", source="ADF", device=DEVICE,
+            scan_dir=str(tmp_path), page_count_callback=counts.append, **FLATBED,
         )
-    assert srv.errors == []
-    assert os.listdir(tmp_path) == [f"{scan_id}.tiff"]
-    with Image.open(path) as img:
-        assert img.size[0] == 64
+    assert srv.errors == [] and counts == [3]
+    assert len(re.findall(rb"/Type\s*/Page(?![s\w])", open(path, "rb").read())) == 3
+    assert os.listdir(tmp_path) == [f"{scan_id}.pdf"]
 
 
-async def test_adf_ignores_scan_region(tmp_path, native):
-    script = [
-        OK,
-        ("C>S", bp.encode_lease_request(300, "CGRAY")),
-        ("S>C", lease_reply(adf=1, w_px=64, h_mm=0, h_px=0)),
-        ("C>S", bp.CMD_FEEDER_QUERY),
-        ("S>C", bytes([bp.FEEDER_LOADED])),
-        ("C>S", bp.encode_start(300, 300, "CGRAY", (0, 0, 64, 4175))),
-        ("S>C", jpeg_frames(jpeg_bytes(64, 50, 50)) + page_end(1) + b"\x80"),
-    ]
-    async with FakeScanner([script]) as srv:
+@pytest.mark.parametrize("fmt", ["jpeg", "png", "tiff"])
+async def test_adf_non_pdf_refused_before_connecting(fmt, tmp_path, native):
+    async with FakeScanner([]) as srv:
         native(srv)
-        await ScanService().scan(
-            resolution=300, mode="Color", fmt="tiff", source="ADF", device=DEVICE,
-            scan_dir=str(tmp_path), **FLATBED,
+        with pytest.raises(ScanRequestError) as ei:
+            await ScanService().scan(
+                resolution=300, mode="Color", fmt=fmt, source="ADF", device=DEVICE,
+                scan_dir=str(tmp_path),
+            )
+    assert srv.accepted == 0 and "PDF" in ei.value.detail
+    assert os.listdir(tmp_path) == []
+
+
+async def test_backend_acquire_page_refuses_feeder(tmp_path):
+    with pytest.raises(ScanRequestError):
+        await BrotherNetBackend().acquire_page(
+            device=DEVICE, resolution=300, mode="Color", source="ADF",
+            tiff_file=str(tmp_path / "x.tiff"), scan_id="s",
         )
-    assert srv.errors == []
+
+
+def test_feeder_formats_option():
+    native_opts = asyncio.run(ScanService().get_options("brothernet:10.0.0.5"))
+    sane_opts = asyncio.run(ScanService().get_options("airscan:e:x"))
+    assert native_opts["feeder_formats"] == ["pdf"]
+    assert sane_opts["feeder_formats"] == sane_opts["formats"]
 
 
 async def test_client_errors_reach_caller_unchanged(tmp_path, native):

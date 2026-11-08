@@ -17,6 +17,7 @@ and test_convert_service.py.
 """
 import asyncio
 import logging
+import os
 import uuid as uuid_module
 from types import SimpleNamespace
 
@@ -451,7 +452,7 @@ async def test_scan_batch_passes_output_pattern_in_equals_form(tmp_path, monkeyp
     assert batch[0].startswith("--batch=") and batch[0].endswith("page_%04d.tiff")
 
 
-async def test_scan_maps_adf_source_for_brscan4(tmp_path, monkeypatch):
+async def test_scan_adf_pdf_for_brscan4_uses_batch_with_driver_names(tmp_path, monkeypatch):
     commands = []
 
     async def fake_exec(*args, **kwargs):
@@ -460,12 +461,71 @@ async def test_scan_maps_adf_source_for_brscan4(tmp_path, monkeypatch):
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 
-    with pytest.raises(ScanError, match="no output"):
+    with pytest.raises(ScanError, match="No pages"):
+        await scan_service.scan(
+            fmt="pdf", source="ADF", scan_dir=str(tmp_path), device="brother4:net1;dev0"
+        )
+
+    assert any(a.startswith("--batch=") for a in commands[0])
+    assert _option(commands[0], "--source") == "Automatic Document Feeder(left aligned)"
+
+
+async def test_scan_adf_non_pdf_for_brscan4_refused_before_scanimage(tmp_path, monkeypatch):
+    from app.exceptions import ScanRequestError
+
+    commands = []
+
+    async def fake_exec(*args, **kwargs):
+        commands.append(args)
+        return _FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+    with pytest.raises(ScanRequestError, match="PDF"):
         await scan_service.scan(
             fmt="tiff", source="ADF", scan_dir=str(tmp_path), device="brother4:net1;dev0"
         )
+    assert commands == []
 
-    assert _option(commands[0], "--source") == "Automatic Document Feeder(left aligned)"
+
+async def test_scan_adf_for_brscan4_merges_every_page_and_counts(tmp_path, monkeypatch):
+    from PIL import Image
+
+    counts = []
+    merged = []
+
+    async def fake_exec(*args, **kwargs):
+        if args[0] == "img2pdf":
+            merged.append(args[1:-2])
+            open(args[-1], "wb").write(b"%PDF")
+            return _FakeProcess()
+        pattern = next(a for a in args if a.startswith("--batch=")).split("=", 1)[1]
+        for n in (1, 2, 3):
+            Image.new("L", (4, 4)).save(pattern % n)
+        return _FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    scan_id, path = await scan_service.scan(
+        fmt="pdf", source="ADF", scan_dir=str(tmp_path), device="brother4:net1;dev0",
+        page_count_callback=counts.append,
+    )
+    assert counts == [3] and len(merged[0]) == 3
+    assert os.listdir(tmp_path) == [f"{scan_id}.pdf"]
+
+
+async def test_sane_non_brother_adf_scan_unchanged(tmp_path, monkeypatch):
+    commands = []
+
+    async def fake_exec(*args, **kwargs):
+        commands.append(args)
+        return _FakeProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    with pytest.raises(ScanError, match="no output"):
+        await scan_service.scan(
+            fmt="tiff", source="ADF", scan_dir=str(tmp_path), device="airscan:e:x"
+        )
+    assert not any(a.startswith("--batch") for a in commands[0])
 
 
 async def test_scan_batch_logs_scanimage_error_when_no_pages(tmp_path, monkeypatch, caplog):

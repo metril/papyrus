@@ -373,7 +373,14 @@ async def _run_scan(job_id: str) -> None:
             req_w, req_h, width_mm or 0, height_mm or 0,
         )
 
+        page_count = 1
+
+        def set_page_count(count: int) -> None:
+            nonlocal page_count
+            page_count = count
+
         scan_id, filepath = await scan_service.scan(
+            page_count_callback=set_page_count,
             resolution=res,
             mode=job["color_mode"],
             fmt=job["format"],
@@ -420,6 +427,7 @@ async def _run_scan(job_id: str) -> None:
                 result.scan_id = scan_id
                 result.filepath = filepath
                 result.file_size = file_size
+                result.page_count = page_count
                 result.status = "completed"
                 result.completed_at = datetime.now(timezone.utc)
                 await db.commit()

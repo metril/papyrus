@@ -176,6 +176,9 @@ class SaneBackend:
             ),
             "modes": ["Color", "Gray", "Lineart"],
             "formats": ["png", "jpeg", "tiff", "pdf"],
+            "feeder_formats": (
+                ["pdf"] if device.startswith("brother4:") else ["png", "jpeg", "tiff", "pdf"]
+            ),
             "sources": ["Flatbed", "ADF"],
         }
 
@@ -318,12 +321,20 @@ class SaneBackend:
 
 
 BROTHERNET_PREFIX = "brothernet:"
+FEEDER_PDF_ONLY_DETAIL = (
+    "Feeder scans on this scanner take every sheet at once, so they can only be saved as PDF. Choose PDF or scan from the glass."
+)
 _NATIVE_MODES = {"Color": "CGRAY", "Gray": "GRAY64", "Lineart": "TEXT"}
 _HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 
 
 def is_native_device(device: str) -> bool:
     return device.startswith(BROTHERNET_PREFIX)
+
+
+def feeder_takes_every_sheet(device: str) -> bool:
+    """Devices whose single feeder request always pulls the whole stack."""
+    return is_native_device(device) or device.startswith("brother4:")
 
 
 def parse_native_device(device: str) -> str:
@@ -376,6 +387,7 @@ class BrotherNetBackend:
             "resolutions": list(bp.RESOLUTIONS),
             "modes": ["Color", "Gray", "Lineart"],
             "formats": ["png", "jpeg", "tiff", "pdf"],
+            "feeder_formats": ["pdf"],
             "sources": ["Flatbed", "ADF"],
         }
 
@@ -395,9 +407,10 @@ class BrotherNetBackend:
         height_mm: float | None = None,
     ) -> None:
         client = self._client(device)
-        feeder = source.lower() == "adf"
+        if source.lower() == "adf":
+            raise ScanRequestError(FEEDER_PDF_ONLY_DETAIL)
         area = None
-        if not feeder and width_mm and height_mm:
+        if width_mm and height_mm:
             area = (left_mm or 0.0, top_mm or 0.0, width_mm, height_mm)
         work = tempfile.mkdtemp(prefix="native_", dir=os.path.dirname(tiff_file) or None)
         try:
@@ -405,11 +418,10 @@ class BrotherNetBackend:
                 client.scan(
                     mode=self._protocol_mode(mode),
                     dpi=resolution,
-                    source="adf" if feeder else "flatbed",
+                    source="flatbed",
                     out_dir=work,
                     area_mm=area,
                     progress=self._progress(scan_id, progress_callback),
-                    max_pages=1,
                 ),
                 timeout=_SCAN_TIMEOUT_SECONDS,
             )
@@ -443,6 +455,21 @@ class BrotherNetBackend:
             )
         except asyncio.TimeoutError:
             raise ScanError("Batch scan timed out") from None
+
+
+async def _merge_pages_to_pdf(page_paths: list[str], pdf_file: str) -> None:
+    pdf_process = await asyncio.create_subprocess_exec(
+        "img2pdf", *page_paths, "-o", pdf_file,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    await _await_with_timeout(
+        pdf_process.wait(), pdf_process,
+        _PDF_MERGE_TIMEOUT_SECONDS, "PDF merge timed out",
+    )
+
+    if pdf_process.returncode != 0:
+        raise ScanError("Failed to merge pages into PDF")
 
 
 _sane_backend = SaneBackend()
@@ -557,8 +584,9 @@ class ScanService:
         top_mm: float | None = None,
         width_mm: float | None = None,
         height_mm: float | None = None,
+        page_count_callback: Callable[[int], None] | None = None,
     ) -> tuple[str, str]:
-        """Perform a single-page scan.
+        """Perform a scan.
 
         Args:
             resolution: DPI (75-600)
@@ -577,7 +605,15 @@ class ScanService:
 
         Returns:
             Tuple of (scan_id, output_filepath)
+
+        A native Brother or brother4 feeder request delivers every sheet, so it is
+        PDF-only and `page_count_callback` (if given) receives the sheet count.
         """
+        native_feeder = feeder_takes_every_sheet(device or self._scanner_device) and (
+            source.lower() == "adf"
+        )
+        if native_feeder and fmt != "pdf":
+            raise ScanRequestError(FEEDER_PDF_ONLY_DETAIL)
         if self._lock.locked():
             raise ScanError("Scanner is busy. Try again later.")
 
@@ -588,6 +624,19 @@ class ScanService:
 
             # Scan to TIFF as intermediate format, then convert to requested output
             tiff_file = os.path.join(_scan_dir, f"{scan_id}.tiff")
+
+            if native_feeder:
+                pdf_file, count = await self._scan_feeder_pdf(
+                    device=_device,
+                    resolution=resolution,
+                    mode=mode,
+                    scan_dir=_scan_dir,
+                    scan_id=scan_id,
+                    progress_callback=progress_callback,
+                )
+                if page_count_callback is not None:
+                    page_count_callback(count)
+                return scan_id, pdf_file
 
             keep_tiff = False
             try:
@@ -632,6 +681,61 @@ class ScanService:
                 if not keep_tiff and os.path.exists(tiff_file):
                     os.unlink(tiff_file)
 
+    async def _scan_feeder_pdf(
+        self,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        scan_dir: str,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None,
+    ) -> tuple[str, int]:
+        """Scan every sheet in the feeder into one PDF. Caller holds the lock.
+
+        Returns (pdf_path, page_count).
+        """
+        page_dir = os.path.join(scan_dir, f"batch_{scan_id}")
+        os.makedirs(page_dir, exist_ok=True)
+
+        success = False
+        try:
+            await self._guard(device)
+            await self._backend_for(device).acquire_batch(
+                device=device,
+                resolution=resolution,
+                mode=mode,
+                page_dir=page_dir,
+                scan_id=scan_id,
+                progress_callback=progress_callback,
+            )
+
+            # scanimage returns non-zero when ADF runs out of paper, which is expected
+            # Check if we got any pages
+            pages = sorted(f for f in os.listdir(page_dir) if f.endswith(".tiff"))
+
+            if not pages:
+                raise ScanError("No pages scanned from ADF")
+
+            pdf_file = os.path.join(scan_dir, f"{scan_id}.pdf")
+            page_paths = [os.path.join(page_dir, p) for p in pages]
+            await _merge_pages_to_pdf(page_paths, pdf_file)
+
+            # Clean up individual page files
+            for p in page_paths:
+                os.unlink(p)
+            os.rmdir(page_dir)
+
+            success = True
+            return pdf_file, len(pages)
+        finally:
+            # F22: any non-success exit leaks page_dir and every page
+            # TIFF in it (up to hundreds of MB for a large ADF batch)
+            # unless cleaned up here -- nothing references page_dir from
+            # the DB, so retention can never reclaim it either.
+            if not success:
+                shutil.rmtree(page_dir, ignore_errors=True)
+
     async def scan_batch(
         self,
         resolution: int = 300,
@@ -650,64 +754,15 @@ class ScanService:
 
         async with self._lock:
             scan_id = str(uuid.uuid4())
-            _scan_dir = scan_dir or self._scan_dir
-            page_dir = os.path.join(_scan_dir, f"batch_{scan_id}")
-            os.makedirs(page_dir, exist_ok=True)
-
-            _device = device or self._scanner_device
-
-            success = False
-            try:
-                await self._guard(_device)
-                await self._backend_for(_device).acquire_batch(
-                    device=_device,
-                    resolution=resolution,
-                    mode=mode,
-                    page_dir=page_dir,
-                    scan_id=scan_id,
-                    progress_callback=progress_callback,
-                )
-
-                # scanimage returns non-zero when ADF runs out of paper, which is expected
-                # Check if we got any pages
-                pages = sorted(
-                    f for f in os.listdir(page_dir) if f.endswith(".tiff")
-                )
-
-                if not pages:
-                    raise ScanError("No pages scanned from ADF")
-
-                # Merge all pages into a single PDF
-                pdf_file = os.path.join(_scan_dir, f"{scan_id}.pdf")
-                page_paths = [os.path.join(page_dir, p) for p in pages]
-
-                pdf_process = await asyncio.create_subprocess_exec(
-                    "img2pdf", *page_paths, "-o", pdf_file,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await _await_with_timeout(
-                    pdf_process.wait(), pdf_process,
-                    _PDF_MERGE_TIMEOUT_SECONDS, "PDF merge timed out",
-                )
-
-                if pdf_process.returncode != 0:
-                    raise ScanError("Failed to merge pages into PDF")
-
-                # Clean up individual page files
-                for p in page_paths:
-                    os.unlink(p)
-                os.rmdir(page_dir)
-
-                success = True
-                return scan_id, pdf_file, len(pages)
-            finally:
-                # F22: any non-success exit leaks page_dir and every page
-                # TIFF in it (up to hundreds of MB for a large ADF batch)
-                # unless cleaned up here -- nothing references page_dir from
-                # the DB, so retention can never reclaim it either.
-                if not success:
-                    shutil.rmtree(page_dir, ignore_errors=True)
+            pdf_file, count = await self._scan_feeder_pdf(
+                device=device or self._scanner_device,
+                resolution=resolution,
+                mode=mode,
+                scan_dir=scan_dir or self._scan_dir,
+                scan_id=scan_id,
+                progress_callback=progress_callback,
+            )
+            return scan_id, pdf_file, count
 
 
 scan_service = ScanService()

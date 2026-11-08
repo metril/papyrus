@@ -124,8 +124,12 @@ async def initiate_scan(
             "data": {"scan_id": job.scan_id, "progress": percent},
         })
 
+    def set_page_count(count: int) -> None:
+        job.page_count = count
+
     try:
         _, filepath = await scan_service.scan(
+            page_count_callback=set_page_count,
             resolution=request.resolution,
             mode=request.mode,
             fmt=request.format,

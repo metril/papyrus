@@ -229,3 +229,87 @@ async def test_escl_cancel_marks_db_row_failed(db, monkeypatch):
     row = (await db.execute(select(ScanJob))).scalars().first()
     await db.refresh(row)
     assert row.status == "failed" and row.error_message == "Scan cancelled"
+
+
+# --- native feeder: whole stack in one PDF (DB tests below need the harness) ---
+async def test_copy_native_feeder_prints_one_pdf(monkeypatch):
+    from app.services import copy_service as cs
+    from tests.test_copy_service import _FakeCups
+
+    calls = []
+
+    class Fake:
+        async def scan(self, **kw):
+            calls.append(kw)
+            kw["page_count_callback"](4)
+            return "sid", "/tmp/x.pdf"
+
+    monkeypatch.setattr(cs, "scan_service", Fake())
+    cups = _FakeCups()
+    result = await cs.CopyService().copy(cups=cups, device=DEVICE, source="ADF")
+    assert calls[0]["fmt"] == "pdf"
+    assert result["format"] == "pdf" and result["page_count"] == 4
+    assert cups.created[0][0] == "/tmp/x.pdf"
+
+
+async def test_scan_endpoint_records_page_count_for_native_feeder(db, admin_client, monkeypatch):
+    await _add(db)
+
+    async def fake_scan(**kw):
+        kw["page_count_callback"](3)
+        return "sid", str(__file__)
+
+    monkeypatch.setattr(ss.scan_service, "scan", fake_scan)
+    resp = await admin_client.post("/api/scanner/scan", json={"source": "ADF", "format": "pdf"})
+    assert resp.status_code == 201 and resp.json()["page_count"] == 3
+
+
+async def test_scan_endpoint_native_feeder_jpeg_is_422_without_connecting(
+    db, admin_client, native
+):
+    await _add(db)
+    async with FakeScanner([]) as srv:
+        native(srv)
+        resp = await admin_client.post("/api/scanner/scan", json={"source": "ADF", "format": "jpeg"})
+    assert resp.status_code == 422 and "PDF" in resp.json()["detail"] and srv.accepted == 0
+
+
+async def _run_escl_job(db, fmt, source="ADF"):
+    from app.models import AppConfig
+
+    db.add(AppConfig(key="escl_enabled", value="true"))
+    await db.commit()
+    escl._scan_jobs["n1"] = {
+        "state": "Pending", "resolution": 300, "color_mode": "Color", "format": fmt,
+        "source": source, "scan_region": {}, "filepath": None, "served": False,
+        "error": None, "terminal_at": None,
+    }
+    await escl._run_scan("n1")
+    job = escl._scan_jobs.pop("n1")
+    row = (await db.execute(select(ScanJob))).scalars().first()
+    await db.refresh(row)
+    return job, row
+
+
+async def test_escl_native_feeder_jpeg_job_fails_without_feeding(db, native):
+    await _add(db)
+    async with FakeScanner([]) as srv:
+        native(srv)
+        job, row = await _run_escl_job(db, "jpeg")
+    assert srv.accepted == 0
+    assert job["state"] == "Canceled" and "PDF" in job["error"]
+    assert row.status == "failed"
+
+
+async def test_escl_native_feeder_pdf_job_sets_page_count(db, monkeypatch, tmp_path):
+    await _add(db)
+
+    async def fake_scan(**kw):
+        kw["page_count_callback"](5)
+        p = tmp_path / "s.pdf"
+        p.write_bytes(b"%PDF")
+        return "sid", str(p)
+
+    monkeypatch.setattr(escl.scan_service, "scan", fake_scan)
+    job, row = await _run_escl_job(db, "pdf")
+    assert job["state"] == "Completed" and row.page_count == 5

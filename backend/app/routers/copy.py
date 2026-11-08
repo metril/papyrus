@@ -62,7 +62,8 @@ async def create_copy(
         status="completed",
         resolution=request.resolution,
         mode=request.mode,
-        format="tiff",
+        format=result["format"],
+        page_count=result["page_count"],
         source=request.source,
         filepath=result["filepath"],
         completed_at=datetime.now(timezone.utc),
@@ -73,7 +74,7 @@ async def create_copy(
     # aliasing the scan's path (F29) — deleting either row's file must not
     # take the other row's file with it.
     upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
-    print_filename = f"copy_{result['scan_id']}.tiff"
+    print_filename = f"copy_{result['scan_id']}.{result['format']}"
     print_filepath = get_upload_path(print_filename, upload_dir=upload_dir)
     os.makedirs(os.path.dirname(print_filepath), exist_ok=True)
     await asyncio.to_thread(shutil.copy2, result["filepath"], print_filepath)
@@ -85,7 +86,7 @@ async def create_copy(
         filename=print_filename,
         filepath=print_filepath,
         file_size=0,
-        mime_type="image/tiff",
+        mime_type="application/pdf" if result["format"] == "pdf" else "image/tiff",
         status="printing",
         copies=request.copies,
         duplex=request.duplex,
