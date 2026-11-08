@@ -202,3 +202,29 @@ describe('HistoryRow PIN lock placeholder (F27)', () => {
     expect(container.querySelector('svg.lucide-lock')).toBeNull();
   });
 });
+
+describe('HistoryRow scan other side', () => {
+  const adf = (over: Partial<ScanJob>): HistoryItem => ({
+    ...scanItem,
+    raw: { ...rawScan, source: 'ADF', ...over },
+  });
+
+  it('is offered for a completed feeder PDF scan', () => {
+    render(<HistoryRowComponent {...makeProps({ item: adf({}) })} />);
+    expect(screen.getByRole('button', { name: /scan other side/i })).toBeInTheDocument();
+  });
+
+  it.each([
+    ['flatbed', { source: 'Flatbed' as const }],
+    ['image', { format: 'png' as const }],
+    ['failed', { status: 'failed' as const }],
+  ])('is hidden for a %s scan', (_name, over) => {
+    render(<HistoryRowComponent {...makeProps({ item: adf(over) })} />);
+    expect(screen.queryByRole('button', { name: /scan other side/i })).toBeNull();
+  });
+
+  it('is hidden for print jobs', () => {
+    render(<HistoryRowComponent {...makeProps({ item: printItem })} />);
+    expect(screen.queryByRole('button', { name: /scan other side/i })).toBeNull();
+  });
+});

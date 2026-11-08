@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Button from '../common/Button';
+import ScanBacksDialog from './ScanBacksDialog';
+import { canScanBacks } from '../../lib/scanBacks';
 import ProgressBar from '../common/ProgressBar';
 import {
   initiateScan,
@@ -23,6 +25,7 @@ export default function ScanForm() {
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ScanJob | null>(null);
+  const [backsOpen, setBacksOpen] = useState(false);
   // F26: the id the progress socket subscribes to. Set *before* the scan
   // request is sent (see handleScan) so the socket is already open by the
   // time the backend starts broadcasting progress, instead of deriving the
@@ -277,6 +280,16 @@ export default function ScanForm() {
           >
             Download scan
           </a>
+          {canScanBacks(result) && (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="ml-3"
+              onClick={() => setBacksOpen(true)}
+            >
+              Scan other side
+            </Button>
+          )}
         </div>
       )}
 
@@ -293,6 +306,9 @@ export default function ScanForm() {
           {scanning ? 'Scanning...' : 'Batch scan (ADF)'}
         </Button>
       </div>
+      {backsOpen && result && (
+        <ScanBacksDialog scanId={result.scan_id} onClose={() => setBacksOpen(false)} />
+      )}
     </div>
   );
 }

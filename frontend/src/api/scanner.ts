@@ -27,6 +27,18 @@ export async function initiateBatchScan(request: ScanRequest): Promise<ScanJob> 
   return data;
 }
 
+export interface ScanBacksOptions {
+  rotate_backs: boolean;
+  skip_blank_backs: boolean;
+}
+
+/** Scans the other side of a feeder PDF and merges it in. The request stays
+ * open for the whole feeder scan, so no client timeout is applied. */
+export async function scanBacks(scanId: string, options: ScanBacksOptions): Promise<ScanJob> {
+  const { data } = await api.post(`/scanner/scans/${scanId}/backs`, options);
+  return data;
+}
+
 export interface ListScansParams {
   limit?: number;
   offset?: number;
