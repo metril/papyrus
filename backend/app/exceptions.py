@@ -64,6 +64,18 @@ class ScanRequestError(PapyrusError):
     status_code = 422
 
 
+class BacksNotEligibleError(PapyrusError):
+    """The scan can't take a second (back-side) pass."""
+
+    status_code = 400
+
+
+class BacksMismatchError(PapyrusError):
+    """The back-side scan couldn't be combined with the fronts; both were kept."""
+
+    status_code = 409
+
+
 class UploadTooLargeError(PapyrusError):
     """Raised when an upload exceeds its configured size cap."""
 
