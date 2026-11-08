@@ -134,11 +134,21 @@ def _purge_stale_jobs() -> None:
         _scan_jobs.pop(job_id, None)
 
 
-def _snap_resolution(value: int) -> int:
+async def _device_resolutions(db) -> tuple[int, ...] | None:
+    """Resolutions the default device supports, or None if undeterminable."""
+    try:
+        device = await get_default_scanner_device(db)
+        opts = await scan_service.get_options(device)
+        return tuple(sorted(opts["resolutions"]))
+    except Exception:
+        return None
+
+
+def _snap_resolution(value: int, allowed: tuple[int, ...] = ESCL_RESOLUTIONS) -> int:
     """Snap a client-requested XResolution to the nearest advertised
     discrete resolution (F4) — an out-of-range value (e.g. a client sending
     an arbitrary DPI) must never reach `scanimage --resolution` unclamped."""
-    return min(ESCL_RESOLUTIONS, key=lambda r: abs(r - value))
+    return min(allowed, key=lambda r: abs(r - value))
 
 
 def _clamp_scan_region(region: dict) -> dict:
@@ -188,6 +198,8 @@ async def scanner_capabilities(db: AsyncSession = Depends(get_db)):
     if not escl_enabled:
         raise HTTPException(status_code=503, detail="eSCL scanner disabled")
 
+    device_dpis = await _device_resolutions(db) or (75, 150, 300, 600)
+
     root = Element("scan:ScannerCapabilities")
     root.set("xmlns:scan", ESCL_NS)
     root.set("xmlns:pwg", PWG_NS)
@@ -231,7 +243,7 @@ async def scanner_capabilities(db: AsyncSession = Depends(get_db)):
     # Resolutions
     resolutions = SubElement(profile, "scan:SupportedResolutions")
     discrete = SubElement(resolutions, "scan:DiscreteResolutions")
-    for dpi in (75, 150, 300, 600):
+    for dpi in device_dpis:
         res = SubElement(discrete, "scan:DiscreteResolution")
         SubElement(res, "scan:XResolution").text = str(dpi)
         SubElement(res, "scan:YResolution").text = str(dpi)
@@ -267,7 +279,7 @@ async def scanner_capabilities(db: AsyncSession = Depends(get_db)):
 
     adf_resolutions = SubElement(adf_profile, "scan:SupportedResolutions")
     adf_discrete = SubElement(adf_resolutions, "scan:DiscreteResolutions")
-    for dpi in (75, 150, 300, 600):
+    for dpi in device_dpis:
         adf_res = SubElement(adf_discrete, "scan:DiscreteResolution")
         SubElement(adf_res, "scan:XResolution").text = str(dpi)
         SubElement(adf_res, "scan:YResolution").text = str(dpi)
@@ -429,6 +441,18 @@ async def _run_scan(job_id: str) -> None:
         job["state"] = "Completed"
         job["terminal_at"] = time.monotonic()
 
+    except asyncio.CancelledError:
+        if db_job_id is not None:
+            try:
+                async with async_session() as db:
+                    result = await db.get(ScanJob, db_job_id)
+                    if result:
+                        result.status = "failed"
+                        result.error_message = "Scan cancelled"
+                        await db.commit()
+            except Exception:
+                pass
+        raise
     except Exception as e:
         _log.error("eSCL scan %s failed: %s", job_id, e, exc_info=True)
         if db_job_id is not None:
@@ -510,7 +534,7 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
     # F4/F135: snap resolution to an advertised discrete value and
     # validate/clamp the requested region against the advertised caps
     # (or fall back to a full-bed scan) before anything is stored or acted on.
-    resolution = _snap_resolution(resolution)
+    resolution = _snap_resolution(resolution, await _device_resolutions(db) or ESCL_RESOLUTIONS)
     scan_region = _clamp_scan_region(scan_region)
 
     _purge_stale_jobs()

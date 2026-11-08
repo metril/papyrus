@@ -489,8 +489,14 @@ async def scanner_diagnostics(
         airscan_d_files.append(f"Error: {exc}")
 
     native: list[dict] = []
-    rows = await db.execute(select(Scanner).where(Scanner.device.like("brothernet:%")))
-    for row in rows.scalars():
+    try:
+        rows = list((await db.execute(
+            select(Scanner).where(Scanner.device.like("brothernet:%"))
+        )).scalars())
+    except Exception:
+        logger.warning("Could not list native scanners for diagnostics", exc_info=True)
+        rows = []
+    for row in rows:
         entry = {"name": row.name, "device": row.device, "available": False,
                  "busy": False, "error": None}
         try:
@@ -671,8 +677,8 @@ NATIVE_SUPPORTED_MODEL = "DCP-L2540DW"
 async def _confirm_native(rec: dict) -> dict | None:
     device = f"brothernet:{rec['ip']}"
     try:
-        result = await scan_service.check_device(device)
-    except PapyrusError:
+        result = await asyncio.wait_for(scan_service.check_device(device), 15)
+    except Exception:
         return None
     if not result["available"]:
         return None

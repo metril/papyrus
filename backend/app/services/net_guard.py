@@ -27,7 +27,7 @@ async def assert_safe_host(host: str) -> None:
     """
     try:
         infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
-    except socket.gaierror as exc:
+    except (socket.gaierror, UnicodeError) as exc:
         raise UnsafeHostError(f"Could not resolve host: {host}") from exc
 
     for info in infos:

@@ -161,6 +161,14 @@ class BrotherScanClient:
         return buf
 
     @staticmethod
+    async def _send(writer: asyncio.StreamWriter, data: bytes) -> None:
+        try:
+            writer.write(data)
+            await writer.drain()
+        except OSError:
+            raise ExternalServiceError("The connection to the scanner was lost.") from None
+
+    @staticmethod
     async def _close(writer: asyncio.StreamWriter | None) -> None:
         if writer is None:
             return
@@ -182,8 +190,7 @@ class BrotherScanClient:
                     raise _BusyError
                 if greeting != bp.GREETING_OK:
                     raise bp.BrotherProtocolError(f"unexpected greeting: {greeting!r}")
-                writer.write(bp.encode_lease_request(dpi, mode))
-                await writer.drain()
+                await self._send(writer, bp.encode_lease_request(dpi, mode))
                 prefix = await self._read_exact(reader, 3)
                 if prefix is None or prefix[:2] == b"\x00\x00" or prefix[0] == bp.LEASE_NOT_READY:
                     raise _BusyError
@@ -211,8 +218,7 @@ class BrotherScanClient:
                 return {"available": True, "busy": True}
             if greeting != bp.GREETING_OK:
                 raise bp.BrotherProtocolError(f"unexpected greeting: {greeting!r}")
-            writer.write(bp.encode_lease_request(300, "TEXT"))
-            await writer.drain()
+            await self._send(writer, bp.encode_lease_request(300, "TEXT"))
             prefix = await self._read_exact(reader, 3)
             if prefix is None or prefix[:2] == b"\x00\x00" or prefix[0] == bp.LEASE_NOT_READY:
                 return {"available": True, "busy": True}
@@ -256,8 +262,7 @@ class BrotherScanClient:
         writer = None
         try:
             reader, writer, lease = await self._handshake(dpi, mode)
-            writer.write(bp.CMD_FEEDER_QUERY)
-            await writer.drain()
+            await self._send(writer, bp.CMD_FEEDER_QUERY)
             reply = await self._read_exact(reader, 1)
             if reply is None or reply[0] not in (bp.FEEDER_LOADED, bp.FEEDER_EMPTY):
                 raise bp.BrotherProtocolError(f"unexpected feeder reply: {reply!r}")
@@ -281,8 +286,7 @@ class BrotherScanClient:
             else:
                 area = bp.area_to_pixels(dpi, *area_mm, lease.width_px, lease.height_px)
 
-            writer.write(bp.encode_start(lease.xdpi, lease.ydpi, mode, area))
-            await writer.drain()
+            await self._send(writer, bp.encode_start(lease.xdpi, lease.ydpi, mode, area))
             return await self._receive(
                 reader, writer, spec, lease, area, source, out_dir, created, progress,
                 max_pages,

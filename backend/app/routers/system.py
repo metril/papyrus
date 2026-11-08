@@ -99,8 +99,13 @@ async def _probe_subsystems() -> tuple[bool, bool]:
         try:
             native_device = await _default_native_device()
             if native_device:
-                result = await scan_service.check_device(native_device)
-                scanner_ok = bool(result["available"])
+                if scan_service.is_busy():
+                    scanner_ok = True
+                else:
+                    result = await asyncio.wait_for(
+                        scan_service.check_device(native_device), 5
+                    )
+                    scanner_ok = bool(result["available"])
                 _health_cache = (now, cups_ok, scanner_ok)
                 return cups_ok, scanner_ok
             proc = await asyncio.create_subprocess_exec(

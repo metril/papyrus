@@ -261,7 +261,7 @@ async def test_probe_native_busy_and_unreachable(native):
 def test_native_options():
     opts = asyncio.run(ScanService().get_options("brothernet:10.0.0.5"))
     assert opts["resolutions"] == [100, 150, 200, 300, 400, 600]
-    assert asyncio.run(ScanService().get_options("brother4:x"))["resolutions"][0] == 75
+    assert asyncio.run(ScanService().get_options("airscan:e:x"))["resolutions"][0] == 75
 
 
 async def test_cancel_native_scan_drops_connection_and_frees_lock(tmp_path, native):

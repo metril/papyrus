@@ -86,7 +86,7 @@ async def test_options_follow_default_device(db, admin_client):
 
 
 async def test_options_sane_default_unchanged(db, admin_client):
-    await _add(db, device="brother4:net1;dev0")
+    await _add(db, device="airscan:e:x")
     opts = (await admin_client.get("/api/scanner/options")).json()
     assert opts["resolutions"][0] == 75
 

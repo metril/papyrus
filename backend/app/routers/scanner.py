@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user, require_permission
 from app.auth.ws import authenticate_websocket, has_ws_permission
 from app.database import async_session, get_db
+from app.exceptions import PapyrusError
 from app.models import CloudProvider, ScanJob, ScanProfile, SMBShare, User
 from app.schemas import (
     BulkDeleteResponse,
@@ -31,7 +32,6 @@ from app.services.cloud_service import cloud_service
 from app.services.email_service import email_service
 from app.services.file_service import cleanup_file, sanitize_filename
 from app.services.scan_service import (
-    ScanError,
     get_default_scanner,
     get_default_scanner_device,
     run_post_scan_actions,
@@ -164,14 +164,14 @@ async def initiate_scan(
                 job, scanner, db, default_filename_template=filename_template
             )
 
-    except ScanError as e:
+    except PapyrusError as e:
         job.status = "failed"
         job.error_message = str(e)
         try:
             await db.commit()
         except Exception:
             pass
-        # ScanError is a PapyrusError (502) — let the global handler render it.
+        # PapyrusError carries its own status code — let the global handler render it.
         raise
     except Exception as e:
         job.status = "failed"
@@ -266,14 +266,14 @@ async def initiate_batch_scan(
                 job, scanner, db, default_filename_template=filename_template
             )
 
-    except ScanError as e:
+    except PapyrusError as e:
         job.status = "failed"
         job.error_message = str(e)
         try:
             await db.commit()
         except Exception:
             pass
-        # ScanError is a PapyrusError (502) — let the global handler render it.
+        # PapyrusError carries its own status code — let the global handler render it.
         raise
     except Exception as e:
         job.status = "failed"

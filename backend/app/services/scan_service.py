@@ -170,7 +170,10 @@ class SaneBackend:
 
     async def options(self, device: str) -> dict:
         return {
-            "resolutions": [75, 100, 150, 200, 300, 600],
+            "resolutions": (
+                [100, 150, 200, 300, 600] if device.startswith("brother4:")
+                else [75, 100, 150, 200, 300, 600]
+            ),
             "modes": ["Color", "Gray", "Lineart"],
             "formats": ["png", "jpeg", "tiff", "pdf"],
             "sources": ["Flatbed", "ADF"],
@@ -223,11 +226,11 @@ class SaneBackend:
         stderr_lines = await self._read_scan_output(process, scan_id, progress_callback)
 
         if process.returncode != 0:
-            stderr_text = "; ".join(ln for ln in stderr_lines if ln)
-            raise ScanError(
-                f"scanimage exited with code {process.returncode}"
-                + (f": {stderr_text}" if stderr_text else "")
+            logger.warning(
+                "scanimage exited %s: %s",
+                process.returncode, "; ".join(ln for ln in stderr_lines if ln),
             )
+            raise ScanError("The scan failed. Check the scanner and try again.")
 
     async def _read_scan_output(
         self,
