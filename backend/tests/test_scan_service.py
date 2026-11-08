@@ -594,3 +594,11 @@ async def test_run_post_scan_actions_ftp_delivers_legacy_plaintext_password(
     # here -- and decrypt back to the exact original plaintext.
     assert decrypt_value(captured["password_encrypted"]) == "legacy-plaintext-secret"
     assert scan_job.error_message is None  # delivery succeeded, no failure recorded
+
+
+def test_backend_for_returns_sane_backend():
+    from app.services.scan_service import SaneBackend, ScanService
+
+    svc = ScanService()
+    assert isinstance(svc._backend_for("brother4:net1;dev0"), SaneBackend)
+    assert isinstance(svc._backend_for("airscan:e0:x"), SaneBackend)

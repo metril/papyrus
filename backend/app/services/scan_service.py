@@ -4,7 +4,7 @@ import os
 import re
 import shutil
 import uuid
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -54,6 +54,248 @@ def _scanimage_match_candidates(device: str) -> list[str]:
     return candidates
 
 
+async def _await_with_timeout(coro, process: asyncio.subprocess.Process,
+                               timeout: float, timeout_message: str):
+    """Await `coro` (which itself awaits/reads from `process`), bounded
+    by `timeout` and cancellation-safe (F41/F110): on a timeout OR the
+    calling task being cancelled (e.g. an eSCL client cancelling the
+    job, or a future caller of scan_batch), `process` is killed and
+    reaped before the exception propagates, instead of being left
+    running unreaped -- a hung subprocess otherwise holds `self._lock`
+    forever, wedging every subsequent scan (web UI and eSCL alike) with
+    "Scanner is busy" until the process restarts.
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        raise ScanError(timeout_message)
+    except asyncio.CancelledError:
+        process.kill()
+        await process.wait()
+        raise
+
+
+class ScanBackend(Protocol):
+    """A way of talking to a scanner. `ScanService` owns locking, format
+    conversion, merging and cleanup; a backend only acquires raw page images
+    and reports on the device."""
+
+    async def acquire_page(
+        self,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        source: str,
+        tiff_file: str,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        on_process_start: Callable[[asyncio.subprocess.Process], None] | None = None,
+        left_mm: float | None = None,
+        top_mm: float | None = None,
+        width_mm: float | None = None,
+        height_mm: float | None = None,
+    ) -> None:
+        """Scan one page and write it as a TIFF to `tiff_file`."""
+        ...
+
+    async def acquire_batch(
+        self,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        page_dir: str,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+    ) -> None:
+        """Scan an ADF batch, writing page TIFFs (``*.tiff``) into `page_dir`."""
+        ...
+
+    async def probe(self, device: str) -> dict:
+        """Report whether `device` is reachable (see `ScanService.check_device`)."""
+        ...
+
+    async def options(self) -> dict:
+        """Supported resolutions/modes/formats/sources."""
+        ...
+
+
+class SaneBackend:
+    """`scanimage` (SANE) subprocess backend."""
+
+    async def probe(self, device: str) -> dict:
+        process = await asyncio.create_subprocess_exec(
+            "scanimage", "-L",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=_LIST_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise ScannerBusyError("Timed out listing scanner devices")
+
+        output = stdout.decode() + stderr.decode()
+        candidates = _scanimage_match_candidates(device) if device else []
+
+        return {
+            "available": any(c in output for c in candidates),
+            "device": device,
+            "output": output.strip(),
+        }
+
+    async def options(self) -> dict:
+        return {
+            "resolutions": [75, 100, 150, 200, 300, 600],
+            "modes": ["Color", "Gray", "Lineart"],
+            "formats": ["png", "jpeg", "tiff", "pdf"],
+            "sources": ["Flatbed", "ADF"],
+        }
+
+    async def acquire_page(
+        self,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        source: str,
+        tiff_file: str,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        on_process_start: Callable[[asyncio.subprocess.Process], None] | None = None,
+        left_mm: float | None = None,
+        top_mm: float | None = None,
+        width_mm: float | None = None,
+        height_mm: float | None = None,
+    ) -> None:
+        # brscan4 uses "FlatBed" (capital B); map common "Flatbed" spelling
+        _source = source
+        if device.startswith("brother4:") and source.lower() == "flatbed":
+            _source = "FlatBed"
+
+        # brscan4 uses different mode names than standard SANE
+        _mode = mode
+        if device.startswith("brother4:"):
+            _mode = {
+                "Color": "24bit Color", "Gray": "True Gray", "Lineart": "Black & White",
+            }.get(mode, mode)
+
+        cmd = [
+            "scanimage",
+            "-d", device,
+            "--resolution", str(resolution),
+            "--mode", _mode,
+            "--format=tiff",
+            "--source", _source,
+            "--progress",
+            "-o", tiff_file,
+        ]
+
+        # Scan geometry: restrict to requested area (all values in mm)
+        if left_mm is not None:
+            cmd += ["-l", str(round(left_mm, 2))]
+        if top_mm is not None:
+            cmd += ["-t", str(round(top_mm, 2))]
+        if width_mm is not None:
+            cmd += ["-x", str(round(width_mm, 2))]
+        if height_mm is not None:
+            cmd += ["-y", str(round(height_mm, 2))]
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        if on_process_start is not None:
+            on_process_start(process)
+
+        stderr_lines = await self._read_scan_output(process, scan_id, progress_callback)
+
+        if process.returncode != 0:
+            stderr_text = "; ".join(ln for ln in stderr_lines if ln)
+            raise ScanError(
+                f"scanimage exited with code {process.returncode}"
+                + (f": {stderr_text}" if stderr_text else "")
+            )
+
+    async def _read_scan_output(
+        self,
+        process: asyncio.subprocess.Process,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None,
+    ) -> list[str]:
+        """Read `process`'s stderr for progress lines and wait for exit,
+        bounded by `_SCAN_TIMEOUT_SECONDS` (F41) and cancellation-safe (F110)
+        via `_await_with_timeout`.
+        """
+
+        async def _read() -> list[str]:
+            stderr_lines: list[str] = []
+            if process.stderr:
+                async for line in process.stderr:
+                    text = line.decode().strip()
+                    stderr_lines.append(text)
+                    match = re.search(r"Progress: (\d+\.?\d*)%", text)
+                    if match and progress_callback:
+                        await progress_callback(scan_id, float(match.group(1)))
+            await process.wait()
+            return stderr_lines
+
+        return await _await_with_timeout(
+            _read(), process, _SCAN_TIMEOUT_SECONDS, "Scan timed out"
+        )
+
+    async def acquire_batch(
+        self,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        page_dir: str,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+    ) -> None:
+        # scanimage --batch mode scans all pages from ADF
+        cmd = [
+            "scanimage",
+            "-d", device,
+            "--resolution", str(resolution),
+            "--mode", mode,
+            "--format=tiff",
+            "--source", "ADF",
+            "--batch", os.path.join(page_dir, "page_%04d.tiff"),
+            "--progress",
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        async def _read_batch() -> None:
+            if process.stderr:
+                async for line in process.stderr:
+                    text = line.decode().strip()
+                    match = re.search(r"Progress: (\d+\.?\d*)%", text)
+                    if match and progress_callback:
+                        await progress_callback(scan_id, float(match.group(1)))
+            await process.wait()
+
+        await _await_with_timeout(
+            _read_batch(), process, _BATCH_SCAN_TIMEOUT_SECONDS, "Batch scan timed out"
+        )
+
+
+_sane_backend = SaneBackend()
+
+
 class ScanService:
     def __init__(self):
         self._lock = asyncio.Lock()
@@ -91,38 +333,15 @@ class ScanService:
         empty/unconfigured one.
         """
         _device = device if device is not None else self._scanner_device
-
-        process = await asyncio.create_subprocess_exec(
-            "scanimage", "-L",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=_LIST_TIMEOUT_SECONDS
-            )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            raise ScannerBusyError("Timed out listing scanner devices")
-
-        output = stdout.decode() + stderr.decode()
-        candidates = _scanimage_match_candidates(_device) if _device else []
-
-        return {
-            "available": any(c in output for c in candidates),
-            "device": _device,
-            "output": output.strip(),
-        }
+        return await self._backend_for(_device).probe(_device)
 
     async def get_options(self) -> dict:
         """Get available scanner options for the configured device."""
-        return {
-            "resolutions": [75, 100, 150, 200, 300, 600],
-            "modes": ["Color", "Gray", "Lineart"],
-            "formats": ["png", "jpeg", "tiff", "pdf"],
-            "sources": ["Flatbed", "ADF"],
-        }
+        return await self._backend_for(self._scanner_device).options()
+
+    def _backend_for(self, device: str) -> ScanBackend:
+        """Pick the backend that drives `device`. Only SANE exists for now."""
+        return _sane_backend
 
     # ------------------------------------------------------------------
     # Synchronous bodies (run inside a worker thread).
@@ -207,62 +426,25 @@ class ScanService:
             _scan_dir = scan_dir or self._scan_dir
             _device = device or self._scanner_device
 
-            # brscan4 uses "FlatBed" (capital B); map common "Flatbed" spelling
-            _source = source
-            if _device.startswith("brother4:") and source.lower() == "flatbed":
-                _source = "FlatBed"
-
-            # brscan4 uses different mode names than standard SANE
-            _mode = mode
-            if _device.startswith("brother4:"):
-                _mode = {
-                    "Color": "24bit Color", "Gray": "True Gray", "Lineart": "Black & White",
-                }.get(mode, mode)
-
             # Scan to TIFF as intermediate format, then convert to requested output
             tiff_file = os.path.join(_scan_dir, f"{scan_id}.tiff")
 
-            cmd = [
-                "scanimage",
-                "-d", _device,
-                "--resolution", str(resolution),
-                "--mode", _mode,
-                "--format=tiff",
-                "--source", _source,
-                "--progress",
-                "-o", tiff_file,
-            ]
-
-            # Scan geometry: restrict to requested area (all values in mm)
-            if left_mm is not None:
-                cmd += ["-l", str(round(left_mm, 2))]
-            if top_mm is not None:
-                cmd += ["-t", str(round(top_mm, 2))]
-            if width_mm is not None:
-                cmd += ["-x", str(round(width_mm, 2))]
-            if height_mm is not None:
-                cmd += ["-y", str(round(height_mm, 2))]
-
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            if on_process_start is not None:
-                on_process_start(process)
-
             keep_tiff = False
             try:
-                stderr_lines = await self._read_scan_output(
-                    process, scan_id, progress_callback
+                await self._backend_for(_device).acquire_page(
+                    device=_device,
+                    resolution=resolution,
+                    mode=mode,
+                    source=source,
+                    tiff_file=tiff_file,
+                    scan_id=scan_id,
+                    progress_callback=progress_callback,
+                    on_process_start=on_process_start,
+                    left_mm=left_mm,
+                    top_mm=top_mm,
+                    width_mm=width_mm,
+                    height_mm=height_mm,
                 )
-
-                if process.returncode != 0:
-                    stderr_text = "; ".join(ln for ln in stderr_lines if ln)
-                    raise ScanError(
-                        f"scanimage exited with code {process.returncode}"
-                        + (f": {stderr_text}" if stderr_text else "")
-                    )
 
                 if not os.path.exists(tiff_file):
                     raise ScanError("Scan produced no output file")
@@ -290,56 +472,6 @@ class ScanService:
                 if not keep_tiff and os.path.exists(tiff_file):
                     os.unlink(tiff_file)
 
-    @staticmethod
-    async def _await_with_timeout(coro, process: asyncio.subprocess.Process,
-                                   timeout: float, timeout_message: str):
-        """Await `coro` (which itself awaits/reads from `process`), bounded
-        by `timeout` and cancellation-safe (F41/F110): on a timeout OR the
-        calling task being cancelled (e.g. an eSCL client cancelling the
-        job, or a future caller of scan_batch), `process` is killed and
-        reaped before the exception propagates, instead of being left
-        running unreaped -- a hung subprocess otherwise holds `self._lock`
-        forever, wedging every subsequent scan (web UI and eSCL alike) with
-        "Scanner is busy" until the process restarts.
-        """
-        try:
-            return await asyncio.wait_for(coro, timeout=timeout)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            raise ScanError(timeout_message)
-        except asyncio.CancelledError:
-            process.kill()
-            await process.wait()
-            raise
-
-    async def _read_scan_output(
-        self,
-        process: asyncio.subprocess.Process,
-        scan_id: str,
-        progress_callback: Callable[[str, float], Awaitable[None]] | None,
-    ) -> list[str]:
-        """Read `process`'s stderr for progress lines and wait for exit,
-        bounded by `_SCAN_TIMEOUT_SECONDS` (F41) and cancellation-safe (F110)
-        via `_await_with_timeout`.
-        """
-
-        async def _read() -> list[str]:
-            stderr_lines: list[str] = []
-            if process.stderr:
-                async for line in process.stderr:
-                    text = line.decode().strip()
-                    stderr_lines.append(text)
-                    match = re.search(r"Progress: (\d+\.?\d*)%", text)
-                    if match and progress_callback:
-                        await progress_callback(scan_id, float(match.group(1)))
-            await process.wait()
-            return stderr_lines
-
-        return await self._await_with_timeout(
-            _read(), process, _SCAN_TIMEOUT_SECONDS, "Scan timed out"
-        )
-
     async def scan_batch(
         self,
         resolution: int = 300,
@@ -363,37 +495,16 @@ class ScanService:
             os.makedirs(page_dir, exist_ok=True)
 
             _device = device or self._scanner_device
-            # scanimage --batch mode scans all pages from ADF
-            cmd = [
-                "scanimage",
-                "-d", _device,
-                "--resolution", str(resolution),
-                "--mode", mode,
-                "--format=tiff",
-                "--source", "ADF",
-                "--batch", os.path.join(page_dir, "page_%04d.tiff"),
-                "--progress",
-            ]
-
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
 
             success = False
             try:
-                async def _read_batch() -> None:
-                    if process.stderr:
-                        async for line in process.stderr:
-                            text = line.decode().strip()
-                            match = re.search(r"Progress: (\d+\.?\d*)%", text)
-                            if match and progress_callback:
-                                await progress_callback(scan_id, float(match.group(1)))
-                    await process.wait()
-
-                await self._await_with_timeout(
-                    _read_batch(), process, _BATCH_SCAN_TIMEOUT_SECONDS, "Batch scan timed out"
+                await self._backend_for(_device).acquire_batch(
+                    device=_device,
+                    resolution=resolution,
+                    mode=mode,
+                    page_dir=page_dir,
+                    scan_id=scan_id,
+                    progress_callback=progress_callback,
                 )
 
                 # scanimage returns non-zero when ADF runs out of paper, which is expected
@@ -414,7 +525,7 @@ class ScanService:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                await self._await_with_timeout(
+                await _await_with_timeout(
                     pdf_process.wait(), pdf_process,
                     _PDF_MERGE_TIMEOUT_SECONDS, "PDF merge timed out",
                 )
