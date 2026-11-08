@@ -126,7 +126,7 @@ def test_encode_request_requested_attributes_are_1setof_with_zero_length_names()
     assert b"printer-uuid" in values
     assert b"marker-levels" in values
     assert b"sides-supported" in values
-    assert len(requested) == 16  # every requested attribute is present
+    assert len(requested) == 17  # every requested attribute is present
 
 
 def test_encode_request_empty_resource_has_no_trailing_slash_in_uri():

@@ -6,6 +6,11 @@ export async function getPrinterStatus(): Promise<PrinterStatus> {
   return data;
 }
 
+export async function getLoadedPaper(): Promise<string | null> {
+  const { data } = await api.get<{ media: string | null }>('/printer/paper');
+  return data.media;
+}
+
 export async function getPrinterSettings(): Promise<Record<string, unknown>> {
   const { data } = await api.get('/printer/settings');
   return data;

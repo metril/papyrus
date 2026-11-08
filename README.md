@@ -9,6 +9,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Scanning**: Initiate scans from the web UI with configurable resolution, color mode, and format
 - **Multi-page ADF Scanning**: Batch scan from the automatic document feeder into a single PDF
 - **Copy**: One-click scan-then-print workflow
+- **Paper Size Default**: The Copy page, upload form and Files page start on the paper loaded in the default printer (read over IPP, cached for a minute); if it can't be read or isn't A4/Letter/Legal they fall back to A4, and a size you pick yourself is never overridden
 - **SMB Integration**: Browse and print from network shares, save scans to shares
 - **Email**: Send scanned documents as email attachments, receive attachments for printing via webhook
 - **Cloud Storage**: Browse, download, and print files from Google Drive, Dropbox, OneDrive, and Nextcloud/WebDAV; upload scans to cloud (OAuth2 or basic auth)

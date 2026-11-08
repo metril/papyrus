@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { listJobs, getPrinterStatus } from './printer';
+import { listJobs, getPrinterStatus, getLoadedPaper } from './printer';
 import { listScans, listScanProfiles, getScannerOptions } from './scanner';
 import { listPrinters } from './printers';
 import { useConnectionStore } from '../store/connectionStore';
@@ -34,6 +34,7 @@ export const queryKeys = {
     list: () => ['printers', 'list'] as const,
   },
   printerStatus: ['printerStatus'] as const,
+  loadedPaper: ['loadedPaper'] as const,
   printerDiscovery: ['printerDiscovery'] as const,
   scanners: {
     list: () => ['scanners', 'list'] as const,
@@ -112,6 +113,17 @@ export function usePrinterStatus() {
     refetchInterval: printerStatusRefetchInterval(printersConnected),
     // The old component swallowed status-fetch errors (rendered nothing); keep
     // that silent behaviour instead of surfacing a global toast.
+    meta: { suppressGlobalError: true },
+  });
+}
+
+/** Paper loaded in the default printer (null = unknown); forms fall back to A4. */
+export function useLoadedPaper() {
+  return useQuery({
+    queryKey: queryKeys.loadedPaper,
+    queryFn: () => getLoadedPaper(),
+    staleTime: 60_000,
+    retry: false,
     meta: { suppressGlobalError: true },
   });
 }

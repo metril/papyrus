@@ -63,6 +63,7 @@ _REQUESTED_ATTRIBUTES = [
     "printer-supply",
     "printer-supply-description",
     "media-default",
+    "media-ready",
     "sides-supported",
 ]
 
@@ -256,6 +257,7 @@ def _normalize(attributes: dict, resource: str) -> dict:
             "low_levels": _as_list(attributes.get("marker-low-levels")),
         },
         "media_default": _as_str(attributes.get("media-default")),
+        "media_ready": [m for m in _as_list(attributes.get("media-ready")) if isinstance(m, str)],
         "sides_supported": _as_list(attributes.get("sides-supported")),
         "resource": resource,
         "attributes": attributes,

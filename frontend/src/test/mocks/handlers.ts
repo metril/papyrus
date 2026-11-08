@@ -37,6 +37,7 @@ export const handlers: RequestHandler[] = [
   http.get('/api/admin/stats', () => {
     return HttpResponse.json(makeDashboardStats());
   }),
+  http.get('/api/printer/paper', () => HttpResponse.json({ media: null })),
   http.get('/api/printer/status', () => {
     return HttpResponse.json({
       state: 3,

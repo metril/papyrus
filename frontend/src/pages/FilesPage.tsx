@@ -8,6 +8,7 @@ import Skeleton from '../components/common/Skeleton';
 import EmptyState from '../components/common/EmptyState';
 import ErrorState from '../components/common/ErrorState';
 import { queryKeys, useCloudProviders } from '../api/queries';
+import { usePaperChoice } from '../hooks/usePaperChoice';
 import { listSmbShares, browseSmb, downloadSmbFile } from '../api/smb';
 import { uploadPrintJob } from '../api/printer';
 import { listFiles, listWebdavFiles, getDownloadUrl, downloadCloudFile } from '../api/cloud';
@@ -96,6 +97,7 @@ function smbFileMeta(entry: SMBFileEntry): string {
 
 function NetworkBrowser() {
   const toast = useToast();
+  const [defaultMedia] = usePaperChoice(['A4', 'Letter', 'Legal']);
   const queryClient = useQueryClient();
   const [selectedShare, setSelectedShare] = useState<SMBShare | null>(null);
   const [currentPath, setCurrentPath] = useState('/');
@@ -136,7 +138,7 @@ function NetworkBrowser() {
       const filePath = currentPath === '/' ? `/${entry.name}` : `${currentPath}/${entry.name}`;
       const blob = await downloadSmbFile(selectedShare.id, filePath);
       const file = new File([blob], entry.name);
-      return uploadPrintJob(file, { copies: 1, duplex: false, media: 'A4', hold: true });
+      return uploadPrintJob(file, { copies: 1, duplex: false, media: defaultMedia, hold: true });
     },
     meta: { suppressGlobalError: true },
     onSuccess: () => {
@@ -311,6 +313,7 @@ function ProviderCard({ provider, onSelect }: ProviderCardProps) {
 
 function CloudBrowser() {
   const toast = useToast();
+  const [defaultMedia] = usePaperChoice(['A4', 'Letter', 'Legal']);
   const queryClient = useQueryClient();
   const {
     data: providers = [],
@@ -397,7 +400,7 @@ function CloudBrowser() {
       );
       const resolvedMime = getPreviewMime(entry);
       const file = new File([blob], entry.name, { type: resolvedMime });
-      return uploadPrintJob(file, { copies: 1, duplex: false, media: 'A4', hold: true });
+      return uploadPrintJob(file, { copies: 1, duplex: false, media: defaultMedia, hold: true });
     },
     meta: { suppressGlobalError: true },
     onSuccess: () => {

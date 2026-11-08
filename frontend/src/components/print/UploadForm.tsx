@@ -7,6 +7,7 @@ import Toggle from '../common/Toggle';
 import { uploadPrintJob } from '../../api/printer';
 import { applyJobEvent } from '../../hooks/useRealtimeBridge';
 import { useToast } from '../../hooks/useToast';
+import { usePaperChoice } from '../../hooks/usePaperChoice';
 import type { PrintJob } from '../../types';
 
 const ACCEPTED_TYPES = {
@@ -25,6 +26,7 @@ const ACCEPTED_TYPES = {
   'application/vnd.oasis.opendocument.presentation': ['.odp'],
 };
 
+const PAPER_SIZES = ['A4', 'Letter', 'Legal'];
 const MIN_COPIES = 1;
 const MAX_COPIES = 99;
 
@@ -54,7 +56,7 @@ export default function UploadForm() {
   // keystroke. `copies` below is always the clamped, submit-ready value.
   const [copiesInput, setCopiesInput] = useState('1');
   const [duplex, setDuplex] = useState(false);
-  const [media, setMedia] = useState('A4');
+  const [media, setMedia] = usePaperChoice(PAPER_SIZES);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const queryClient = useQueryClient();
