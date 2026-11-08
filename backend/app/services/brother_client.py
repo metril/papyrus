@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import threading
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -121,6 +122,7 @@ class BrotherScanClient:
         connect_timeout: float = 5.0,
         idle_timeout: float = 30.0,
         busy_retries: int = 32,
+        busy_window: float = 90.0,
         retry_delay: float = 3.0,
         handshake_timeout: float = 10.0,
         probe_timeout: float = 3.0,
@@ -130,6 +132,7 @@ class BrotherScanClient:
         self.connect_timeout = connect_timeout
         self.idle_timeout = idle_timeout
         self.busy_retries = max(1, busy_retries)
+        self.busy_window = busy_window
         self.retry_delay = retry_delay
         self.handshake_timeout = handshake_timeout
         self.probe_timeout = probe_timeout
@@ -214,8 +217,11 @@ class BrotherScanClient:
         Retries while the scanner is busy or silent. The feeder query is part
         of the session: no caller sees a session before its reply was read.
         """
+        deadline = time.monotonic() + self.busy_window
         for attempt in range(self.busy_retries):
             if attempt:
+                if time.monotonic() + self.retry_delay >= deadline:
+                    break
                 await asyncio.sleep(self.retry_delay)
             reader, writer = await self._open()
             try:

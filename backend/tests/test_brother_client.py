@@ -425,9 +425,19 @@ async def test_always_silent_exhausts_as_busy(tmp_path):
     assert srv.accepted == 3
 
 
-def test_default_retries_span_at_least_ninety_seconds():
+def test_default_handshake_window_is_ninety_seconds():
     c = BrotherScanClient("127.0.0.1")
-    assert (c.busy_retries - 1) * c.retry_delay >= 90 and c.handshake_timeout == 10
+    assert c.busy_window == 90 and c.handshake_timeout == 10
+
+
+async def test_silent_scanner_stops_retrying_at_the_window(tmp_path):
+    async with FakeScanner([[HOLD]] * 200) as srv:
+        with pytest.raises(ScannerBusyError):
+            await client(
+                srv.port, handshake_timeout=0.05, retry_delay=0.01,
+                busy_window=0.4, busy_retries=1000,
+            ).scan(out_dir=str(tmp_path), **fixture_args("20-fixture-mode-01"))
+    assert 2 < srv.accepted < 40
 
 
 async def test_probe_silent_scanner_is_busy_within_bound():

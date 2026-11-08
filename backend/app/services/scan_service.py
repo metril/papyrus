@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import uuid
 from typing import Awaitable, Callable, Protocol
 
@@ -27,6 +28,12 @@ _SCAN_TIMEOUT_SECONDS = 300
 # (many pages at high resolution); the PDF merge step is CPU-bound and
 # shouldn't need anywhere near as long.
 _BATCH_SCAN_TIMEOUT_SECONDS = 900
+# brother4 batches may legitimately run for many minutes while paper moves;
+# only a stall (no stderr line, no new page file) for this long is a hang.
+_BATCH_NO_PROGRESS_SECONDS = 120
+_BATCH_POLL_SECONDS = 1.0
+# Lower-case text scanimage prints when the feeder simply ran empty.
+SANE_END_OF_FEED_TEXT = "out of documents"
 _PDF_MERGE_TIMEOUT_SECONDS = 300
 
 
@@ -294,10 +301,12 @@ class SaneBackend:
         )
 
         stderr_lines: list[str] = []
+        last_activity = [time.monotonic()]
 
         async def _read_batch() -> None:
             if process.stderr:
                 async for line in process.stderr:
+                    last_activity[0] = time.monotonic()
                     text = line.decode().strip()
                     match = re.search(r"Progress: (\d+\.?\d*)%", text)
                     if match:
@@ -307,17 +316,73 @@ class SaneBackend:
                         stderr_lines.append(text)
             await process.wait()
 
-        await _await_with_timeout(
-            _read_batch(), process, _BATCH_SCAN_TIMEOUT_SECONDS, "Batch scan timed out"
-        )
-
-        # A non-zero exit is normal once the feeder runs out, so it can't fail
-        # the batch here, but with no pages it's the only clue to what went wrong.
-        if process.returncode != 0 and not any(f.endswith(".tiff") for f in os.listdir(page_dir)):
-            logger.warning(
-                "scanimage batch exited %s with no pages: %s",
-                process.returncode, "; ".join(stderr_lines[-5:]),
+        if device.startswith("brother4:"):
+            await _run_with_progress_watchdog(
+                _read_batch(), process, page_dir, last_activity, "Batch scan timed out"
             )
+        else:
+            await _await_with_timeout(
+                _read_batch(), process, _BATCH_SCAN_TIMEOUT_SECONDS, "Batch scan timed out"
+            )
+
+        if process.returncode != 0:
+            tail = "; ".join(stderr_lines[-5:])
+            if device.startswith("brother4:") and not any(
+                SANE_END_OF_FEED_TEXT in ln.lower() for ln in stderr_lines
+            ):
+                logger.warning("scanimage batch exited %s: %s", process.returncode, tail)
+                raise ScanError("The scan failed. Check the scanner and try again.")
+            # A non-zero exit is normal once the feeder runs out, so it can't fail
+            # the batch here, but with no pages it's the only clue to what went wrong.
+            if not any(f.endswith(".tiff") for f in os.listdir(page_dir)):
+                logger.warning(
+                    "scanimage batch exited %s with no pages: %s", process.returncode, tail
+                )
+
+
+async def _run_with_progress_watchdog(
+    coro, process, page_dir: str, last_activity: list[float], timeout_message: str
+):
+    """Run `coro`, killing `process` if nothing (stderr line or new page file)
+    happens for `_BATCH_NO_PROGRESS_SECONDS`. Cancellation also kills it."""
+
+    def page_count() -> int:
+        try:
+            return sum(1 for f in os.listdir(page_dir) if f.endswith(".tiff"))
+        except OSError:
+            return 0
+
+    stalled = False
+    reader = asyncio.ensure_future(coro)
+
+    async def watchdog() -> None:
+        nonlocal stalled
+        seen = page_count()
+        while True:
+            await asyncio.sleep(_BATCH_POLL_SECONDS)
+            now_pages = page_count()
+            if now_pages > seen:
+                seen = now_pages
+                last_activity[0] = time.monotonic()
+            if time.monotonic() - last_activity[0] > _BATCH_NO_PROGRESS_SECONDS:
+                stalled = True
+                process.kill()
+                reader.cancel()
+                return
+
+    dog = asyncio.ensure_future(watchdog())
+    try:
+        return await reader
+    except asyncio.CancelledError:
+        if not stalled:
+            reader.cancel()
+            process.kill()
+        await process.wait()
+        if stalled:
+            raise ScanError(timeout_message) from None
+        raise
+    finally:
+        dog.cancel()
 
 
 BROTHERNET_PREFIX = "brothernet:"
@@ -415,20 +480,15 @@ class BrotherNetBackend:
             area = (left_mm or 0.0, top_mm or 0.0, width_mm, height_mm)
         work = tempfile.mkdtemp(prefix="native_", dir=os.path.dirname(tiff_file) or None)
         try:
-            pages = await asyncio.wait_for(
-                client.scan(
-                    mode=self._protocol_mode(mode),
-                    dpi=resolution,
-                    source="flatbed",
-                    out_dir=work,
-                    area_mm=area,
-                    progress=self._progress(scan_id, progress_callback),
-                ),
-                timeout=_SCAN_TIMEOUT_SECONDS,
+            pages = await client.scan(
+                mode=self._protocol_mode(mode),
+                dpi=resolution,
+                source="flatbed",
+                out_dir=work,
+                area_mm=area,
+                progress=self._progress(scan_id, progress_callback),
             )
             os.replace(pages[0].path, tiff_file)
-        except asyncio.TimeoutError:
-            raise ScanError("Scan timed out") from None
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
@@ -443,19 +503,13 @@ class BrotherNetBackend:
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
     ) -> None:
         client = self._client(device)
-        try:
-            await asyncio.wait_for(
-                client.scan(
-                    mode=self._protocol_mode(mode),
-                    dpi=resolution,
-                    source="adf",
-                    out_dir=page_dir,
-                    progress=self._progress(scan_id, progress_callback),
-                ),
-                timeout=_BATCH_SCAN_TIMEOUT_SECONDS,
-            )
-        except asyncio.TimeoutError:
-            raise ScanError("Batch scan timed out") from None
+        await client.scan(
+            mode=self._protocol_mode(mode),
+            dpi=resolution,
+            source="adf",
+            out_dir=page_dir,
+            progress=self._progress(scan_id, progress_callback),
+        )
 
 
 async def _merge_pages_to_pdf(page_paths: list[str], pdf_file: str) -> None:
@@ -697,6 +751,7 @@ class ScanService:
         Returns (pdf_path, page_count).
         """
         page_dir = os.path.join(scan_dir, f"batch_{scan_id}")
+        pdf_file = os.path.join(scan_dir, f"{scan_id}.pdf")
         os.makedirs(page_dir, exist_ok=True)
 
         success = False
@@ -705,13 +760,10 @@ class ScanService:
                 device=device, resolution=resolution, mode=mode, page_dir=page_dir,
                 scan_id=scan_id, progress_callback=progress_callback,
             )
-            pdf_file = os.path.join(scan_dir, f"{scan_id}.pdf")
             await _merge_pages_to_pdf(pages, pdf_file)
 
             # Clean up individual page files
-            for p in pages:
-                os.unlink(p)
-            os.rmdir(page_dir)
+            shutil.rmtree(page_dir, ignore_errors=True)
 
             success = True
             return pdf_file, len(pages)
@@ -722,6 +774,8 @@ class ScanService:
             # the DB, so retention can never reclaim it either.
             if not success:
                 shutil.rmtree(page_dir, ignore_errors=True)
+                if os.path.exists(pdf_file):
+                    os.unlink(pdf_file)
 
     async def _acquire_feeder_tiffs(
         self, *, device: str, resolution: int, mode: str, page_dir: str, scan_id: str,

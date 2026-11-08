@@ -748,3 +748,108 @@ def test_backend_for_returns_sane_backend():
     svc = ScanService()
     assert isinstance(svc._backend_for("brother4:net1;dev0"), SaneBackend)
     assert isinstance(svc._backend_for("airscan:e0:x"), SaneBackend)
+
+
+# --------------------------------------------------------------------------- #
+# brother4 batches: non-zero exit only succeeds at the normal end of feed; the
+# timeout resets on progress
+# --------------------------------------------------------------------------- #
+class _LinesStderr:
+    def __init__(self, lines, delay=0.0):
+        self._lines = list(lines)
+        self._delay = delay
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._lines:
+            raise StopAsyncIteration
+        if self._delay:
+            await asyncio.sleep(self._delay)
+        return self._lines.pop(0)
+
+
+def _batch_exec(monkeypatch, returncode, stderr, pages=2, hang=None):
+    from PIL import Image
+
+    async def fake_exec(*args, **kwargs):
+        if args[0] == "img2pdf":
+            open(args[-1], "wb").write(b"%PDF")
+            return _FakeProcess()
+        pattern = next(a for a in args if a.startswith("--batch=")).split("=", 1)[1]
+        for n in range(1, pages + 1):
+            Image.new("L", (4, 4)).save(pattern % n)
+        return _FakeProcess(returncode=returncode, stderr=stderr)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+
+
+async def test_brother4_batch_nonzero_without_end_of_feed_fails(tmp_path, monkeypatch, caplog):
+    _batch_exec(monkeypatch, 1, _LinesStderr([b"scanimage: sane_read: Document feeder jammed\n"]))
+    with caplog.at_level(logging.WARNING), pytest.raises(ScanError) as ei:
+        await scan_service.scan_batch(scan_dir=str(tmp_path), device="brother4:net1;dev0")
+    assert "jammed" not in ei.value.detail and "jammed" in caplog.text
+    assert os.listdir(tmp_path) == []
+
+
+async def test_brother4_batch_nonzero_with_end_of_feed_succeeds(tmp_path, monkeypatch):
+    text = ("scanimage: sane_start: Document feeder OUT OF DOCUMENTS\n").encode()
+    _batch_exec(monkeypatch, 1, _LinesStderr([text]))
+    _, _, count = await scan_service.scan_batch(scan_dir=str(tmp_path), device="brother4:n")
+    assert count == 2
+
+
+async def test_brother4_batch_exit_zero_succeeds(tmp_path, monkeypatch):
+    _batch_exec(monkeypatch, 0, _LinesStderr([]))
+    _, _, count = await scan_service.scan_batch(scan_dir=str(tmp_path), device="brother4:n")
+    assert count == 2
+
+
+async def test_other_sane_batch_nonzero_still_succeeds(tmp_path, monkeypatch):
+    _batch_exec(monkeypatch, 1, _LinesStderr([b"scanimage: whatever\n"]))
+    _, _, count = await scan_service.scan_batch(scan_dir=str(tmp_path), device="airscan:e:x")
+    assert count == 2
+
+
+async def test_brother4_batch_stall_is_killed(tmp_path, monkeypatch):
+    monkeypatch.setattr(scan_service_module, "_BATCH_NO_PROGRESS_SECONDS", 0.15)
+    monkeypatch.setattr(scan_service_module, "_BATCH_POLL_SECONDS", 0.02)
+    proc = _FakeProcess(stderr=_HangingAsyncIter())
+
+    async def fake_exec(*args, **kwargs):
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    with pytest.raises(ScanError, match="timed out"):
+        await scan_service.scan_batch(scan_dir=str(tmp_path), device="brother4:n")
+    assert proc.killed and proc.waited and os.listdir(tmp_path) == []
+
+
+async def test_brother4_batch_progress_resets_the_stall_timer(tmp_path, monkeypatch):
+    monkeypatch.setattr(scan_service_module, "_BATCH_NO_PROGRESS_SECONDS", 0.15)
+    monkeypatch.setattr(scan_service_module, "_BATCH_POLL_SECONDS", 0.02)
+    lines = [b"Progress: 10.0%\n"] * 8
+    _batch_exec(monkeypatch, 0, _LinesStderr(lines, delay=0.05))
+    _, _, count = await scan_service.scan_batch(scan_dir=str(tmp_path), device="brother4:n")
+    assert count == 2
+
+
+async def test_feeder_pdf_failure_after_merge_leaves_no_pdf(tmp_path, monkeypatch):
+    fixed = uuid_module.uuid4()
+    monkeypatch.setattr(scan_service_module.uuid, "uuid4", lambda: fixed)
+    _batch_exec(monkeypatch, 0, _LinesStderr([]))
+
+    real_rmtree = scan_service_module.shutil.rmtree
+    calls = []
+
+    def boom(path, ignore_errors=False):
+        calls.append(path)
+        if len(calls) == 1:
+            raise OSError("disk")
+        real_rmtree(path, ignore_errors=ignore_errors)
+
+    monkeypatch.setattr(scan_service_module.shutil, "rmtree", boom)
+    with pytest.raises(OSError):
+        await scan_service.scan_batch(scan_dir=str(tmp_path), device="brother4:n")
+    assert not (tmp_path / f"{fixed}.pdf").exists()
