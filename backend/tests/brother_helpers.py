@@ -16,6 +16,7 @@ NAMES = sorted(MANIFEST)
 OK = ("S>C", bp.GREETING_OK)
 NG = ("S>C", bp.GREETING_BUSY)
 HOLD = ("HOLD", b"")  # stay silent until the client disconnects
+CLOSE = ("CLOSE", b"")  # hang up on the client
 
 
 def load(name):
@@ -110,6 +111,8 @@ class FakeScanner:
                     if got != data:
                         self.errors.append(f"conn {idx}: expected {data!r}, got {got!r}")
                         return
+                elif direction == "CLOSE":
+                    return
                 else:  # HOLD
                     await reader.read()
                     return
