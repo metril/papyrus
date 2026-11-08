@@ -181,6 +181,15 @@ def _edge_px(mm: float, dpi: int) -> float:
     return max(0.0, mm - MARGIN_MM) * dpi / 25.4
 
 
+def aligned_width(width_px: int) -> int:
+    """Widest usable scan width: multiples of 16, as the driver requests.
+
+    Lease widths aren't always aligned (826 at 100 dpi), and for those the
+    printer sends 1-bit rows of ``width // 8`` bytes, dropping the last pixels.
+    """
+    return width_px - width_px % 16
+
+
 def area_to_pixels(
     dpi: int,
     left_mm: float,
@@ -203,7 +212,7 @@ def area_to_pixels(
         return int(math.floor(v / 16 + 0.5)) * 16
 
     x1 = round16(_edge_px(left_mm, dpi))
-    x2 = min(round16(_edge_px(left_mm + width_mm, dpi)), max_x)
+    x2 = min(round16(_edge_px(left_mm + width_mm, dpi)), aligned_width(max_x))
     y1 = int(math.floor(_edge_px(top_mm, dpi) + 1e-6))
     y2 = min(int(math.floor(_edge_px(top_mm + height_mm, dpi) + 1e-6)), max_y)
     if x2 <= x1 or y2 <= y1:
@@ -213,7 +222,7 @@ def area_to_pixels(
 
 def feeder_area(lease: Lease) -> tuple[int, int, int, int]:
     """Feeder scans always use the full width and length; never a partial area."""
-    return 0, 0, lease.width_px, int(FEEDER_LENGTH_MM * lease.ydpi / 25.4 + 1e-6)
+    return 0, 0, aligned_width(lease.width_px), int(FEEDER_LENGTH_MM * lease.ydpi / 25.4 + 1e-6)
 
 
 # ---------------------------------------------------------------------------

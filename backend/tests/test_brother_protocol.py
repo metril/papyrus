@@ -53,6 +53,13 @@ def test_resolutions_restricted(dpi):
         bp.encode_lease_request(dpi, "TEXT")
 
 
+@pytest.mark.parametrize("lease_width, expected", [(826, 816), (1240, 1232), (1653, 1648), (2480, 2480), (3306, 3296), (4960, 4960)])
+def test_widths_are_aligned_to_16(lease_width, expected):
+    """Real lease widths per dpi: unaligned ones got 1-bit rows a byte short."""
+    assert bp.aligned_width(lease_width) == expected
+    assert bp.area_to_pixels(300, 0, 0, 9999, 10, lease_width, 3437)[2] == expected
+
+
 def test_feeder_area_is_full_page():
     lease = bp.parse_lease(lease_reply(adf=1, h_mm=0, h_px=0))
     assert bp.feeder_area(lease) == (0, 0, 2480, 4175)

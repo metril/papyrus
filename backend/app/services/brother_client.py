@@ -303,7 +303,7 @@ class BrotherScanClient:
             if source == "adf":
                 area = bp.feeder_area(lease)
             elif area_mm is None:
-                area = (0, 0, lease.width_px, lease.height_px)
+                area = (0, 0, bp.aligned_width(lease.width_px), lease.height_px)
             else:
                 area = bp.area_to_pixels(dpi, *area_mm, lease.width_px, lease.height_px)
 
