@@ -24,6 +24,7 @@ class CopyService:
         media: str = "A4",
         progress_callback=None,
         scan_dir: str | None = None,
+        on_scanned=None,
     ) -> dict:
         """Perform a copy: scan a page then print it.
 
@@ -62,6 +63,13 @@ class CopyService:
             logger.warning("Copy: scan step failed: %s", e)
             raise CopyError("Scan failed while making a copy")
 
+        # The scan is kept in history even if printing fails below.
+        if on_scanned is not None:
+            await on_scanned({
+                "scan_id": scan_id, "filepath": filepath, "format": fmt,
+                "page_count": page_count,
+            })
+
         # Step 2: Print the scanned image
         try:
             cups_job_id = await cups.create_held_job(
@@ -74,7 +82,9 @@ class CopyService:
             await cups.release_job(cups_job_id)
         except Exception as e:
             logger.warning("Copy: print step failed: %s", e)
-            raise CopyError("Print failed while making a copy")
+            raise CopyError(
+                "Print failed while making a copy. The scan was saved to the scan history."
+            )
 
         return {
             "scan_id": scan_id,

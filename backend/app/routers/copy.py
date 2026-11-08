@@ -43,6 +43,27 @@ async def create_copy(
     scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
     cups = CupsService(printer_name=queue)
 
+    async def record_scan(info: dict) -> None:
+        scan_job = ScanJob(
+            user_id=user.id,
+            scan_id=info["scan_id"],
+            status="completed",
+            resolution=request.resolution,
+            mode=request.mode,
+            format=info["format"],
+            page_count=info["page_count"],
+            source=request.source,
+            filepath=info["filepath"],
+            completed_at=datetime.now(timezone.utc),
+        )
+        db.add(scan_job)
+        await db.commit()
+        await db.refresh(scan_job)
+        await ws_manager.broadcast("scans", {
+            "type": "scan_completed",
+            "data": serialize_scan_job(scan_job),
+        })
+
     result = await copy_service.copy(
         cups=cups,
         device=device,
@@ -53,22 +74,8 @@ async def create_copy(
         duplex=request.duplex,
         media=request.media,
         scan_dir=scan_dir,
+        on_scanned=record_scan,
     )
-
-    # Record both the scan and print jobs
-    scan_job = ScanJob(
-        user_id=user.id,
-        scan_id=result["scan_id"],
-        status="completed",
-        resolution=request.resolution,
-        mode=request.mode,
-        format=result["format"],
-        page_count=result["page_count"],
-        source=request.source,
-        filepath=result["filepath"],
-        completed_at=datetime.now(timezone.utc),
-    )
-    db.add(scan_job)
 
     # The print job gets its own copy of the scanned file rather than
     # aliasing the scan's path (F29) — deleting either row's file must not
@@ -96,14 +103,9 @@ async def create_copy(
     db.add(print_job)
     await db.commit()
 
-    # Surface both records to connected clients incrementally, or they
+    # Surface the print record to connected clients incrementally, or it
     # wouldn't appear until a manual refetch.
-    await db.refresh(scan_job)
     await db.refresh(print_job)
-    await ws_manager.broadcast("scans", {
-        "type": "scan_completed",
-        "data": serialize_scan_job(scan_job),
-    })
     await ws_manager.broadcast("jobs", {
         "type": "job_created",
         "data": serialize_print_job(print_job),
