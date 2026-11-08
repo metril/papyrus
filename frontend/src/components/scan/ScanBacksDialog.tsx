@@ -55,8 +55,9 @@ export default function ScanBacksDialog({ scanId, onClose, onMerged }: ScanBacks
           Scan other side
         </h3>
         <p className="mb-4 text-sm text-gray-600 dark:text-gray-400">
-          Take the stack from the output tray, flip it over as one pile, and load it back into the
-          feeder. Keep the pages in order. The backs are scanned and slotted in after their fronts.
+          Take the pile from the output tray without turning it over, so the backs face up. Keep
+          the pages in order, turn the pile around flat so the top edges go in first, and load it.
+          The backs are scanned and slotted in after their fronts.
         </p>
 
         <div className="mb-4 space-y-3">
@@ -69,9 +70,9 @@ export default function ScanBacksDialog({ scanId, onClose, onMerged }: ScanBacks
               className="mt-0.5 h-4 w-4 shrink-0"
             />
             <span>
-              Flipped over the short edge (like a calendar)
+              Pages read like a calendar (short-edge flip)
               <span className="block text-xs text-gray-500 dark:text-gray-400">
-                Leave off if you turned the stack like the page of a book. Turns the backs 180°.
+                Leave off for pages that turn like a book. Turns the backs 180°.
               </span>
             </span>
           </label>
