@@ -47,6 +47,18 @@ class ExternalServiceError(PapyrusError):
     status_code = 502
 
 
+class ScanSourceError(PapyrusError):
+    """The requested scan source conflicts with the scanner's physical state."""
+
+    status_code = 409
+
+
+class ScanRequestError(PapyrusError):
+    """The scan parameters (resolution, area, mode) are not valid."""
+
+    status_code = 422
+
+
 class UploadTooLargeError(PapyrusError):
     """Raised when an upload exceeds its configured size cap."""
 
