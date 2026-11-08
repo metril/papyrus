@@ -19,6 +19,8 @@ import { useScanners, queryKeys } from '../../api/queries';
 import type { ManagedScanner, ManagedScannerCreate, ManagedScannerUpdate, DiscoveredDevice } from '../../types';
 import { SettingField } from './shared';
 
+const NATIVE_HOST_RE = /^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$/;
+
 export default function ScannersCard() {
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -39,6 +41,7 @@ export default function ScannersCard() {
   const [probeAirscanUrl, setProbeAirscanUrl] = useState<string | null>(null);
   const [probeProtocol, setProbeProtocol] = useState<string | null>(null);
   // Brother mode state
+  const [brotherDriver, setBrotherDriver] = useState<'native' | 'brscan4'>('native');
   const [brotherModel, setBrotherModel] = useState('');
   const [brotherDevice, setBrotherDevice] = useState('');
   const [brotherRegisterStatus, setBrotherRegisterStatus] = useState<'idle' | 'registering' | 'ok' | 'error'>('idle');
@@ -102,9 +105,13 @@ export default function ScannersCard() {
   const ipDevice = ipAddress
     ? `airscan:e:${form.name || 'Scanner'}:http://${ipAddress}/eSCL`
     : '';
+  const nativeHost = ipAddress.trim();
+  const nativeValid = NATIVE_HOST_RE.test(nativeHost);
+  const nativeDevice = nativeValid ? `brothernet:${nativeHost}` : '';
+  const nativeCandidates = discovered.filter((d) => d.driver === 'brothernet');
   const canAddScanner = form.name.trim() !== '' && (
     addMode === 'ip' ? ipAddress.trim() !== '' :
-    addMode === 'brother' ? brotherDevice.trim() !== '' :
+    addMode === 'brother' ? (brotherDriver === 'native' ? nativeValid : brotherDevice.trim() !== '') :
     form.device.trim() !== ''
   );
 
@@ -173,10 +180,10 @@ export default function ScannersCard() {
 
   const handleAdd = () => {
     const device = addMode === 'ip' ? (probeDevice || ipDevice)
-      : addMode === 'brother' ? brotherDevice
+      : addMode === 'brother' ? (brotherDriver === 'native' ? nativeDevice : brotherDevice)
       : form.device;
     if (!form.name || !device) return;
-    const extra = addMode === 'brother'
+    const extra = addMode === 'brother' && brotherDriver === 'brscan4'
       ? { post_scan_config: { brother_model: brotherModel, brother_ip: ipAddress } }
       : addMode === 'ip' && probeAirscanUrl && probeProtocol
       ? { post_scan_config: { airscan_url: probeAirscanUrl, airscan_protocol: probeProtocol } }
@@ -287,6 +294,7 @@ export default function ScannersCard() {
                           const r = testResults[s.id] as ScannerTestResult;
                           return (
                             <>
+                              {!r.native && (
                               <div className="flex items-center gap-1.5">
                                 <span className={`inline-flex items-center gap-1.5 ${r.escl_ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                                   <span aria-hidden="true" className={`led ${r.escl_ok ? 'text-green-500 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`} />
@@ -300,12 +308,16 @@ export default function ScannersCard() {
                                   <span className="text-gray-500 dark:text-gray-400">— {r.make_model}</span>
                                 )}
                               </div>
+                              )}
                               <div className="flex items-center gap-1.5">
                                 <span className={`inline-flex items-center gap-1.5 ${r.sane_ok ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
                                   <span aria-hidden="true" className={`led ${r.sane_ok ? 'text-green-500 dark:text-green-400' : 'text-red-500 dark:text-red-400'}`} />
-                                  SANE
+                                  {r.native ? 'Native' : 'SANE'}
                                   <span className="sr-only">{r.sane_ok ? 'OK' : 'failed'}</span>
                                 </span>
+                                {r.sane_ok && r.busy && (
+                                  <span className="text-gray-500 dark:text-gray-400">— busy</span>
+                                )}
                                 {!r.sane_ok && r.sane_error && (
                                   <span className="text-gray-500 dark:text-gray-400 truncate">{r.sane_error}</span>
                                 )}
@@ -398,11 +410,12 @@ export default function ScannersCard() {
                     <div className="space-y-1">
                       {discovered.map((d) => (
                         <button
-                          key={d.device}
-                          onClick={() => setForm((f) => ({ ...f, device: d.device, name: f.name || d.description }))}
-                          className={`block w-full text-left text-xs p-2 rounded-lg border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-500 hover:bg-gray-50 dark:hover:bg-gray-700 ${form.device === d.device ? 'border-ink-400 bg-ink-50 dark:border-ink-600 dark:bg-ink-950/30' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'}`}
+                          key={d.device ?? d.ip}
+                          disabled={!d.device}
+                          onClick={() => d.device && setForm((f) => ({ ...f, device: d.device!, name: f.name || d.description }))}
+                          className={`block w-full text-left text-xs p-2 rounded-lg border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-500 enabled:hover:bg-gray-50 dark:enabled:hover:bg-gray-700 disabled:opacity-60 ${form.device === d.device ? 'border-ink-400 bg-ink-50 dark:border-ink-600 dark:bg-ink-950/30' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'}`}
                         >
-                          <span className="font-mono break-all dark:text-gray-300">{d.device}</span>
+                          <span className="font-mono break-all dark:text-gray-300">{d.device ?? d.ip}</span>
                           {d.description && <span className="text-gray-500 dark:text-gray-400 ml-1">— {d.description}</span>}
                         </button>
                       ))}
@@ -417,49 +430,116 @@ export default function ScannersCard() {
 
             {addMode === 'brother' && (
               <div className="space-y-2">
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                  <SettingField label="Scanner name" value={form.name}
-                    onChange={(v) => setForm((f) => ({ ...f, name: v }))}
-                    placeholder="Brother DCP-L2540DW" />
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Model</label>
-                    <input
-                      type="text"
-                      value={brotherModel}
-                      onChange={(e) => setBrotherModel(e.target.value)}
-                      placeholder="DCP-L2540DW"
-                      className="w-full rounded-lg border border-gray-300 dark:border-gray-600 font-mono text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
-                    />
-                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Exact Brother model name (e.g. DCP-L2540DW)</p>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP address</label>
-                    <div className="flex gap-1">
-                      <input
-                        type="text"
-                        value={ipAddress}
-                        onChange={(e) => setIpAddress(e.target.value)}
-                        placeholder="10.10.77.50"
-                        className="flex-1 min-w-0 rounded-lg border border-gray-300 dark:border-gray-600 font-mono text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
-                      />
-                      <Button size="sm" onClick={handleBrotherRegister}
-                        disabled={!ipAddress || !brotherModel || !form.name || brotherRegisterStatus === 'registering'}>
-                        {brotherRegisterStatus === 'registering' ? '...' : 'Register'}
-                      </Button>
-                    </div>
-                  </div>
+                <div role="group" aria-label="Driver" className="inline-flex rounded-lg border border-gray-300 dark:border-gray-600 overflow-hidden text-xs">
+                  {(['native', 'brscan4'] as const).map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      aria-pressed={brotherDriver === d}
+                      onClick={() => setBrotherDriver(d)}
+                      className={`px-3 py-1 font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-500 ${brotherDriver === d ? 'bg-ink-600 text-white dark:bg-ink-500' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400'}`}
+                    >
+                      {d === 'native' ? 'Native' : 'brscan4'}
+                    </button>
+                  ))}
                 </div>
-                {brotherRegisterStatus === 'ok' && (
-                  <p className="inline-flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
-                    <span aria-hidden="true" className="led text-green-500 dark:text-green-400" />
-                    <span>Registered — device: <span className="font-mono break-all">{brotherDevice}</span></span>
-                  </p>
-                )}
-                {brotherRegisterStatus === 'error' && (
-                  <p className="inline-flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400">
-                    <span aria-hidden="true" className="led shrink-0 text-red-500 dark:text-red-400" />
-                    <span>{brotherError}</span>
-                  </p>
+
+                {brotherDriver === 'native' ? (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <SettingField label="Scanner name" value={form.name}
+                        onChange={(v) => setForm((f) => ({ ...f, name: v }))}
+                        placeholder="Brother DCP-L2540DW" />
+                      <div>
+                        <label htmlFor="native-ip" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP address</label>
+                        <div className="flex gap-1">
+                          <input
+                            id="native-ip"
+                            type="text"
+                            value={ipAddress}
+                            onChange={(e) => setIpAddress(e.target.value)}
+                            placeholder="10.10.77.50"
+                            className="flex-1 min-w-0 rounded-lg border border-gray-300 dark:border-gray-600 font-mono text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+                          />
+                          <Button size="sm" variant="secondary" onClick={handleDiscover} disabled={discovering}>
+                            {discovering ? 'Scanning…' : 'Scan network'}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                    {nativeCandidates.length > 0 && (
+                      <div className="space-y-1">
+                        {nativeCandidates.map((d) => (
+                          <button
+                            key={d.ip}
+                            type="button"
+                            disabled={!d.supported}
+                            onClick={() => {
+                              setIpAddress(d.ip ?? '');
+                              setForm((f) => ({ ...f, name: f.name || d.description.replace(/ \(.*\)$/, '') }));
+                            }}
+                            className={`block w-full text-left text-xs p-2 rounded-lg border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ink-500 enabled:hover:bg-gray-50 dark:enabled:hover:bg-gray-700 disabled:opacity-60 ${ipAddress === d.ip ? 'border-ink-400 bg-ink-50 dark:border-ink-600 dark:bg-ink-950/30' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'}`}
+                          >
+                            <span className="font-mono dark:text-gray-300">{d.ip}</span>
+                            <span className="text-gray-500 dark:text-gray-400 ml-1">— {d.description}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {nativeDevice && (
+                      <p className="text-xs text-gray-500 dark:text-gray-400">Device string: <span className="font-mono break-all">{nativeDevice}</span></p>
+                    )}
+                    {nativeHost !== '' && !nativeValid && (
+                      <p className="text-xs text-red-600 dark:text-red-400">Enter a valid IP address or hostname.</p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      <SettingField label="Scanner name" value={form.name}
+                        onChange={(v) => setForm((f) => ({ ...f, name: v }))}
+                        placeholder="Brother DCP-L2540DW" />
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Model</label>
+                        <input
+                          type="text"
+                          value={brotherModel}
+                          onChange={(e) => setBrotherModel(e.target.value)}
+                          placeholder="DCP-L2540DW"
+                          className="w-full rounded-lg border border-gray-300 dark:border-gray-600 font-mono text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+                        />
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Exact Brother model name (e.g. DCP-L2540DW)</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">IP address</label>
+                        <div className="flex gap-1">
+                          <input
+                            type="text"
+                            value={ipAddress}
+                            onChange={(e) => setIpAddress(e.target.value)}
+                            placeholder="10.10.77.50"
+                            className="flex-1 min-w-0 rounded-lg border border-gray-300 dark:border-gray-600 font-mono text-sm p-2 bg-white dark:bg-gray-800 dark:text-gray-100"
+                          />
+                          <Button size="sm" onClick={handleBrotherRegister}
+                            disabled={!ipAddress || !brotherModel || !form.name || brotherRegisterStatus === 'registering'}>
+                            {brotherRegisterStatus === 'registering' ? '...' : 'Register'}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                    {brotherRegisterStatus === 'ok' && (
+                      <p className="inline-flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+                        <span aria-hidden="true" className="led text-green-500 dark:text-green-400" />
+                        <span>Registered — device: <span className="font-mono break-all">{brotherDevice}</span></span>
+                      </p>
+                    )}
+                    {brotherRegisterStatus === 'error' && (
+                      <p className="inline-flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400">
+                        <span aria-hidden="true" className="led shrink-0 text-red-500 dark:text-red-400" />
+                        <span>{brotherError}</span>
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
             )}
