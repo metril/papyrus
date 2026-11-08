@@ -13,7 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user, require_permission
 from app.auth.ws import authenticate_websocket, has_ws_permission
 from app.database import async_session, get_db
-from app.exceptions import BacksMismatchError, BacksNotEligibleError, PapyrusError, user_message
+from app.exceptions import (
+    BacksMismatchError,
+    BacksNotEligibleError,
+    NotFoundError,
+    PapyrusError,
+    user_message,
+)
 from app.models import CloudProvider, ScanJob, Scanner, ScanProfile, SMBShare, User
 from app.schemas import (
     BulkDeleteResponse,
@@ -575,10 +581,18 @@ async def enhance_scan(
 
 class BacksRequest(BaseModel):
     rotate_backs: bool = False
-    skip_blank_backs: bool = True
+    skip_blank_backs: bool = False
+    reverse_backs: bool = True
 
 
-@router.post("/scans/{scan_id}/backs", response_model=ScanResponse)
+class BacksResponse(BaseModel):
+    merged: ScanResponse
+    backs: ScanResponse
+    fronts: ScanResponse
+    blanks_dropped: int
+
+
+@router.post("/scans/{scan_id}/backs", response_model=BacksResponse)
 async def scan_backs(
     scan_id: str,
     body: BacksRequest,
@@ -586,14 +600,16 @@ async def scan_backs(
     db: AsyncSession = Depends(get_db),
 ):
     """Scan the other side of a feeder PDF: the user flips the stack, the
-    feeder scans the backs, and they are interleaved into the original PDF.
+    feeder scans the backs, and fronts and backs are interleaved into a NEW
+    scan. The fronts and the backs both stay in history untouched, so a wrong
+    physical order can simply be deleted and redone.
     """
     from app.routers.settings import get_setting
 
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    if job is None or (job.user_id not in (None, user.id) and user.role != "admin"):
+        raise NotFoundError("Scan not found")
     if (
         job.status != "completed"
         or job.source != "ADF"
@@ -604,73 +620,118 @@ async def scan_backs(
         raise BacksNotEligibleError(
             "Only a finished feeder scan saved as a PDF can have its other side scanned."
         )
+    if job.duplex_merged:
+        raise BacksNotEligibleError(
+            "This scan is already part of a double-sided merge. "
+            "Delete the merged scan first if you want to redo it."
+        )
 
     scanner = await db.get(Scanner, job.scanner_id) if job.scanner_id else None
     if scanner is None:
         scanner = await get_default_scanner(db)
     device = scanner.device if scanner else await get_default_scanner_device(db)
     scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
+    filename_template = (
+        await get_setting(db, "scan_filename_template") or "scan_{date}_{time}_{id}"
+    )
+    front_path, resolution, mode = job.filepath, job.resolution, job.mode
+    scanner_id = job.scanner_id
+    # Release the transaction before the long feeder scan, like /scan does.
+    await db.commit()
 
     # Nothing has changed yet if this raises (busy scanner, empty feeder).
     backs_id, backs_path, backs_count = await scan_service.scan_batch(
-        resolution=job.resolution, mode=job.mode, device=device, scan_dir=scan_dir,
+        resolution=resolution, mode=mode, device=device, scan_dir=scan_dir,
     )
 
-    async def keep_backs_as_scan() -> None:
-        kept = ScanJob(
+    def new_row(row_scan_id: str, path: str, pages: int, merged: bool) -> ScanJob:
+        return ScanJob(
             user_id=user.id,
-            scan_id=backs_id,
-            resolution=job.resolution,
-            mode=job.mode,
+            scan_id=row_scan_id,
+            resolution=resolution,
+            mode=mode,
             format="pdf",
             source="ADF",
-            page_count=backs_count,
-            filepath=backs_path,
-            file_size=os.path.getsize(backs_path),
+            page_count=pages,
+            filepath=path,
+            file_size=os.path.getsize(path),
             status="completed",
             completed_at=datetime.now(timezone.utc),
-            scanner_id=job.scanner_id,
+            scanner_id=scanner_id,
+            duplex_merged=merged,
         )
+
+    async def broadcast(*rows: ScanJob) -> None:
+        for row in rows:
+            await ws_manager.broadcast("scans", {
+                "type": "scan_completed", "data": serialize_scan_job(row)
+            })
+
+    async def keep_backs_only() -> None:
+        kept = new_row(backs_id, backs_path, backs_count, False)
         db.add(kept)
         await db.commit()
         await db.refresh(kept)
-        await ws_manager.broadcast("scans", {
-            "type": "scan_completed", "data": serialize_scan_job(kept)
-        })
+        await broadcast(kept)
 
+    merged_id = str(uuid.uuid4())
+    merged_path = os.path.join(scan_dir, f"{merged_id}.pdf")
     try:
-        async with lock_for(job.filepath):
-            merged = await asyncio.to_thread(
-                duplex_service.merge_backs_in_place,
-                job.filepath,
+        async with lock_for(front_path):
+            outcome = await asyncio.to_thread(
+                duplex_service.merge_backs_atomic,
+                front_path,
                 backs_path,
+                merged_path,
                 rotate_backs=body.rotate_backs,
                 skip_blank_backs=body.skip_blank_backs,
+                reverse_backs=body.reverse_backs,
             )
     except duplex_service.PageCountMismatchError as e:
-        await keep_backs_as_scan()
+        await keep_backs_only()
         raise BacksMismatchError(
             f"The front scan has {e.fronts} pages but the back scan has {e.backs}. "
             "Nothing was merged; both scans are in your history."
         )
     except Exception:
         logger.exception("Merging back sides failed")
-        await keep_backs_as_scan()
+        await keep_backs_only()
         raise BacksMismatchError(
             "The pages could not be combined. The original scan is unchanged and "
             "the back-side scan was saved to your history."
         )
 
-    job.page_count = merged.page_count
-    job.file_size = os.path.getsize(job.filepath)
-    await db.commit()
     await db.refresh(job)
-    invalidate_thumbnail(job.filepath)
-    await asyncio.to_thread(cleanup_file, backs_path)
-    await ws_manager.broadcast("scans", {
-        "type": "scan_completed", "data": serialize_scan_job(job)
-    })
-    return job
+    job.duplex_merged = True
+    backs_row = new_row(backs_id, backs_path, backs_count, False)
+    merged_row = new_row(merged_id, merged_path, outcome.page_count, True)
+    db.add_all([backs_row, merged_row])
+    await db.commit()
+    await db.refresh(merged_row)
+
+    await log_event(db, "scan.complete", "scan_job", merged_id, user_id=user.id,
+                    detail={"format": "pdf", "pages": outcome.page_count, "duplex": True})
+    await db.commit()
+    await dispatch_webhook(
+        db, "scan.complete", {"scan_id": merged_id, "format": "pdf", "pages": outcome.page_count}
+    )
+    scanner = await db.get(Scanner, scanner_id) if scanner_id else None
+    if scanner is None:
+        scanner = await get_default_scanner(db)
+    if scanner and scanner.auto_deliver:
+        await run_post_scan_actions(
+            merged_row, scanner, db, default_filename_template=filename_template
+        )
+        merged_row.file_size = os.path.getsize(merged_path)
+        await db.commit()
+
+    await db.refresh(job)
+    await db.refresh(backs_row)
+    await db.refresh(merged_row)
+    await broadcast(job, backs_row, merged_row)
+    return BacksResponse(
+        merged=merged_row, backs=backs_row, fronts=job, blanks_dropped=outcome.blanks_dropped
+    )
 
 
 @router.post("/scans/{scan_id}/smb")

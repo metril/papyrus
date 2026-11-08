@@ -41,6 +41,7 @@ const rawScan: ScanJob = {
   error_message: null,
   created_at: '2026-07-04T00:00:00Z',
   completed_at: '2026-07-04T00:00:00Z',
+  duplex_merged: false,
 };
 
 const printItem: HistoryItem = {
@@ -218,6 +219,7 @@ describe('HistoryRow scan other side', () => {
     ['flatbed', { source: 'Flatbed' as const }],
     ['image', { format: 'png' as const }],
     ['failed', { status: 'failed' as const }],
+    ['already merged', { duplex_merged: true }],
   ])('is hidden for a %s scan', (_name, over) => {
     render(<HistoryRowComponent {...makeProps({ item: adf(over) })} />);
     expect(screen.queryByRole('button', { name: /scan other side/i })).toBeNull();

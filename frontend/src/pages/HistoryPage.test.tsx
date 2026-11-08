@@ -64,6 +64,7 @@ const scan: ScanJob = {
   error_message: null,
   created_at: '2026-07-04T00:00:00Z',
   completed_at: '2026-07-04T00:00:00Z',
+  duplex_merged: false,
 };
 
 describe('HistoryPage', () => {

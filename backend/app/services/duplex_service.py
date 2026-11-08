@@ -7,6 +7,7 @@ document is f1, b_n, f2, b_(n-1), ...
 
 import io
 import os
+import stat
 import tempfile
 from dataclasses import dataclass
 
@@ -18,7 +19,7 @@ from pypdf import PageObject, PdfReader, PdfWriter
 # darker marks. Losing real content is far worse than keeping a blank page,
 # so both limits err on the side of keeping.
 BLANK_ANALYSIS_MAX_DIM = 400
-BLANK_MARGIN_FRACTION = 0.08
+BLANK_MARGIN_FRACTION = 0.03  # headers, footers and page numbers sit just inside this
 BLANK_MIN_PAPER_LEVEL = 150  # median brightness (0-255) below this is never blank
 BLANK_INK_DELTA = 25  # a pixel this much darker than the paper counts as ink
 # A lone "Page 2" at 150 dpi covers ~0.04% of the page and noise covers 0%,
@@ -83,9 +84,13 @@ def merge_backs(
     out_path: str,
     *,
     rotate_backs: bool = False,
-    skip_blank_backs: bool = True,
+    skip_blank_backs: bool = False,
+    reverse_backs: bool = True,
 ) -> MergeResult:
     """Write the interleaved document to ``out_path``.
+
+    ``reverse_backs`` is true when the stack was flipped, so backs arrive
+    last-sheet-first.
 
     Raises ``PageCountMismatchError`` before writing anything if the counts differ.
     """
@@ -100,7 +105,7 @@ def merge_backs(
     try:
         for i in range(n):
             writer.add_page(fronts.pages[i])
-            back = backs.pages[n - 1 - i]
+            back = backs.pages[n - 1 - i if reverse_backs else i]
             if skip_blank_backs and is_blank_page(back):
                 dropped += 1
                 continue
@@ -114,25 +119,44 @@ def merge_backs(
     return MergeResult(page_count=2 * n - dropped, blanks_dropped=dropped)
 
 
-def merge_backs_in_place(
+def _fsync_path(path: str, mode_from: str | None = None) -> None:
+    fd = os.open(path, os.O_RDWR)
+    try:
+        if mode_from:
+            os.fchmod(fd, stat.S_IMODE(os.stat(mode_from).st_mode))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def merge_backs_atomic(
     front_path: str,
     back_path: str,
+    out_path: str,
     *,
     rotate_backs: bool = False,
-    skip_blank_backs: bool = True,
+    skip_blank_backs: bool = False,
+    reverse_backs: bool = True,
 ) -> MergeResult:
-    """Merge into a temp file beside ``front_path`` and swap it in atomically,
-    so any failure leaves the original untouched."""
-    fd, tmp_path = tempfile.mkstemp(
-        dir=os.path.dirname(front_path) or ".", prefix=".duplex_", suffix=".pdf"
-    )
+    """Merge into a temp file beside ``out_path``, give it the fronts' file
+    mode, sync it to disk, then swap it in, so a crash or failure never leaves
+    a partial ``out_path``."""
+    directory = os.path.dirname(out_path) or "."
+    fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".duplex_", suffix=".pdf")
     os.close(fd)
     try:
         result = merge_backs(
             front_path, back_path, tmp_path,
             rotate_backs=rotate_backs, skip_blank_backs=skip_blank_backs,
+            reverse_backs=reverse_backs,
         )
-        os.replace(tmp_path, front_path)
+        _fsync_path(tmp_path, mode_from=front_path)
+        os.replace(tmp_path, out_path)
+        dir_fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
         return result
     finally:
         if os.path.exists(tmp_path):

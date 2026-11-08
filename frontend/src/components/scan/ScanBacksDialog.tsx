@@ -3,11 +3,14 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import Button from '../common/Button';
 import { scanBacks } from '../../api/scanner';
+import type { ScanBacksResult } from '../../api/scanner';
 import { queryKeys } from '../../api/queries';
 
 interface ScanBacksDialogProps {
   scanId: string;
   onClose: () => void;
+  /** Called once the merge succeeded, so the caller can drop stale "scan other side" state. */
+  onMerged?: () => void;
 }
 
 function errorText(error: unknown): string {
@@ -17,10 +20,10 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : 'Scanning the other side failed';
 }
 
-export default function ScanBacksDialog({ scanId, onClose }: ScanBacksDialogProps) {
+export default function ScanBacksDialog({ scanId, onClose, onMerged }: ScanBacksDialogProps) {
   const queryClient = useQueryClient();
   const [rotateBacks, setRotateBacks] = useState(false);
-  const [skipBlankBacks, setSkipBlankBacks] = useState(true);
+  const [skipBlankBacks, setSkipBlankBacks] = useState(false);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -31,9 +34,10 @@ export default function ScanBacksDialog({ scanId, onClose }: ScanBacksDialogProp
       queryClient.invalidateQueries({ queryKey: queryKeys.scans.list() });
       queryClient.invalidateQueries({ queryKey: queryKeys.scans.historyAll });
     },
-    onSuccess: onClose,
+    onSuccess: () => onMerged?.(),
   });
   const scanning = mutation.isPending;
+  const done: ScanBacksResult | undefined = mutation.data;
 
   return (
     <div
@@ -61,7 +65,7 @@ export default function ScanBacksDialog({ scanId, onClose }: ScanBacksDialogProp
               type="checkbox"
               checked={rotateBacks}
               onChange={(e) => setRotateBacks(e.target.checked)}
-              disabled={scanning}
+              disabled={scanning || !!done}
               className="mt-0.5 h-4 w-4 shrink-0"
             />
             <span>
@@ -76,13 +80,28 @@ export default function ScanBacksDialog({ scanId, onClose }: ScanBacksDialogProp
               type="checkbox"
               checked={skipBlankBacks}
               onChange={(e) => setSkipBlankBacks(e.target.checked)}
-              disabled={scanning}
+              disabled={scanning || !!done}
               className="mt-0.5 h-4 w-4 shrink-0"
             />
-            <span>Remove blank backs</span>
+            <span>
+              Remove blank backs
+              <span className="block text-xs text-gray-500 dark:text-gray-400">
+                Off by default: a nearly empty page can be mistaken for blank. Check the result.
+              </span>
+            </span>
           </label>
         </div>
 
+        {done && (
+          <p role="status" className="mb-3 text-sm text-green-700 dark:text-green-400">
+            Added a merged scan with {done.merged.page_count} pages
+            {done.blanks_dropped > 0
+              ? `, ${done.blanks_dropped} blank back${done.blanks_dropped > 1 ? 's' : ''} removed`
+              : ''}
+            . The front and back scans are still in your history; delete whichever you do not
+            need.
+          </p>
+        )}
         {scanning && (
           <p role="status" className="mb-3 text-sm text-gray-600 dark:text-gray-400">
             Scanning the backs. This can take a minute or more; keep this window open.
@@ -96,11 +115,13 @@ export default function ScanBacksDialog({ scanId, onClose }: ScanBacksDialogProp
 
         <div className="flex justify-end gap-2">
           <Button variant="ghost" onClick={onClose} disabled={scanning}>
-            {mutation.isError ? 'Close' : 'Cancel'}
+            {mutation.isError || done ? 'Close' : 'Cancel'}
           </Button>
-          <Button onClick={() => mutation.mutate()} disabled={scanning}>
-            {scanning ? 'Scanning...' : 'Start'}
-          </Button>
+          {!done && (
+            <Button onClick={() => mutation.mutate()} disabled={scanning}>
+              {scanning ? 'Scanning...' : 'Start'}
+            </Button>
+          )}
         </div>
       </div>
     </div>

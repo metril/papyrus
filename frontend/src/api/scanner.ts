@@ -32,9 +32,19 @@ export interface ScanBacksOptions {
   skip_blank_backs: boolean;
 }
 
-/** Scans the other side of a feeder PDF and merges it in. The request stays
- * open for the whole feeder scan, so no client timeout is applied. */
-export async function scanBacks(scanId: string, options: ScanBacksOptions): Promise<ScanJob> {
+export interface ScanBacksResult {
+  merged: ScanJob;
+  backs: ScanJob;
+  fronts: ScanJob;
+  blanks_dropped: number;
+}
+
+/** Scans the other side of a feeder PDF and merges it into a new scan. The
+ * request stays open for the whole feeder scan, so no client timeout is applied. */
+export async function scanBacks(
+  scanId: string,
+  options: ScanBacksOptions,
+): Promise<ScanBacksResult> {
   const { data } = await api.post(`/scanner/scans/${scanId}/backs`, options);
   return data;
 }

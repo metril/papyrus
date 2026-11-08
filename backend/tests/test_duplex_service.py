@@ -1,5 +1,6 @@
 """Pure merge tests for two-pass duplex (no DB)."""
 import os
+import stat
 
 import numpy as np
 import pytest
@@ -50,14 +51,14 @@ def test_blank_backs_are_dropped_after_pairing(tmp_path):
         [(1, "text"), (2, "text"), (3, "text")],
         [(11, "blank"), (12, "text"), (13, "blank")],
     )
-    result = ds.merge_backs(f, b, out)
+    result = ds.merge_backs(f, b, out, skip_blank_backs=True)
     assert tags(out) == [1, 2, 12, 3]
     assert result.page_count == 4 and result.blanks_dropped == 2
 
 
-def test_blank_skip_can_be_disabled(tmp_path):
+def test_blank_backs_kept_by_default(tmp_path):
     f, b, out = _pdfs(tmp_path, [(1, "text")], [(11, "blank")])
-    ds.merge_backs(f, b, out, skip_blank_backs=False)
+    ds.merge_backs(f, b, out)
     assert tags(out) == [1, 11]
 
 
@@ -92,7 +93,7 @@ def test_scanner_noise_and_faint_show_through_are_blank():
 
 def test_single_text_line_back_is_kept(tmp_path):
     f, b, out = _pdfs(tmp_path, [(1, "text")], [(11, "line")])
-    ds.merge_backs(f, b, out)
+    ds.merge_backs(f, b, out, skip_blank_backs=True)
     assert tags(out) == [1, 11]
 
 
@@ -109,27 +110,60 @@ def test_count_mismatch_raises_and_writes_nothing(tmp_path):
     assert not os.path.exists(out)
 
 
-def test_in_place_replaces_original(tmp_path):
-    f, b, _ = _pdfs(tmp_path, [(1, "text"), (2, "text")], [(11, "text"), (12, "text")])
-    result = ds.merge_backs_in_place(f, b)
-    assert tags(f) == [1, 12, 2, 11] and result.page_count == 4
+def test_atomic_writes_new_file_and_leaves_inputs(tmp_path):
+    f, b, out = _pdfs(tmp_path, [(1, "text"), (2, "text")], [(11, "text"), (12, "text")])
+    fb, bb = open(f, "rb").read(), open(b, "rb").read()
+    result = ds.merge_backs_atomic(f, b, out)
+    assert tags(out) == [1, 12, 2, 11] and result.page_count == 4
+    assert open(f, "rb").read() == fb and open(b, "rb").read() == bb
     assert [n for n in os.listdir(tmp_path) if n.startswith(".duplex_")] == []
 
 
-def test_in_place_failure_leaves_original_and_no_temp(tmp_path):
-    f, _, _ = _pdfs(tmp_path, [(1, "text")], [(11, "text")])
+def test_atomic_copies_the_fronts_file_mode(tmp_path):
+    f, b, out = _pdfs(tmp_path, [(1, "text")], [(11, "text")])
+    os.chmod(f, 0o640)
+    ds.merge_backs_atomic(f, b, out)
+    assert stat.S_IMODE(os.stat(out).st_mode) == 0o640
+
+
+def test_atomic_failure_writes_nothing_and_no_temp(tmp_path):
+    f, _, out = _pdfs(tmp_path, [(1, "text")], [(11, "text")])
     bad = tmp_path / "bad.pdf"
     bad.write_bytes(b"not a pdf")
-    before = open(f, "rb").read()
     with pytest.raises(Exception):
-        ds.merge_backs_in_place(f, str(bad))
-    assert open(f, "rb").read() == before
+        ds.merge_backs_atomic(f, str(bad), out)
+    assert not os.path.exists(out)
     assert [n for n in os.listdir(tmp_path) if n.startswith(".duplex_")] == []
 
 
-def test_in_place_mismatch_leaves_original(tmp_path):
-    f, b, _ = _pdfs(tmp_path, [(1, "text"), (2, "text")], [(11, "text")])
-    before = open(f, "rb").read()
+def test_atomic_mismatch_writes_nothing(tmp_path):
+    f, b, out = _pdfs(tmp_path, [(1, "text"), (2, "text")], [(11, "text")])
     with pytest.raises(ds.PageCountMismatchError):
-        ds.merge_backs_in_place(f, b)
-    assert open(f, "rb").read() == before
+        ds.merge_backs_atomic(f, b, out)
+    assert not os.path.exists(out)
+
+
+def test_reverse_backs_false_keeps_scan_order(tmp_path):
+    f, b, out = _pdfs(tmp_path, [(1, "text"), (2, "text")], [(11, "text"), (12, "text")])
+    ds.merge_backs(f, b, out, reverse_backs=False)
+    assert tags(out) == [1, 11, 2, 12]
+
+
+@pytest.mark.parametrize("where", ["footer", "header", "left", "right"])
+def test_marks_in_the_outer_margin_zone_are_kept(where):
+    w, h = 1240, 1754
+    pos = {
+        "footer": (w // 2, int(h * 0.95)),
+        "header": (w // 2, int(h * 0.04)),
+        "left": (int(w * 0.04), h // 2),
+        "right": (int(w * 0.93), h // 2),
+    }[where]
+    img = Image.new("L", (w, h), 255)
+    ImageDraw.Draw(img).text(pos, "Page 7", fill=0, font=ImageFont.load_default(size=18))
+    assert not ds.is_blank_image(img)
+
+
+def test_margin_signature_is_kept():
+    img = Image.new("L", (1240, 1754), 255)
+    ImageDraw.Draw(img).line((1180, 1650, 1225, 1620), fill=0, width=3)
+    assert not ds.is_blank_image(img)

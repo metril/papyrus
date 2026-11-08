@@ -96,3 +96,10 @@ async def test_paper_without_default_printer_is_null(db, user_client):
     resp = await user_client.get("/api/printer/paper")
     assert resp.status_code == 200
     assert resp.json() == {"media": None}
+
+
+async def test_paper_with_garbage_printer_uri_is_null(db, user_client):
+    db.add(Printer(display_name="B", cups_name="b", uri="ipp://[::1", is_default=True))
+    await db.commit()
+    resp = await user_client.get("/api/printer/paper")
+    assert resp.status_code == 200 and resp.json() == {"media": None}

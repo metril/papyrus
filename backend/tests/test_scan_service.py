@@ -411,7 +411,10 @@ def _option(cmd, name):
     "device, mode, expected_mode, expected_source",
     [
         ("brother4:net1;dev0", "Color", "24bit Color", "Automatic Document Feeder(left aligned)"),
-        ("brother4:net1;dev0", "Lineart", "Black & White", "Automatic Document Feeder(left aligned)"),
+        (
+            "brother4:net1;dev0", "Lineart", "Black & White",
+            "Automatic Document Feeder(left aligned)",
+        ),
         ("test:device", "Color", "Color", "ADF"),
     ],
 )

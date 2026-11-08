@@ -53,7 +53,10 @@ def test_resolutions_restricted(dpi):
         bp.encode_lease_request(dpi, "TEXT")
 
 
-@pytest.mark.parametrize("lease_width, expected", [(826, 816), (1240, 1232), (1653, 1648), (2480, 2480), (3306, 3296), (4960, 4960)])
+@pytest.mark.parametrize(
+    "lease_width, expected",
+    [(826, 816), (1240, 1232), (1653, 1648), (2480, 2480), (3306, 3296), (4960, 4960)],
+)
 def test_widths_are_aligned_to_16(lease_width, expected):
     """Real lease widths per dpi: unaligned ones got 1-bit rows a byte short."""
     assert bp.aligned_width(lease_width) == expected

@@ -292,3 +292,19 @@ def test_module_exposes_public_api():
     assert callable(ipp_client.get_printer_attributes)
     assert callable(ipp_client.probe_ipp)
     assert issubclass(ipp_client.IppError, Exception)
+
+
+async def test_ipv6_host_is_bracketed_and_ipps_uses_https(monkeypatch):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["body"] = request.content
+        return httpx.Response(200, content=_resp_header() + bytes([0x03]))
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(http_client_module, "_client", client, raising=False)
+    monkeypatch.setattr(ipp_client, "get_http_client", lambda: client)
+    await get_printer_attributes("fe80::1", 8443, "/ipp/print", scheme="ipps")
+    assert seen["url"].startswith("https://[fe80::1]:8443/")
+    assert b"ipps://[fe80::1]:8443/ipp/print" in seen["body"]

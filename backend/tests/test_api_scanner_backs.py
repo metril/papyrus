@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from app.auth.tokens import hash_token
 from app.exceptions import ScannerBusyError
-from app.models import APIToken, ScanJob, User
+from app.models import APIToken, ScanJob, Scanner, User
 from app.routers import scanner as scanner_router
 from app.services import duplex_service
 from app.services.scan_service import ScanError
@@ -36,6 +36,14 @@ async def _fake_device(_db) -> str:
 
 
 def _patch(monkeypatch, tmp_path, specs, error=None):
+    from app.routers import settings as settings_router
+
+    real_get_setting = settings_router.get_setting
+
+    async def get_setting(db, key):
+        return str(tmp_path) if key == "scan_dir" else await real_get_setting(db, key)
+
+    monkeypatch.setattr(settings_router, "get_setting", get_setting)
     fake = _FakeScanService(tmp_path, specs, error)
     monkeypatch.setattr(scanner_router, "scan_service", fake)
     monkeypatch.setattr(scanner_router, "get_default_scanner_device", _fake_device)
@@ -58,49 +66,95 @@ async def _seed(db, tmp_path, fronts, **overrides) -> ScanJob:
     return job
 
 
-async def _kept(db) -> ScanJob:
-    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == "backs-scan-id"))
-    return result.scalar_one()
+async def _row(db, scan_id) -> ScanJob:
+    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
+    row = result.scalar_one()
+    await db.refresh(row)
+    return row
+
+
+async def _all(db) -> list[ScanJob]:
+    return list((await db.execute(select(ScanJob))).scalars().all())
 
 
 URL = "/api/scanner/scans/front-scan-id/backs"
 FRONTS = [(1, "text"), (2, "text"), (3, "text")]
+BACKS = [(11, "text"), (12, "text"), (13, "text")]
 
 
-async def test_merges_backs_into_original(db, user_client, monkeypatch, tmp_path):
+async def test_merge_creates_new_row_and_keeps_fronts_and_backs(
+    db, user_client, monkeypatch, tmp_path
+):
     job = await _seed(db, tmp_path, FRONTS)
-    fake = _patch(monkeypatch, tmp_path, [(11, "text"), (12, "text"), (13, "text")])
+    before = open(job.filepath, "rb").read()
+    fake = _patch(monkeypatch, tmp_path, BACKS)
     resp = await user_client.post(URL, json={})
     assert resp.status_code == 200
     body = resp.json()
-    assert body["scan_id"] == "front-scan-id" and body["page_count"] == 6
-    assert tags(job.filepath) == [1, 13, 2, 12, 3, 11]
-    assert body["file_size"] == os.path.getsize(job.filepath)
-    assert not os.path.exists(tmp_path / "backs.pdf")
-    # Reuses the original's resolution and mode, and the default device.
+    merged = body["merged"]
+    assert merged["scan_id"] not in ("front-scan-id", "backs-scan-id")
+    assert merged["page_count"] == 6 and merged["duplex_merged"] is True
+    assert merged["source"] == "ADF" and merged["status"] == "completed"
+    assert body["blanks_dropped"] == 0
+    merged_row = await _row(db, merged["scan_id"])
+    assert tags(merged_row.filepath) == [1, 13, 2, 12, 3, 11]
+    assert merged["file_size"] == os.path.getsize(merged_row.filepath)
+    # Fronts untouched on disk; backs kept as their own completed row.
+    assert open(job.filepath, "rb").read() == before
+    backs = await _row(db, "backs-scan-id")
+    assert backs.status == "completed" and backs.page_count == 3 and not backs.duplex_merged
+    assert os.path.exists(backs.filepath)
+    fronts = await _row(db, "front-scan-id")
+    assert fronts.duplex_merged is True and fronts.page_count == 3
+    assert len(await _all(db)) == 3
     assert fake.calls[0]["resolution"] == 200 and fake.calls[0]["mode"] == "Gray"
     assert fake.calls[0]["device"] == "test:device0"
-    count = (await db.execute(select(ScanJob))).scalars().all()
-    assert len(count) == 1
 
 
-async def test_blank_backs_removed_by_default(db, user_client, monkeypatch, tmp_path):
-    job = await _seed(db, tmp_path, FRONTS)
+async def test_broadcasts_scan_completed_per_row(db, user_client, monkeypatch, tmp_path):
+    await _seed(db, tmp_path, FRONTS)
+    _patch(monkeypatch, tmp_path, BACKS)
+    sent = []
+
+    async def fake_broadcast(channel, message):
+        sent.append((channel, message))
+
+    monkeypatch.setattr(scanner_router.ws_manager, "broadcast", fake_broadcast)
+    resp = await user_client.post(URL, json={})
+    ids = [
+        m["data"]["scan_id"] for c, m in sent
+        if c == "scans" and m["type"] == "scan_completed"
+    ]
+    merged_id = resp.json()["merged"]["scan_id"]
+    assert sorted(ids) == sorted(["front-scan-id", "backs-scan-id", merged_id])
+
+
+async def test_blank_removal_is_off_by_default_and_opt_in(db, user_client, monkeypatch, tmp_path):
+    await _seed(db, tmp_path, FRONTS)
     _patch(monkeypatch, tmp_path, [(11, "blank"), (12, "text"), (13, "blank")])
-    resp = await user_client.post(URL, json={"rotate_backs": True})
-    assert resp.status_code == 200 and resp.json()["page_count"] == 4
-    assert tags(job.filepath) == [1, 2, 12, 3]
+    resp = await user_client.post(URL, json={})
+    assert resp.json()["merged"]["page_count"] == 6 and resp.json()["blanks_dropped"] == 0
 
 
-async def test_blank_backs_kept_when_disabled(db, user_client, monkeypatch, tmp_path):
-    job = await _seed(db, tmp_path, [(1, "text")])
-    _patch(monkeypatch, tmp_path, [(11, "blank")])
-    resp = await user_client.post(URL, json={"skip_blank_backs": False})
-    assert resp.status_code == 200
-    assert tags(job.filepath) == [1, 11]
+async def test_blank_backs_removed_when_requested(db, user_client, monkeypatch, tmp_path):
+    await _seed(db, tmp_path, FRONTS)
+    _patch(monkeypatch, tmp_path, [(11, "blank"), (12, "text"), (13, "blank")])
+    resp = await user_client.post(URL, json={"skip_blank_backs": True, "rotate_backs": True})
+    body = resp.json()
+    assert body["merged"]["page_count"] == 4 and body["blanks_dropped"] == 2
+    assert tags((await _row(db, body["merged"]["scan_id"])).filepath) == [1, 2, 12, 3]
 
 
-async def test_count_mismatch_keeps_both(db, user_client, monkeypatch, tmp_path):
+async def test_reverse_backs_false(db, user_client, monkeypatch, tmp_path):
+    await _seed(db, tmp_path, [(1, "text"), (2, "text")])
+    _patch(monkeypatch, tmp_path, [(11, "text"), (12, "text")])
+    resp = await user_client.post(URL, json={"reverse_backs": False})
+    assert tags((await _row(db, resp.json()["merged"]["scan_id"])).filepath) == [1, 11, 2, 12]
+
+
+async def test_count_mismatch_keeps_both_and_creates_no_merge(
+    db, user_client, monkeypatch, tmp_path
+):
     job = await _seed(db, tmp_path, FRONTS)
     before = open(job.filepath, "rb").read()
     _patch(monkeypatch, tmp_path, [(11, "text"), (12, "text")])
@@ -108,46 +162,68 @@ async def test_count_mismatch_keeps_both(db, user_client, monkeypatch, tmp_path)
     assert resp.status_code == 409
     assert "history" in resp.json()["detail"]
     assert open(job.filepath, "rb").read() == before
-    kept = await _kept(db)
+    kept = await _row(db, "backs-scan-id")
     assert kept.status == "completed" and kept.page_count == 2
     assert tags(kept.filepath) == [11, 12]
-    await db.refresh(job)
-    assert job.page_count == 3
+    assert (await _row(db, "front-scan-id")).duplex_merged is False
+    assert len(await _all(db)) == 2
 
 
 async def test_merge_failure_keeps_original_and_backs(db, user_client, monkeypatch, tmp_path):
     job = await _seed(db, tmp_path, FRONTS)
     before = open(job.filepath, "rb").read()
-    _patch(monkeypatch, tmp_path, [(11, "text")] * 3)
+    _patch(monkeypatch, tmp_path, BACKS)
 
     def boom(*a, **k):
         raise RuntimeError("disk on fire")
 
-    monkeypatch.setattr(duplex_service, "merge_backs_in_place", boom)
+    monkeypatch.setattr(duplex_service, "merge_backs_atomic", boom)
     resp = await user_client.post(URL, json={})
     assert resp.status_code == 409
     assert "disk" not in resp.json()["detail"]
     assert open(job.filepath, "rb").read() == before
-    kept = await _kept(db)
-    assert os.path.exists(kept.filepath)
+    assert os.path.exists((await _row(db, "backs-scan-id")).filepath)
+    assert (await _row(db, "front-scan-id")).duplex_merged is False
+    assert len(await _all(db)) == 2
 
 
 @pytest.mark.parametrize("overrides", [
     {"source": "Flatbed"}, {"format": "png"}, {"status": "failed"}, {"filepath": None},
+    {"duplex_merged": True},
 ])
 async def test_ineligible_rows_refused(db, user_client, monkeypatch, tmp_path, overrides):
     await _seed(db, tmp_path, FRONTS, **overrides)
-    fake = _patch(monkeypatch, tmp_path, [(11, "text")] * 3)
+    fake = _patch(monkeypatch, tmp_path, BACKS)
     resp = await user_client.post(URL, json={})
     assert resp.status_code == 400
     assert resp.json()["detail"]
     assert fake.calls == []
 
 
+async def test_fronts_that_already_merged_cannot_merge_again(
+    db, user_client, monkeypatch, tmp_path
+):
+    await _seed(db, tmp_path, FRONTS)
+    _patch(monkeypatch, tmp_path, BACKS)
+    assert (await user_client.post(URL, json={})).status_code == 200
+    fake = _patch(monkeypatch, tmp_path, BACKS)
+    again = await user_client.post(URL, json={})
+    assert again.status_code == 400 and fake.calls == []
+
+
+async def test_merged_result_cannot_be_merged(db, user_client, monkeypatch, tmp_path):
+    await _seed(db, tmp_path, FRONTS)
+    _patch(monkeypatch, tmp_path, BACKS)
+    merged_id = (await user_client.post(URL, json={})).json()["merged"]["scan_id"]
+    fake = _patch(monkeypatch, tmp_path, BACKS)
+    resp = await user_client.post(f"/api/scanner/scans/{merged_id}/backs", json={})
+    assert resp.status_code == 400 and fake.calls == []
+
+
 async def test_missing_file_refused(db, user_client, monkeypatch, tmp_path):
     job = await _seed(db, tmp_path, FRONTS)
     os.unlink(job.filepath)
-    fake = _patch(monkeypatch, tmp_path, [(11, "text")] * 3)
+    fake = _patch(monkeypatch, tmp_path, BACKS)
     assert (await user_client.post(URL, json={})).status_code == 400
     assert fake.calls == []
 
@@ -170,12 +246,110 @@ async def test_feeder_refusal_changes_nothing(db, user_client, monkeypatch, tmp_
     assert resp.status_code == error.status_code
     assert resp.json()["detail"] == error.detail
     assert open(job.filepath, "rb").read() == before
-    assert len((await db.execute(select(ScanJob))).scalars().all()) == 1
+    assert len(await _all(db)) == 1
+    assert (await _row(db, "front-scan-id")).duplex_merged is False
+
+
+async def _other_user(db) -> User:
+    other = User(email="o@example.com", display_name="O", role="user", is_local=True, username="o")
+    db.add(other)
+    await db.commit()
+    await db.refresh(other)
+    return other
+
+
+async def test_other_users_scan_is_404_for_non_admin(db, user_client, monkeypatch, tmp_path):
+    other = await _other_user(db)
+    await _seed(db, tmp_path, FRONTS, user_id=other.id)
+    fake = _patch(monkeypatch, tmp_path, BACKS)
+    resp = await user_client.post(URL, json={})
+    assert resp.status_code == 404 and fake.calls == []
+
+
+async def test_admin_can_scan_backs_of_any_users_scan(
+    db, admin_client, regular_user, monkeypatch, tmp_path
+):
+    await _seed(db, tmp_path, FRONTS, user_id=regular_user.id)
+    _patch(monkeypatch, tmp_path, BACKS)
+    assert (await admin_client.post(URL, json={})).status_code == 200
+
+
+async def test_owner_can_scan_backs(db, user_client, regular_user, monkeypatch, tmp_path):
+    await _seed(db, tmp_path, FRONTS, user_id=regular_user.id)
+    _patch(monkeypatch, tmp_path, BACKS)
+    assert (await user_client.post(URL, json={})).status_code == 200
+
+
+async def _seed_scanner(db, config) -> Scanner:
+    scanner = Scanner(name="s", device="test:device0", is_default=True, auto_deliver=True,
+                      post_scan_config=config)
+    db.add(scanner)
+    await db.commit()
+    await db.refresh(scanner)
+    return scanner
+
+
+async def test_auto_deliver_sends_the_merged_document(db, user_client, monkeypatch, tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    scanner = await _seed_scanner(db, {"folder": str(out)})
+    await _seed(db, tmp_path, FRONTS, scanner_id=scanner.id)
+    _patch(monkeypatch, tmp_path, BACKS)
+    resp = await user_client.post(URL, json={})
+    merged_id = resp.json()["merged"]["scan_id"]
+    delivered = os.listdir(out)
+    assert len(delivered) == 1 and merged_id[:8] in delivered[0]
+    assert len(tags(out / delivered[0])) == 6
+
+
+async def test_auto_deliver_ocr_covers_merged_file(db, user_client, monkeypatch, tmp_path):
+    from app.services.ocr_service import ocr_service
+
+    scanner = await _seed_scanner(db, {"ocr": True})
+    await _seed(db, tmp_path, FRONTS, scanner_id=scanner.id)
+    _patch(monkeypatch, tmp_path, BACKS)
+    seen = []
+
+    async def fake_ocr(path, language="eng"):
+        seen.append(path)
+
+    monkeypatch.setattr(ocr_service, "apply_ocr", fake_ocr)
+    merged_id = (await user_client.post(URL, json={})).json()["merged"]["scan_id"]
+    assert seen == [(await _row(db, merged_id)).filepath]
+
+
+async def test_no_delivery_without_auto_deliver(db, user_client, monkeypatch, tmp_path):
+    out = tmp_path / "out"
+    out.mkdir()
+    scanner = await _seed_scanner(db, {"folder": str(out)})
+    scanner.auto_deliver = False
+    await db.commit()
+    await _seed(db, tmp_path, FRONTS, scanner_id=scanner.id)
+    _patch(monkeypatch, tmp_path, BACKS)
+    assert (await user_client.post(URL, json={})).status_code == 200
+    assert os.listdir(out) == []
+
+
+async def test_merge_writes_audit_and_webhook(db, user_client, monkeypatch, tmp_path):
+    from app.models import AuditEntry
+
+    await _seed(db, tmp_path, FRONTS)
+    _patch(monkeypatch, tmp_path, BACKS)
+    events = []
+
+    async def fake_dispatch(_db, event, payload):
+        events.append((event, payload))
+
+    monkeypatch.setattr(scanner_router, "dispatch_webhook", fake_dispatch)
+    merged_id = (await user_client.post(URL, json={})).json()["merged"]["scan_id"]
+    assert events == [("scan.complete", {"scan_id": merged_id, "format": "pdf", "pages": 6})]
+    entries = (await db.execute(select(AuditEntry).where(AuditEntry.entity_id == merged_id))).all()
+    assert len(entries) == 1
 
 
 async def test_token_without_scan_permission_is_403(db, client, monkeypatch, tmp_path):
     await _seed(db, tmp_path, FRONTS)
-    fake = _patch(monkeypatch, tmp_path, [(11, "text")] * 3)
+    fake = _patch(monkeypatch, tmp_path, BACKS)
     user = User(email="p@example.com", display_name="P", role="user", is_local=True, username="p")
     db.add(user)
     await db.commit()

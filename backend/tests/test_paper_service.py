@@ -1,4 +1,5 @@
 """Loaded-paper lookup over IPP (get_printer_attributes mocked, no network)."""
+import httpx
 import pytest
 
 from app.services import paper_service
@@ -15,8 +16,8 @@ def _clear_cache():
 def _patch(monkeypatch, result):
     calls = []
 
-    async def fake(host, port, resource, timeout):
-        calls.append((host, port, resource, timeout))
+    async def fake(host, port, resource, timeout, scheme="ipp"):
+        calls.append((host, port, resource, timeout, scheme))
         if isinstance(result, Exception):
             raise result
         return result
@@ -71,3 +72,30 @@ async def test_result_is_cached(monkeypatch):
     await paper_service.get_loaded_paper(uri)
     await paper_service.get_loaded_paper(uri)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("uri", [
+    "ipp://[::1", "ipp://host:99999/ipp", "ipp://host:abc/ipp", "ipp://", "", "ipps:///x",
+])
+async def test_malformed_uris_are_none_without_network(monkeypatch, uri):
+    calls = _patch(monkeypatch, {"media-ready": "na_letter_8.5x11in"})
+    assert await paper_service.get_loaded_paper(uri) is None
+    assert calls == []
+
+
+@pytest.mark.parametrize("exc", [ValueError("bad"), httpx.InvalidURL("bad")])
+async def test_value_and_url_errors_are_none(monkeypatch, exc):
+    _patch(monkeypatch, exc)
+    assert await paper_service.get_loaded_paper("ipp://10.0.0.5/ipp/print") is None
+
+
+async def test_ipps_scheme_is_passed_through(monkeypatch):
+    calls = _patch(monkeypatch, {"media-ready": "iso_a4_210x297mm"})
+    assert await paper_service.get_loaded_paper("ipps://printer.local:443/ipp/print") == "A4"
+    assert calls[0][:2] == ("printer.local", 443) and calls[0][4] == "ipps"
+
+
+async def test_ipv6_host_is_unbracketed_for_the_client(monkeypatch):
+    calls = _patch(monkeypatch, {"media-ready": "iso_a4_210x297mm"})
+    await paper_service.get_loaded_paper("ipp://[fe80::1]:631/ipp/print")
+    assert calls[0][0] == "fe80::1"

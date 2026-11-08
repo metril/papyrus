@@ -307,7 +307,11 @@ export default function ScanForm() {
         </Button>
       </div>
       {backsOpen && result && (
-        <ScanBacksDialog scanId={result.scan_id} onClose={() => setBacksOpen(false)} />
+        <ScanBacksDialog
+          scanId={result.scan_id}
+          onClose={() => setBacksOpen(false)}
+          onMerged={() => setResult((prev) => (prev ? { ...prev, duplex_merged: true } : prev))}
+        />
       )}
     </div>
   );

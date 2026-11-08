@@ -56,6 +56,7 @@ def _make_scan_job() -> ScanJob:
         error_message=None,
         created_at=_NOW,
         completed_at=_NOW,
+        duplex_merged=False,
     )
 
 

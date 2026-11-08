@@ -141,6 +141,7 @@ class ScanResponse(BaseModel):
     error_message: str | None
     created_at: datetime
     completed_at: datetime | None
+    duplex_merged: bool = False
 
     model_config = {"from_attributes": True}
 

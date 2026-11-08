@@ -9,6 +9,8 @@ import re
 import time
 from urllib.parse import urlparse
 
+import httpx
+
 from app.services.ipp_client import IppError, get_printer_attributes
 
 IPP_TIMEOUT_SECONDS = 2.0
@@ -49,10 +51,14 @@ async def get_loaded_paper(printer_uri: str | None) -> str | None:
     Failures are cached too, so an offline printer costs one short timeout
     per TTL rather than one per page view.
     """
-    parsed = urlparse(printer_uri or "")
-    if parsed.scheme not in ("ipp", "ipps") or not parsed.hostname:
+    try:
+        parsed = urlparse(printer_uri or "")
+        host, port, scheme = parsed.hostname, parsed.port or 631, parsed.scheme
+    except ValueError:
         return None
-    key = f"{parsed.hostname}:{parsed.port or 631}"
+    if scheme not in ("ipp", "ipps") or not host:
+        return None
+    key = f"{scheme}://{host}:{port}"
     now = time.monotonic()
     hit = _cache.get(key)
     if hit and now - hit[0] < CACHE_TTL_SECONDS:
@@ -64,9 +70,9 @@ async def get_loaded_paper(printer_uri: str | None) -> str | None:
         for resource in resources:
             try:
                 attributes = await get_printer_attributes(
-                    parsed.hostname, parsed.port or 631, resource, IPP_TIMEOUT_SECONDS
+                    host, port, resource, IPP_TIMEOUT_SECONDS, scheme
                 )
-            except IppError:
+            except (IppError, ValueError, httpx.InvalidURL):
                 continue
             return _pick(attributes)
         return None

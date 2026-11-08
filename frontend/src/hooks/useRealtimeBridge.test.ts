@@ -51,6 +51,7 @@ function makeScan(scanId: string, overrides: Partial<ScanJob> = {}): ScanJob {
     error_message: null,
     created_at: '2026-07-05T00:00:00Z',
     completed_at: '2026-07-05T00:00:00Z',
+    duplex_merged: false,
     ...overrides,
   };
 }
