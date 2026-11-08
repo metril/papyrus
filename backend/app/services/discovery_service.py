@@ -228,3 +228,60 @@ async def discover_printers(timeout: float = 4.0) -> list[dict]:
         await aiozc.async_close()
 
     return _merge(records)
+
+
+_SERVICE_TYPE_SCANNER = "_scanner._tcp.local."
+
+
+async def _resolve_scanner(zc, name: str) -> dict | None:
+    try:
+        info = AsyncServiceInfo(_SERVICE_TYPE_SCANNER, name)
+        if not await info.async_request(zc, _RESOLVE_TIMEOUT_MS):
+            return None
+    except Exception:
+        return None
+    addresses = info.parsed_addresses(IPVersion.V4Only)
+    if not addresses or not info.port:
+        return None
+    props = _decode_txt(info.properties)
+    return {
+        "name": _instance_name(name, _SERVICE_TYPE_SCANNER),
+        "ip": addresses[0],
+        "port": info.port,
+        "model": props.get("mdl") or None,
+        "flatbed": (props.get("flatbed") or "").upper() == "T",
+        "feeder": (props.get("feeder") or "").upper() == "T",
+    }
+
+
+async def discover_scanner_services(timeout: float = 4.0) -> list[dict]:
+    """Browse for ``_scanner._tcp`` services (Brother's scanner advert).
+
+    Returns ``{name, ip, port, model, flatbed, feeder}`` per device, one per
+    IPv4 address, sorted by name. Never raises on an empty network.
+    """
+    seen: list[str] = []
+
+    def on_change(zeroconf, service_type, name, state_change):
+        if state_change in (ServiceStateChange.Added, ServiceStateChange.Updated):
+            if name not in seen:
+                seen.append(name)
+
+    aiozc = AsyncZeroconf()
+    try:
+        browser = AsyncServiceBrowser(
+            aiozc.zeroconf, [_SERVICE_TYPE_SCANNER], handlers=[on_change]
+        )
+        try:
+            await asyncio.sleep(timeout)
+        finally:
+            await browser.async_cancel()
+        records = await asyncio.gather(*(_resolve_scanner(aiozc.zeroconf, n) for n in seen))
+    finally:
+        await aiozc.async_close()
+
+    unique: dict[str, dict] = {}
+    for rec in records:
+        if rec is not None:
+            unique.setdefault(rec["ip"], rec)
+    return sorted(unique.values(), key=lambda r: r["name"])
