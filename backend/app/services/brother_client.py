@@ -34,6 +34,10 @@ _TRUNCATED_LOCK = threading.Lock()
 _MAX_PAGE_BYTES = 128 * 1024 * 1024
 _FILL_VALUE = 128
 _FILL_EDGE_PIXELS = 16  # one JPEG block
+# Overall cap on reading out an abandoned feeder stream: a full 35-sheet feeder at
+# the slowest setting (600 dpi colour, roughly 45 s a sheet) plus margin. The idle
+# timeout alone never ends a device that keeps trickling bytes.
+_DRAIN_DEADLINE_SECONDS = 35 * 45 + 225
 
 
 @dataclass(frozen=True)
@@ -397,14 +401,20 @@ class BrotherScanClient:
 
     async def _drain(self, reader, parser: bp.StreamParser) -> None:
         """Discard data up to the job end. A silent, dropped or garbled stream, or
-        a device error, ends it quietly."""
-        try:
+        a device error, ends it quietly; so does the overall deadline."""
+        async def read_out() -> None:
             while not parser.finished:
                 chunk = await self._read(reader, 65536)
                 if not chunk:
                     return
                 if any(isinstance(ev, bp.DeviceError) for ev in parser.feed(chunk)):
                     return
+
+        try:
+            await asyncio.wait_for(read_out(), _DRAIN_DEADLINE_SECONDS)
+        except asyncio.TimeoutError:
+            logger.warning("Gave up reading out the feeder stream after %ss",
+                           _DRAIN_DEADLINE_SECONDS)
         except (ExternalServiceError, bp.BrotherProtocolError):
             return
 
@@ -524,10 +534,16 @@ class _Stream:
 
     def should_drain(self, exc: BaseException) -> bool:
         """Only a feeder stream still running and readable is worth reading out.
-        An ExternalServiceError means the stream is already over or unreadable."""
+        An ExternalServiceError means the stream is already over or unreadable,
+        except a BrotherProtocolError, which can come from our own page handling
+        with the stream still in sync (``garbled`` marks the parser's own)."""
         return (
             self.feeder and self.started and not self.garbled
-            and not self.parser.finished and not isinstance(exc, ExternalServiceError)
+            and not self.parser.finished
+            and not (
+                isinstance(exc, ExternalServiceError)
+                and not isinstance(exc, bp.BrotherProtocolError)
+            )
         )
 
 

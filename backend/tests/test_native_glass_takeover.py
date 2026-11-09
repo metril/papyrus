@@ -76,11 +76,8 @@ async def test_paper_found_at_scan_time_is_fed_without_a_partial_area(
     assert os.listdir(tmp_path) == [os.path.basename(path)]
 
 
-async def test_feeder_emptied_after_the_pre_check_falls_back_to_the_glass(
-    tmp_path, native, real_img2pdf  # noqa: F811
-):
-    counts, fed = [], []
-    glass = [
+def glass_session():
+    return [
         OK,
         ("C>S", ss.bp.encode_lease_request(300, "CGRAY")),
         ("S>C", lease_reply(adf=2, w_px=64, h_mm=0, h_px=800)),
@@ -89,15 +86,30 @@ async def test_feeder_emptied_after_the_pre_check_falls_back_to_the_glass(
         ("C>S", ss.bp.encode_start(300, 300, "CGRAY", (0, 0, 64, 800))),
         ("S>C", page(1) + b"\x80"),
     ]
-    async with FakeScanner([preflight(True, True), glass]) as srv:
+
+
+def real_type(path):
+    head = open(path, "rb").read(8)
+    if head.startswith(b"%PDF"):
+        return "pdf"
+    with Image.open(path) as img:
+        return img.format.lower()
+
+
+@pytest.mark.parametrize("fmt", ["jpeg", "png", "tiff", "pdf"])
+async def test_feeder_emptied_after_the_pre_check_gives_the_requested_format(
+    fmt, tmp_path, native, real_img2pdf  # noqa: F811
+):
+    counts, fed = [], []
+    async with FakeScanner([preflight(True, True), glass_session()]) as srv:
         native(srv)
         _, path = await ScanService().scan(
-            resolution=300, mode="Color", fmt="jpeg", source="Flatbed", device=DEVICE,
+            resolution=300, mode="Color", fmt=fmt, source="Flatbed", device=DEVICE,
             scan_dir=str(tmp_path), page_count_callback=counts.append,
-            feeder_callback=lambda: fed.append(True),
+            feeder_callback=lambda: fed.append(True), **FLATBED,
         )
     assert srv.errors == [] and counts == [1] and fed == []
-    assert pdf_pages(path) == 1
+    assert real_type(path) == fmt and os.listdir(tmp_path) == [os.path.basename(path)]
 
 
 async def test_glass_request_with_empty_feeder_is_unchanged(tmp_path, native):  # noqa: F811
@@ -212,3 +224,74 @@ async def test_escl_jpeg_job_with_unreadable_feeder_and_late_paper_is_served_as_
     row = await _only_row(db)
     assert (row.format, row.source, row.page_count) == ("pdf", "ADF", 2)
     escl._scan_jobs.clear()
+
+
+async def test_web_scan_keeps_its_row_when_the_feeder_was_emptied_after_the_pre_check(
+    db, admin_client, configured, native, real_img2pdf  # noqa: F811
+):
+    await _add(db)
+    async with FakeScanner([preflight(True, True), glass_session()]) as srv:
+        native(srv)
+        resp = await admin_client.post(
+            "/api/scanner/scan", json={"source": "Flatbed", "format": "png"}
+        )
+    body = resp.json()
+    assert resp.status_code == 201
+    assert (body["format"], body["source"], body["page_count"]) == ("png", "Flatbed", 1)
+    row = (await db.execute(select(ScanJob))).scalars().first()
+    await db.refresh(row)
+    assert (row.format, row.source) == ("png", "Flatbed") and real_type(row.filepath) == "png"
+
+
+async def test_copy_records_the_real_format_when_the_feeder_was_emptied(
+    tmp_path, native, real_img2pdf, monkeypatch  # noqa: F811
+):
+    cups = _FakeCups()
+    monkeypatch.setattr(copy_service_module, "scan_service", ScanService())
+    async with FakeScanner([preflight(True, True), glass_session()]) as srv:
+        native(srv)
+        result = await CopyService().copy(
+            cups=cups, device=DEVICE, source="Flatbed", scan_dir=str(tmp_path)
+        )
+    assert (result["format"], result["source"], result["page_count"]) == ("tiff", "Flatbed", 1)
+    assert real_type(result["filepath"]) == "tiff"
+
+
+async def test_escl_jpeg_job_keeps_jpeg_pages_when_the_feeder_was_emptied(
+    client, db, configured, native, real_img2pdf, monkeypatch, tasks  # noqa: F811
+):
+    async with FakeScanner([preflight(True, True), glass_session()]) as srv:
+        job_id = await _escl_job(client, monkeypatch, tasks, srv, "image/jpeg")
+    assert srv.errors == []
+    r = await client.get(f"/eSCL/ScanJobs/{job_id}/NextDocument")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert Image.open(io.BytesIO(r.content)).format == "JPEG"
+    assert (await client.get(f"/eSCL/ScanJobs/{job_id}/NextDocument")).status_code == 404
+    row = await _only_row(db)
+    assert (row.source, row.page_count) == ("Flatbed", 1) and real_type(row.filepath) == "pdf"
+
+
+async def test_escl_unheld_jpeg_job_serves_a_real_jpeg_when_the_feeder_was_emptied(
+    client, db, configured, native, real_img2pdf, monkeypatch, tasks  # noqa: F811
+):
+    """The eSCL pre-check was unreadable, so the job is not held; scan() then
+    saw paper, and the printer scanned the glass after all."""
+    async with FakeScanner([[NG], preflight(True, True), glass_session()]) as srv:
+        job_id = await _escl_job(client, monkeypatch, tasks, srv, "image/jpeg")
+    assert srv.errors == []
+    r = await client.get(f"/eSCL/ScanJobs/{job_id}/NextDocument")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/jpeg"
+    assert Image.open(io.BytesIO(r.content)).format == "JPEG"
+    row = await _only_row(db)
+    assert (row.format, row.source) == ("jpeg", "Flatbed") and real_type(row.filepath) == "jpeg"
+
+
+async def test_escl_pdf_job_stays_flatbed_when_the_feeder_was_emptied(
+    client, db, configured, native, real_img2pdf, monkeypatch, tasks  # noqa: F811
+):
+    async with FakeScanner([preflight(True, True), glass_session()]) as srv:
+        job_id = await _escl_job(client, monkeypatch, tasks, srv, "application/pdf")
+    r = await client.get(f"/eSCL/ScanJobs/{job_id}/NextDocument")
+    assert r.headers["content-type"] == "application/pdf" and r.content.startswith(b"%PDF")
+    row = await _only_row(db)
+    assert (row.format, row.source, row.page_count) == ("pdf", "Flatbed", 1)

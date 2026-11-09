@@ -8,9 +8,10 @@ import time
 import pytest
 
 from app.exceptions import ExternalServiceError
+from app.services import brother_client
 from app.services import brother_protocol as bp
 from app.services.brother_client import BrotherScanClient
-from tests.brother_helpers import CLOSE, OK, FakeScanner, gate, lease_reply, page_end
+from tests.brother_helpers import CLOSE, OK, FakeScanner, frame, gate, lease_reply, page_end
 from tests.test_brother_client import jpeg_bytes, jpeg_frames
 
 FEEDER_AREA = (0, 0, 64, 4175)
@@ -235,3 +236,41 @@ async def test_glass_cancel_still_drops_at_once(tmp_path):
             assert time.monotonic() - started < 0.5
         finally:
             srv.open("never")
+
+
+@pytest.mark.parametrize("payload", [b"", b"x"])
+async def test_trickling_device_cannot_hold_the_drain_past_its_deadline(
+    payload, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(brother_client, "_DRAIN_DEADLINE_SECONDS", 0.5)
+    open_frame = ("S>C", frame(bp.KIND_JPEG, 1, b""))
+    trickle = ("TRICKLE", frame(bp.KIND_JPEG, 1, payload))
+    async with FakeScanner([session(True, True, FEEDER_AREA, open_frame, trickle)]) as srv:
+        task = asyncio.create_task(feeder_scan(srv, out_dir=str(tmp_path)))
+        await asyncio.sleep(0.3)
+        task.cancel()
+        task.cancel()
+        started = time.monotonic()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 3)
+        assert time.monotonic() - started < 1.5
+    assert os.listdir(tmp_path) == []
+
+
+async def test_page_finish_error_with_sheets_following_still_drains(tmp_path):
+    bad_page = frame(bp.KIND_JPEG, 1, b"not a jpeg") + page_end(1)
+    segs = [("S>C", bad_page), gate("g"), ("S>C", page(2) + b"\x80")]
+    async with FakeScanner([session(True, True, FEEDER_AREA, *segs)]) as srv:
+        task = asyncio.create_task(feeder_scan(srv, out_dir=str(tmp_path)))
+        try:
+            await srv.wait_reached("g")
+            await asyncio.sleep(0.2)
+            assert not task.done()  # reading out the rest of the stack
+            srv.open("g")
+            with pytest.raises(bp.BrotherProtocolError) as ei:
+                await asyncio.wait_for(task, 3)
+            assert "undecodable" in str(ei.value.log_message)
+        finally:
+            srv.open("g")
+    assert srv.errors == [] and srv.trailing == [b""]
+    assert os.listdir(tmp_path) == []

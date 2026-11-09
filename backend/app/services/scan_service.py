@@ -765,6 +765,7 @@ class ScanService:
                     scan_id=scan_id,
                     progress_callback=progress_callback,
                     glass_request=glass_over_feeder,
+                    glass_fmt=fmt,
                 )
                 if page_count_callback is not None:
                     page_count_callback(count)
@@ -841,10 +842,13 @@ class ScanService:
         scan_id: str,
         progress_callback: Callable[[str, float], Awaitable[None]] | None,
         glass_request: bool = False,
+        glass_fmt: str = "pdf",
     ) -> tuple[str, int, bool]:
         """Scan every sheet in the feeder into one PDF. Caller holds the lock.
 
-        Returns (pdf_path, page_count, fed_by_feeder).
+        Returns (path, page_count, fed_by_feeder). A glass request the printer
+        served from the glass after all (paper lifted since the pre-check) comes
+        back as the one scanned page in `glass_fmt`, not as a PDF.
         """
         page_dir = os.path.join(scan_dir, f"batch_{scan_id}")
         pdf_file = os.path.join(scan_dir, f"{scan_id}.pdf")
@@ -857,6 +861,19 @@ class ScanService:
                 scan_id=scan_id, progress_callback=progress_callback,
                 glass_request=glass_request,
             )
+            if glass_request and not fed and glass_fmt != "pdf":
+                ext = {"jpeg": "jpg"}.get(glass_fmt, glass_fmt)
+                out_file = os.path.join(scan_dir, f"{scan_id}.{ext}")
+                if glass_fmt == "tiff":
+                    os.replace(pages[0], out_file)
+                else:
+                    await asyncio.to_thread(
+                        self._convert_scan_sync, pages[0], out_file, glass_fmt, resolution
+                    )
+                shutil.rmtree(page_dir, ignore_errors=True)
+                success = True
+                return out_file, 1, False
+
             await _merge_pages_to_pdf(pages, pdf_file)
 
             # Clean up individual page files
@@ -871,8 +888,11 @@ class ScanService:
             # the DB, so retention can never reclaim it either.
             if not success:
                 shutil.rmtree(page_dir, ignore_errors=True)
-                if os.path.exists(pdf_file):
-                    os.unlink(pdf_file)
+                for leftover in (pdf_file, *(
+                    os.path.join(scan_dir, f"{scan_id}.{e}") for e in ("jpg", "png", "tiff")
+                )):
+                    if os.path.exists(leftover):
+                        os.unlink(leftover)
 
     async def _acquire_feeder_tiffs(
         self, *, device: str, resolution: int, mode: str, page_dir: str, scan_id: str,

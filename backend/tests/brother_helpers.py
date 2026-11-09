@@ -140,6 +140,14 @@ class FakeScanner:
                         return
                 elif direction == "CLOSE":
                     return
+                elif direction == "TRICKLE":  # repeat ``data`` until the client leaves
+                    try:
+                        while True:
+                            writer.write(data)
+                            await writer.drain()
+                            await asyncio.sleep(0.05)
+                    except OSError:
+                        return
                 elif direction == "GATE":
                     self._event(self.reached, data.decode()).set()
                     await self._event(self._gates, data.decode()).wait()
