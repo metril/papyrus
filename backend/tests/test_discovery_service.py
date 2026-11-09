@@ -471,3 +471,28 @@ async def test_make_model_backfilled_from_later_record(monkeypatch):
     # ipp endpoint still wins even though the richer TXT came from ipps
     assert device["uri"] == "ipp://192.0.2.80:631/ipp/print"
     assert device["port"] == 631
+
+
+async def test_scanner_services_resolved_and_deduped_by_ip(monkeypatch):
+    svc = "_scanner._tcp.local."
+    a = "Brother DCP-L2540DW._scanner._tcp.local."
+    b, c = "Dup._scanner._tcp.local.", "Gone._scanner._tcp.local."
+    events = [(svc, n, ServiceStateChange.Added) for n in (a, b, c)]
+    props = {b"mdl": b"DCP-L2540DW series", b"flatbed": b"T", b"feeder": b"T"}
+    fixtures = {
+        (svc, a): {"resolved": True, "addresses": ["192.0.2.9"], "port": 54921,
+                   "properties": props},
+        (svc, b): {"resolved": True, "addresses": ["192.0.2.9"], "port": 54921,
+                   "properties": props},
+    }
+    _patch(monkeypatch, events, fixtures)
+    found = await discovery_service.discover_scanner_services(timeout=0)
+    assert found == [{
+        "name": "Brother DCP-L2540DW", "ip": "192.0.2.9", "port": 54921,
+        "model": "DCP-L2540DW series", "flatbed": True, "feeder": True,
+    }]
+
+
+async def test_scanner_services_empty_network(monkeypatch):
+    _patch(monkeypatch, [], {})
+    assert await discovery_service.discover_scanner_services(timeout=0) == []

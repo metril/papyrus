@@ -31,6 +31,11 @@ class PapyrusError(Exception):
         super().__init__(detail)
 
 
+def user_message(exc: BaseException, fallback: str = "Scan failed") -> str:
+    """Text safe to store or show: a domain error's detail, else a fixed message."""
+    return exc.detail if isinstance(exc, PapyrusError) else fallback
+
+
 class NotFoundError(PapyrusError):
     status_code = 404
 
@@ -45,6 +50,30 @@ class ScannerBusyError(PapyrusError):
 
 class ExternalServiceError(PapyrusError):
     status_code = 502
+
+
+class ScanSourceError(PapyrusError):
+    """The requested scan source conflicts with the scanner's physical state."""
+
+    status_code = 409
+
+
+class ScanRequestError(PapyrusError):
+    """The scan parameters (resolution, area, mode) are not valid."""
+
+    status_code = 422
+
+
+class BacksNotEligibleError(PapyrusError):
+    """The scan can't take a second (back-side) pass."""
+
+    status_code = 400
+
+
+class BacksMismatchError(PapyrusError):
+    """The back-side scan couldn't be combined with the fronts; both were kept."""
+
+    status_code = 409
 
 
 class UploadTooLargeError(PapyrusError):

@@ -381,6 +381,18 @@ async def _alert_loop() -> None:
             logger.warning("Alert check failed: %s", exc)
 
 
+async def _escl_expiry_loop() -> None:
+    """Expire abandoned eSCL jobs (and their held pages) without needing eSCL traffic."""
+    from app.routers.escl import _purge_stale_jobs
+
+    while True:
+        await asyncio.sleep(60)
+        try:
+            _purge_stale_jobs()
+        except Exception as exc:
+            logger.warning("eSCL job expiry failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: validate secrets first — fail fast before touching the DB or
@@ -401,17 +413,24 @@ async def lifespan(app: FastAPI):
         upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
     os.makedirs(scan_dir, exist_ok=True)
     os.makedirs(upload_dir, exist_ok=True)
+    from app.services.scan_service import remove_scan_leftovers
+
+    removed = remove_scan_leftovers(scan_dir)
+    if removed:
+        logger.info("Removed %d leftover scan directories", removed)
 
     await _ensure_local_admin()
     await _reconcile_on_startup()
     retention_task = asyncio.create_task(_retention_loop())
     printer_status_task = asyncio.create_task(_printer_status_loop())
     alert_task = asyncio.create_task(_alert_loop())
+    escl_expiry_task = asyncio.create_task(_escl_expiry_loop())
     yield
     # Shutdown
     retention_task.cancel()
     printer_status_task.cancel()
     alert_task.cancel()
+    escl_expiry_task.cancel()
     from app.services.http_client import close_http_client
 
     await close_http_client()

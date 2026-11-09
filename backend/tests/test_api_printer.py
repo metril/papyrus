@@ -77,3 +77,29 @@ async def test_printer_settings_no_default_printer_is_503(db, user_client):
     resp = await user_client.get("/api/printer/settings")
     assert resp.status_code == 503
     assert resp.json()["detail"] == "No default printer configured"
+
+
+async def test_paper_returns_detected_media(db, user_client, monkeypatch):
+    await _seed_default_printer(db)
+
+    async def fake(uri):
+        assert uri == "ipp://x/ipp"
+        return "Letter"
+
+    monkeypatch.setattr(printer_router, "get_loaded_paper", fake)
+    resp = await user_client.get("/api/printer/paper")
+    assert resp.status_code == 200
+    assert resp.json() == {"media": "Letter"}
+
+
+async def test_paper_without_default_printer_is_null(db, user_client):
+    resp = await user_client.get("/api/printer/paper")
+    assert resp.status_code == 200
+    assert resp.json() == {"media": None}
+
+
+async def test_paper_with_garbage_printer_uri_is_null(db, user_client):
+    db.add(Printer(display_name="B", cups_name="b", uri="ipp://[::1", is_default=True))
+    await db.commit()
+    resp = await user_client.get("/api/printer/paper")
+    assert resp.status_code == 200 and resp.json() == {"media": None}

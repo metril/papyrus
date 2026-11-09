@@ -40,6 +40,7 @@ async def cleanup_old_scans(db: AsyncSession, retention_days: int) -> int:
     """
     deleted = 0
     filepaths: list[str] = []
+    doomed: list[ScanJob] = []
 
     if retention_days > 0:
         cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
@@ -52,6 +53,7 @@ async def cleanup_old_scans(db: AsyncSession, retention_days: int) -> int:
         for scan in result.scalars().all():
             if scan.filepath:
                 filepaths.append(scan.filepath)
+            doomed.append(scan)
             await db.delete(scan)
             deleted += 1
 
@@ -65,10 +67,14 @@ async def cleanup_old_scans(db: AsyncSession, retention_days: int) -> int:
     for scan in result.scalars().all():
         if scan.filepath:
             filepaths.append(scan.filepath)
+        doomed.append(scan)
         await db.delete(scan)
         deleted += 1
 
     if deleted:
+        from app.services.duplex_service import release_fronts
+
+        await release_fronts(db, doomed)
         await db.commit()
         for filepath in filepaths:
             await asyncio.to_thread(cleanup_file, filepath)

@@ -63,6 +63,7 @@ _REQUESTED_ATTRIBUTES = [
     "printer-supply",
     "printer-supply-description",
     "media-default",
+    "media-ready",
     "sides-supported",
 ]
 
@@ -91,8 +92,13 @@ def _encode_attribute(tag: int, name: str, value: bytes) -> bytes:
     )
 
 
-def _encode_request(host: str, port: int, resource: str) -> bytes:
-    """Build a Get-Printer-Attributes request for ``ipp://host:port{resource}``."""
+def _url_host(host: str) -> str:
+    """``host`` as it appears in a URL: bare IPv6 literals get brackets."""
+    return f"[{host}]" if ":" in host and not host.startswith("[") else host
+
+
+def _encode_request(host: str, port: int, resource: str, scheme: str = "ipp") -> bytes:
+    """Build a Get-Printer-Attributes request for ``{scheme}://host:port{resource}``."""
     out = bytearray()
     out += bytes([0x01, 0x01])  # IPP version 1.1
     out += _GET_PRINTER_ATTRIBUTES.to_bytes(2, "big")  # operation-id
@@ -101,7 +107,7 @@ def _encode_request(host: str, port: int, resource: str) -> bytes:
 
     out += _encode_attribute(0x47, "attributes-charset", b"utf-8")  # charset
     out += _encode_attribute(0x48, "attributes-natural-language", b"en")  # naturalLanguage
-    printer_uri = f"ipp://{host}:{port}{resource}".encode("utf-8")
+    printer_uri = f"{scheme}://{_url_host(host)}:{port}{resource}".encode("utf-8")
     out += _encode_attribute(0x45, "printer-uri", printer_uri)  # uri
 
     first, *rest = _REQUESTED_ATTRIBUTES
@@ -256,6 +262,7 @@ def _normalize(attributes: dict, resource: str) -> dict:
             "low_levels": _as_list(attributes.get("marker-low-levels")),
         },
         "media_default": _as_str(attributes.get("media-default")),
+        "media_ready": [m for m in _as_list(attributes.get("media-ready")) if isinstance(m, str)],
         "sides_supported": _as_list(attributes.get("sides-supported")),
         "resource": resource,
         "attributes": attributes,
@@ -270,15 +277,19 @@ async def get_printer_attributes(
     port: int = 631,
     resource: str = "/ipp/print",
     timeout: float = 5.0,
+    scheme: str = "ipp",
 ) -> dict:
     """Issue Get-Printer-Attributes and return the raw decoded attribute dict.
+
+    ``scheme="ipps"`` talks HTTPS.
 
     Raises ``IppError`` on transport failure, non-2xx HTTP, or an undecodable
     body / IPP error status.
     """
-    request_body = _encode_request(host, port, resource)
+    request_body = _encode_request(host, port, resource, scheme)
     # An empty resource still needs a valid HTTP path, so POST to "/".
-    url = f"http://{host}:{port}{resource or '/'}"
+    http_scheme = "https" if scheme == "ipps" else "http"
+    url = f"{http_scheme}://{_url_host(host)}:{port}{resource or '/'}"
     client = get_http_client()
     try:
         response = await client.post(

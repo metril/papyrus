@@ -9,6 +9,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Scanning**: Initiate scans from the web UI with configurable resolution, color mode, and format
 - **Multi-page ADF Scanning**: Batch scan from the automatic document feeder into a single PDF
 - **Copy**: One-click scan-then-print workflow
+- **Paper Size Default**: The Copy page, upload form and Files page start on the paper loaded in the default printer (read over IPP, cached for a minute); if it can't be read or isn't A4/Letter/Legal they fall back to A4, and a size you pick yourself is never overridden
 - **SMB Integration**: Browse and print from network shares, save scans to shares
 - **Email**: Send scanned documents as email attachments, receive attachments for printing via webhook
 - **Cloud Storage**: Browse, download, and print files from Google Drive, Dropbox, OneDrive, and Nextcloud/WebDAV; upload scans to cloud (OAuth2 or basic auth)
@@ -16,13 +17,15 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Paperless-ngx**: Send scans directly to Paperless-ngx for document archival and OCR
 - **OCR / Searchable PDFs**: Automatic or manual OCR via Tesseract/ocrmypdf; produces searchable PDFs
 - **Scan Profiles**: Save and load scan presets (resolution, color, format, source, OCR, post-actions) per user
+- **Two-pass Double-sided Scanning**: The feeder is single-sided, so scan the fronts as a feeder batch, then use "Scan other side" (history row or scan result): reload the output pile without turning it over, top edges first, and the backs are scanned and interleaved (f1, b_n, f2, ...) into a **new** merged scan. The fronts and the backs stay in history untouched, so a wrong order is just a delete and redo; a scan that already took part in a merge can't be merged again. Load the fronts face up, top edge first, first page on top. Options: rotate backs 180° for short-edge flips, and remove blank backs (off by default; the detection is conservative but untested on real scans). If the page counts differ nothing is merged and the backs are kept as their own scan. With scanner auto-deliver enabled, the merged document is delivered (and auto-OCR'd) as a second delivery after the fronts-only one
 - **PDF Collation**: Merge multiple scans into a single PDF document
 - **Image Enhancement**: Adjust brightness, contrast, rotation, auto-crop, and auto-deskew on scanned images
 - **Scan Previews**: Cached thumbnail images for fast-loading scan list/grid previews
 - **Template Naming**: Configurable filename templates for delivered scans using variables ({date}, {time}, {id}, etc.)
 - **Network Printer**: Appears as an AirPrint/IPP printer on the LAN; network print jobs enter the hold-release queue. A built-in zero-config **Papyrus** printer works out of the box — jobs sent to it are held and routed to your default printer — and each configured printer is also advertised under its own name. All managed queues use CUPS's `abort-job` error policy, so a single failed job is dropped rather than disabling the queue for everyone.
 - **Printer Discovery**: mDNS scan pick-list to add printers, IP probe with IPP auto-enrichment (model/location), and a one-page test print to confirm which physical device a configured printer maps to
-- **Network Scanner**: Appears as an eSCL/AirScan scanner on the LAN; devices can scan directly via the eSCL protocol. The protocol has no authentication of its own, so requests are restricted to LAN source addresses — behind a same-host reverse proxy, the rightmost `X-Forwarded-For` entry is what's checked
+- **Native Brother Scanning**: arm64 images ship native Brother scanning only (brscan4 is amd64-only); `brothernet:<ip>` devices talk Brother's scanner protocol (TCP 54921) directly, with no SANE driver, so scanning works on ARM hosts where brscan4 isn't available. A feeder request always pulls every sheet, so on native and brscan4 devices feeder scans are saved as one PDF (the web UI offers PDF only for the feeder); eSCL clients asking for JPEG/PNG from the feeder still get one image per `NextDocument`, held per job until fetched, with the full stack also kept in history as a PDF. On this printer paper in the feeder takes over a glass request: the printer scans the feeder, every sheet, and the result is one PDF (the scan history shows the source, format and page count that were really used). A glass scan only happens with an empty feeder. Cancelling a feeder scan can't stop the printer, so the connection is kept until the stack has finished feeding. Currently only the DCP-L2540DW is supported (Color/Gray/Lineart, 100–600 dpi, glass and feeder); other Brother models found over mDNS are listed as untested and can't be added
+- **Network Scanner**: Appears as an eSCL/AirScan scanner on the LAN; devices can scan directly via the eSCL protocol. For native Brother devices, ScannerStatus reports whether the feeder holds paper, and a feeder request while the feeder is empty is refused up front with 409 (the printer would silently scan the glass). A glass request with paper in the feeder is not refused: the printer feeds it, JPEG/PNG clients get one image per `NextDocument`, PDF clients one document. The protocol has no authentication of its own, so requests are restricted to LAN source addresses — behind a same-host reverse proxy, the rightmost `X-Forwarded-For` entry is what's checked
 - **Webhooks**: Outgoing HTTP notifications with HMAC-SHA256 signing for print/scan events
 - **Printer Status**: Live toner/ink levels and state display from CUPS marker attributes, pushed to clients over WebSocket as changes are detected (no polling)
 - **Supply & Error Alerts**: Background poller watches toner/ink levels and printer error/offline state; fires a webhook (`printer.supply_low` / `printer.error`) and an optional email the moment a condition starts, with hysteresis so it doesn't repeat while the condition persists and a quiet (webhook-only) notice when it clears
@@ -52,7 +55,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, TanStack Query (server state), Zustand (client state), lazy-loaded routes, vitest/Testing Library (unit tests)
 - **Design**: "Paper & ink" design system — warm paper-toned grays with a process-cyan ink accent, IBM Plex Sans/Mono type (mono for data readouts), LED status dots and perforation dividers as an office-machine motif, full light/dark parity
 - **Printing**: CUPS (driverless/IPP Everywhere), AirPrint via Avahi mDNS, printer discovery via python-zeroconf
-- **Scanning**: SANE via scanimage (sane-airscan for WSD), eSCL server for network scanning
+- **Scanning**: SANE via scanimage (sane-airscan for WSD), native Brother network protocol (`brothernet:` devices), eSCL server for network scanning
 - **Deployment**: Docker with multi-stage build (`network_mode: host` for mDNS), behind Traefik
 
 ## Quick Start
@@ -146,7 +149,7 @@ See [.env.example](.env.example) for the full list.
 
 After first login, configure everything else via **Settings**:
 - **Printers**: Add/manage CUPS printers — discover via mDNS pick-list (`GET /api/printers/discover`), probe an IP with IPP enrichment (`GET /api/printers/probe`), refresh a configured printer's device info (`POST /api/printers/{id}/refresh-info`), or print a test page (`POST /api/printers/{id}/test-page`)
-- **Scanners**: Register Brother scanners (brscan4), probe by IP, or discover via mDNS
+- **Scanners**: Add a Brother scanner with the native driver (typed IP or mDNS discovery, no registration step) or register it through brscan4, probe by IP, or discover via mDNS
 - **OIDC**: Admin group mapping, groups claim name, scopes
 - **Email**: SMTP, webhook secret
 - **Cloud**: Google Drive, Dropbox, OneDrive OAuth credentials

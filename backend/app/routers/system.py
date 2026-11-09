@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.ws import authenticate_websocket, has_ws_permission
 from app.database import async_session, get_db
 from app.schemas import HealthResponse
+from app.services.scan_service import get_default_scanner, is_native_device, scan_service
 from app.services.ws_manager import ws_manager
 
 router = APIRouter()
@@ -44,6 +45,19 @@ def _cached_probe(now: float) -> tuple[bool, bool] | None:
     if _health_cache is not None and (now - _health_cache[0]) < _HEALTH_CACHE_TTL_SECONDS:
         return _health_cache[1], _health_cache[2]
     return None
+
+
+async def _default_native_device() -> str | None:
+    """The default scanner's device string if it is a native Brother one."""
+    async def _lookup():
+        async with async_session() as db:
+            return await get_default_scanner(db)
+
+    try:
+        scanner = await asyncio.wait_for(_lookup(), timeout=3)
+    except Exception:
+        return None
+    return scanner.device if scanner and is_native_device(scanner.device) else None
 
 
 async def _probe_subsystems() -> tuple[bool, bool]:
@@ -83,6 +97,17 @@ async def _probe_subsystems() -> tuple[bool, bool]:
         scanner_ok = False
         # Check scanner
         try:
+            native_device = await _default_native_device()
+            if native_device:
+                if scan_service.is_busy():
+                    scanner_ok = True
+                else:
+                    result = await asyncio.wait_for(
+                        scan_service.check_device(native_device), 5
+                    )
+                    scanner_ok = bool(result["available"])
+                _health_cache = (now, cups_ok, scanner_ok)
+                return cups_ok, scanner_ok
             proc = await asyncio.create_subprocess_exec(
                 "scanimage", "-L",
                 stdout=asyncio.subprocess.PIPE,

@@ -11,8 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user, require_admin
 from app.database import get_db
-from app.exceptions import ScannerBusyError
+from app.exceptions import PapyrusError, ScannerBusyError, ScanRequestError
 from app.models import Scanner, User
+from app.services import brother_protocol as bp
+from app.services.discovery_service import discover_scanner_services
+from app.services.scan_service import is_native_device, scan_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -415,6 +418,7 @@ async def probe_scanner_ip(
 
 @router.get("/diagnostics")
 async def scanner_diagnostics(
+    db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ) -> dict:
     """Return scanner diagnostics: config files, scanimage -L, airscan-discover."""
@@ -484,12 +488,33 @@ async def scanner_diagnostics(
     except Exception as exc:
         airscan_d_files.append(f"Error: {exc}")
 
+    native: list[dict] = []
+    try:
+        rows = list((await db.execute(
+            select(Scanner).where(Scanner.device.like("brothernet:%"))
+        )).scalars())
+    except Exception:
+        logger.warning("Could not list native scanners for diagnostics", exc_info=True)
+        rows = []
+    for row in rows:
+        entry = {"name": row.name, "device": row.device, "available": False,
+                 "busy": False, "error": None}
+        try:
+            result = await scan_service.check_device(row.device)
+            entry.update(available=result["available"], busy=result.get("busy", False))
+            if not result["available"]:
+                entry["error"] = "Could not reach the scanner."
+        except PapyrusError as exc:
+            entry["error"] = exc.detail
+        native.append(entry)
+
     return {
         "papyrus_conf": papyrus_conf,
         "airscan_conf": airscan_conf,
         "scanimage_list": scanimage_list,
         "airscan_discover": discover_output,
         "airscan_d_files": airscan_d_files,
+        "native": native,
     }
 
 
@@ -508,12 +533,18 @@ async def register_brscan4(
     if not re.match(r"^[\d.]+$", body.ip):
         raise HTTPException(status_code=400, detail="Invalid IP address")
 
-    proc = await asyncio.create_subprocess_exec(
-        "brsaneconfig4", "-a",
-        f"name={body.name}", f"model={body.model}", f"ip={body.ip}",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "brsaneconfig4", "-a",
+            f"name={body.name}", f"model={body.model}", f"ip={body.ip}",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        raise ScanRequestError(
+            "The brscan4 driver is not installed on this server. "
+            "Use the native Brother driver instead."
+        ) from None
     try:
         _, stderr = await asyncio.wait_for(proc.communicate(), timeout=10)
     except asyncio.TimeoutError:
@@ -563,6 +594,22 @@ async def test_scanner(
         raise HTTPException(status_code=404, detail="Scanner not found")
 
     device = scanner.device
+
+    if is_native_device(device):
+        try:
+            result = await scan_service.check_device(device)
+        except PapyrusError as exc:
+            return {
+                "device": device, "escl_ok": False, "escl_error": None,
+                "sane_ok": False, "sane_error": exc.detail, "make_model": None,
+                "native": True, "busy": False,
+            }
+        return {
+            "device": device, "escl_ok": False, "escl_error": None,
+            "sane_ok": result["available"],
+            "sane_error": None if result["available"] else "Could not reach the scanner.",
+            "make_model": None, "native": True, "busy": result.get("busy", False),
+        }
 
     # Ensure airscan.conf has this device's entry (self-healing after container rebuild)
     if device.startswith("airscan:"):
@@ -624,6 +671,43 @@ async def test_scanner(
     }
 
 
+NATIVE_SUPPORTED_MODEL = "DCP-L2540DW"
+
+
+async def _confirm_native(rec: dict) -> dict | None:
+    device = f"brothernet:{rec['ip']}"
+    try:
+        result = await asyncio.wait_for(scan_service.check_device(device), 15)
+    except Exception:
+        return None
+    if not result["available"]:
+        return None
+    model = rec["model"] or rec["name"]
+    supported = (rec["model"] or "").startswith(NATIVE_SUPPORTED_MODEL)
+    return {
+        "device": device if supported else None,
+        "description": (
+            f"{model} (native Brother driver)" if supported
+            else f"{model} (untested with the native driver, cannot be added)"
+        ),
+        "driver": "brothernet",
+        "supported": supported,
+        "ip": rec["ip"],
+        "busy": result.get("busy", False),
+    }
+
+
+async def _discover_native() -> list[dict]:
+    try:
+        services = await discover_scanner_services()
+    except Exception:
+        logger.warning("Brother scanner discovery failed", exc_info=True)
+        return []
+    candidates = [r for r in services if r["port"] == bp.PORT]
+    confirmed = await asyncio.gather(*(_confirm_native(r) for r in candidates))
+    return [c for c in confirmed if c is not None]
+
+
 @router.get("/discover")
 async def discover_scanners(_user: User = Depends(require_admin)) -> list[dict]:
     """Run scanimage -L and return found SANE devices."""
@@ -649,7 +733,7 @@ async def discover_scanners(_user: User = Depends(require_admin)) -> list[dict]:
             if m:
                 devices.append({"device": m.group(1), "description": m.group(2).strip()})
 
-    return devices
+    return devices + await _discover_native()
 
 
 @router.post("", status_code=201)

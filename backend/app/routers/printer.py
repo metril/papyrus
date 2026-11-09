@@ -5,7 +5,12 @@ from app.auth.dependencies import get_current_user
 from app.database import get_db
 from app.models import User
 from app.schemas import PrinterStatus
-from app.services.cups_service import CupsService, get_default_release_queue_name
+from app.services.cups_service import (
+    CupsService,
+    get_default_printer,
+    get_default_release_queue_name,
+)
+from app.services.paper_service import get_loaded_paper
 
 router = APIRouter()
 
@@ -40,3 +45,15 @@ async def get_printer_settings(
     """
     name = await get_default_release_queue_name(db)
     return await CupsService(printer_name=name).get_printer_options()
+
+
+@router.get("/paper")
+async def get_loaded_paper_size(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Paper size loaded in the default printer (``"A4"``/``"Letter"``/``"Legal"``),
+    or null when unknown. Never errors: forms just fall back to A4."""
+    printer = await get_default_printer(db)
+    media = await get_loaded_paper(printer.uri) if printer else None
+    return {"media": media}

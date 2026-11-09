@@ -1,0 +1,98 @@
+{
+ "20-fixture-mode-01": {
+  "area_mm": [
+   0,
+   0,
+   50,
+   50
+  ],
+  "dpi": 300,
+  "mode": "TEXT",
+  "pil_mode": "1",
+  "sha256": "67bfe8d59ccacca84647916f5be7b81279f4d8b7e16c30c643a9103d3bebde25",
+  "size": [
+   560,
+   565
+  ]
+ },
+ "20-fixture-mode-02": {
+  "area_mm": [
+   0,
+   0,
+   50,
+   50
+  ],
+  "dpi": 300,
+  "mode": "ERRDIF",
+  "pil_mode": "1",
+  "sha256": "01e37095d49959f468f0423a5c681f1c4f73aa5b52592be0d7177ca452089229",
+  "size": [
+   560,
+   565
+  ]
+ },
+ "20-fixture-mode-03": {
+  "area_mm": [
+   0,
+   0,
+   50,
+   50
+  ],
+  "dpi": 300,
+  "mode": "GRAY64",
+  "pil_mode": "L",
+  "sha256": "188e1c8d3747ab5d0232ad9a763147579bf950ec9819ee32555a2db764a3725d",
+  "size": [
+   560,
+   565
+  ]
+ },
+ "20-fixture-mode-04": {
+  "area_mm": [
+   0,
+   0,
+   50,
+   50
+  ],
+  "dpi": 300,
+  "mode": "CGRAY",
+  "pil_mode": "RGB",
+  "sha256": "8bc10d2056d9bcc3ab96cffc0459f8f7b5d9353bee86d250d5b322714d9fdeef",
+  "size": [
+   560,
+   565
+  ]
+ },
+ "21-fixture-600dpi": {
+  "area_mm": [
+   0,
+   0,
+   50,
+   50
+  ],
+  "dpi": 600,
+  "mode": "CGRAY",
+  "pil_mode": "RGB",
+  "sha256": "15b27275cf10dd1cb19a984c28c73f3eab8b893b318a52c8fec843d380f0f06e",
+  "size": [
+   1136,
+   1131
+  ]
+ },
+ "21-fixture-offset": {
+  "area_mm": [
+   20,
+   30,
+   50,
+   50
+  ],
+  "dpi": 300,
+  "mode": "CGRAY",
+  "pil_mode": "RGB",
+  "sha256": "caea4e7008d7f4b3491f3924ed5361972a4bd06b410e2902b4954ec541e43f58",
+  "size": [
+   592,
+   591
+  ]
+ }
+}

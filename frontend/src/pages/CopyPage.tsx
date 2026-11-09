@@ -5,6 +5,9 @@ import Button from '../components/common/Button';
 import Toggle from '../components/common/Toggle';
 import ProgressBar from '../components/common/ProgressBar';
 import { startCopy } from '../api/copy';
+import { usePaperChoice } from '../hooks/usePaperChoice';
+
+const PAPER_SIZES = ['A4', 'Letter'];
 
 export default function CopyPage() {
   const [resolution, setResolution] = useState(300);
@@ -12,7 +15,7 @@ export default function CopyPage() {
   const [source, setSource] = useState('Flatbed');
   const [copies, setCopies] = useState(1);
   const [duplex, setDuplex] = useState(false);
-  const [media, setMedia] = useState('A4');
+  const [media, setMedia] = usePaperChoice(PAPER_SIZES);
 
   const copyMutation = useMutation({
     mutationFn: () => startCopy({ resolution, mode, source, copies, duplex, media }),

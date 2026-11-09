@@ -213,6 +213,22 @@ function useChannel(
 }
 
 /**
+ * True when a `scan_completed` frame is a genuinely new scan. A two-pass
+ * duplex merge broadcasts its fronts (an update of a known row) and backs
+ * (marked with `duplex_source_scan_id`) alongside the merged result, and only
+ * the merged result should toast.
+ */
+export function shouldToastScanCompleted(queryClient: QueryClient, msg: WSMessage): boolean {
+  if (msg.type !== 'scan_completed') return false;
+  const incoming = msg.data as unknown as ScanJob;
+  if (incoming.duplex_source_scan_id && !incoming.duplex_merged) return false;
+  const known = queryClient
+    .getQueryData<ScansCache>(queryKeys.scans.list())
+    ?.scans.some((s) => s.scan_id === incoming.scan_id);
+  return !known;
+}
+
+/**
  * Opens the three realtime channels and keeps the Query cache live app-wide.
  * Mount it once, inside the authenticated branch of the app shell.
  */
@@ -225,8 +241,9 @@ export function useRealtimeBridge(): void {
   // Scans channel: apply the cache update, then surface the app-wide "Scan
   // completed" toast (previously wired directly in AppShell).
   const applyScanWithToast = useCallback((qc: QueryClient, msg: WSMessage) => {
+    const toast = shouldToastScanCompleted(qc, msg);
     applyScanEvent(qc, msg);
-    if (msg.type === 'scan_completed') showToast('Scan completed', 'success');
+    if (toast) showToast('Scan completed', 'success');
   }, []);
 
   useChannel(

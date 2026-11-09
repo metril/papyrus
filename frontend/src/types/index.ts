@@ -66,6 +66,8 @@ export interface ScanJob {
   error_message: string | null;
   created_at: string;
   completed_at: string | null;
+  duplex_merged: boolean;
+  duplex_source_scan_id: string | null;
 }
 
 export interface ScanRequest {
@@ -207,8 +209,14 @@ export interface ManagedScannerUpdate {
 }
 
 export interface DiscoveredDevice {
-  device: string;
+  /** Null for devices that are listed but cannot be added (untested models). */
+  device: string | null;
   description: string;
+  /** Absent for SANE results. */
+  driver?: 'brothernet';
+  supported?: boolean;
+  ip?: string;
+  busy?: boolean;
 }
 
 // --- WebSocket ---

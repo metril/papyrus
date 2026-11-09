@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
-import { listJobs, getPrinterStatus } from './printer';
-import { listScans, listScanProfiles } from './scanner';
+import { listJobs, getPrinterStatus, getLoadedPaper } from './printer';
+import { listScans, listScanProfiles, getScannerOptions } from './scanner';
 import { listPrinters } from './printers';
 import { useConnectionStore } from '../store/connectionStore';
 import { getSettings, getEmailWebhookInfo } from './settings';
@@ -34,9 +34,11 @@ export const queryKeys = {
     list: () => ['printers', 'list'] as const,
   },
   printerStatus: ['printerStatus'] as const,
+  loadedPaper: ['loadedPaper'] as const,
   printerDiscovery: ['printerDiscovery'] as const,
   scanners: {
     list: () => ['scanners', 'list'] as const,
+    options: () => ['scanners', 'options'] as const,
   },
   settings: ['settings'] as const,
   emailWebhook: ['emailWebhook'] as const,
@@ -115,6 +117,17 @@ export function usePrinterStatus() {
   });
 }
 
+/** Paper loaded in the default printer (null = unknown); forms fall back to A4. */
+export function useLoadedPaper() {
+  return useQuery({
+    queryKey: queryKeys.loadedPaper,
+    queryFn: () => getLoadedPaper(),
+    staleTime: 60_000,
+    retry: false,
+    meta: { suppressGlobalError: true },
+  });
+}
+
 /** Saved scan profiles for the scan form. */
 export function useScanProfiles() {
   return useQuery({
@@ -141,6 +154,14 @@ export function useScanners() {
   return useQuery({
     queryKey: queryKeys.scanners.list(),
     queryFn: () => listScanners(),
+  });
+}
+
+/** Resolutions/modes/sources the default scanner supports. */
+export function useScannerOptions() {
+  return useQuery({
+    queryKey: queryKeys.scanners.options(),
+    queryFn: () => getScannerOptions(),
   });
 }
 

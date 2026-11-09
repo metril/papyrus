@@ -51,6 +51,8 @@ export interface ScannerTestResult {
   sane_ok: boolean;
   sane_error: string | null;
   make_model: string | null;
+  native?: boolean;
+  busy?: boolean;
 }
 
 export async function testScanner(id: number): Promise<ScannerTestResult> {

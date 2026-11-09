@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import Button from '../common/Button';
+import ScanBacksDialog from './ScanBacksDialog';
+import { canScanBacks } from '../../lib/scanBacks';
 import ProgressBar from '../common/ProgressBar';
 import {
   initiateScan,
@@ -10,7 +12,7 @@ import {
   deleteScanProfile,
 } from '../../api/scanner';
 import type { ScanProfileCreate } from '../../api/scanner';
-import { useScanProfiles, queryKeys } from '../../api/queries';
+import { useScanProfiles, useScannerOptions, queryKeys } from '../../api/queries';
 import { useScanStore } from '../../store/scanStore';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import type { ScanJob, ScanRequest } from '../../types';
@@ -18,11 +20,13 @@ import type { ScanJob, ScanRequest } from '../../types';
 export default function ScanForm() {
   const [resolution, setResolution] = useState(300);
   const [mode, setMode] = useState('Color');
-  const [format, setFormat] = useState('pdf');
+  const [chosenFormat, setFormat] = useState('pdf');
   const [source, setSource] = useState('Flatbed');
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ScanJob | null>(null);
+  const [requested, setRequested] = useState<{ format: string; source: string } | null>(null);
+  const [backsOpen, setBacksOpen] = useState(false);
   // F26: the id the progress socket subscribes to. Set *before* the scan
   // request is sent (see handleScan) so the socket is already open by the
   // time the backend starts broadcasting progress, instead of deriving the
@@ -39,6 +43,11 @@ export default function ScanForm() {
   const queryClient = useQueryClient();
   const profilesQuery = useScanProfiles();
   const profiles = profilesQuery.data ?? [];
+  const scannerOptions = useScannerOptions().data;
+  const resolutions = scannerOptions?.resolutions ?? [100, 150, 200, 300, 600];
+  const feederFormats = source === 'ADF' ? scannerOptions?.feeder_formats : undefined;
+  const feederPdfOnly = !!feederFormats && feederFormats.length < (scannerOptions?.formats.length ?? 0);
+  const format = feederPdfOnly && !feederFormats.includes(chosenFormat) ? feederFormats[0] : chosenFormat;
 
   const loadProfile = (profileId: number | '') => {
     setSelectedProfileId(profileId);
@@ -113,6 +122,7 @@ export default function ScanForm() {
     setScanning(true);
     setError(null);
     setResult(null);
+    setRequested({ format, source });
     setProgress(0);
     // Generate the id and open the progress socket on it *before* POSTing
     // (F26) — the id is sent along with the request so the backend uses it
@@ -195,7 +205,7 @@ export default function ScanForm() {
             disabled={scanning}
             className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
           >
-            {[75, 100, 150, 200, 300, 600].map((r) => (
+            {resolutions.map((r) => (
               <option key={r} value={r}>{r} DPI</option>
             ))}
           </select>
@@ -222,10 +232,19 @@ export default function ScanForm() {
             className="w-full rounded-lg border-gray-300 dark:border-gray-600 shadow-sm text-sm p-2 border bg-white dark:bg-gray-800 dark:text-gray-100"
           >
             <option value="pdf">PDF</option>
-            <option value="png">PNG</option>
-            <option value="jpeg">JPEG</option>
-            <option value="tiff">TIFF</option>
+            {!feederPdfOnly && (
+              <>
+                <option value="png">PNG</option>
+                <option value="jpeg">JPEG</option>
+                <option value="tiff">TIFF</option>
+              </>
+            )}
           </select>
+          {feederPdfOnly && (
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              The feeder scans every sheet at once, so it saves as PDF only.
+            </p>
+          )}
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Source</label>
@@ -256,6 +275,18 @@ export default function ScanForm() {
       {result && result.status === 'completed' && (
         <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg p-4">
           <p className="text-green-800 dark:text-green-400 text-sm font-medium">Scan completed!</p>
+          <p className="font-mono text-xs text-green-800 dark:text-green-400">
+            {result.source} · {result.format.toUpperCase()} · {result.page_count}{' '}
+            {result.page_count === 1 ? 'page' : 'pages'}
+          </p>
+          {requested && (result.source !== requested.source || result.format !== requested.format) && (
+            <p className="text-xs text-green-800 dark:text-green-400">
+              {result.source !== requested.source
+                ? 'There was paper in the feeder, so the printer scanned that instead of the glass. '
+                : ''}
+              {result.page_count === 1 ? 'The page' : 'Every sheet'} is saved as {result.format.toUpperCase()}.
+            </p>
+          )}
           <a
             href={getScanDownloadUrl(result.scan_id)}
             className="text-ink-600 dark:text-ink-400 hover:underline text-sm"
@@ -263,6 +294,16 @@ export default function ScanForm() {
           >
             Download scan
           </a>
+          {canScanBacks(result) && (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="ml-3"
+              onClick={() => setBacksOpen(true)}
+            >
+              Scan other side
+            </Button>
+          )}
         </div>
       )}
 
@@ -279,6 +320,13 @@ export default function ScanForm() {
           {scanning ? 'Scanning...' : 'Batch scan (ADF)'}
         </Button>
       </div>
+      {backsOpen && result && (
+        <ScanBacksDialog
+          scanId={result.scan_id}
+          onClose={() => setBacksOpen(false)}
+          onMerged={() => setResult((prev) => (prev ? { ...prev, duplex_merged: true } : prev))}
+        />
+      )}
     </div>
   );
 }

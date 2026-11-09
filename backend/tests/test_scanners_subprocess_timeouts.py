@@ -21,6 +21,14 @@ from app.routers import scanners as scanners_router
 from app.routers.scanners import Brscan4Register
 
 
+class _NoNativeScanners:
+    async def execute(self, _stmt):
+        return self
+
+    def scalars(self):
+        return []
+
+
 class _TimingOutProcess:
     """Mirrors test_system_health.py's ``_TimingOutProcess``: raising
     ``asyncio.TimeoutError`` directly from ``communicate()`` is exactly what
@@ -98,7 +106,7 @@ async def test_scanner_diagnostics_scanimage_timeout_kills_and_degrades_graceful
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 
-    result = await scanners_router.scanner_diagnostics(_user=None)
+    result = await scanners_router.scanner_diagnostics(db=_NoNativeScanners(), _user=None)
 
     assert scanimage_proc.killed is True
     assert scanimage_proc.waited is True

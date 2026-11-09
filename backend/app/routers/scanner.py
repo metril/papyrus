@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import uuid
 from datetime import datetime, timezone
@@ -12,7 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import get_current_user, require_permission
 from app.auth.ws import authenticate_websocket, has_ws_permission
 from app.database import async_session, get_db
-from app.models import CloudProvider, ScanJob, ScanProfile, SMBShare, User
+from app.exceptions import (
+    BacksMismatchError,
+    BacksNotEligibleError,
+    NotFoundError,
+    PapyrusError,
+    user_message,
+)
+from app.models import CloudProvider, ScanJob, Scanner, ScanProfile, SMBShare, User
 from app.schemas import (
     BulkDeleteResponse,
     BulkDeleteScansRequest,
@@ -26,12 +34,13 @@ from app.schemas import (
     ScanResponse,
     serialize_scan_job,
 )
+from app.services import duplex_service
 from app.services.audit_service import log_event
 from app.services.cloud_service import cloud_service
 from app.services.email_service import email_service
+from app.services.file_locks import lock_for
 from app.services.file_service import cleanup_file, sanitize_filename
 from app.services.scan_service import (
-    ScanError,
     get_default_scanner,
     get_default_scanner_device,
     run_post_scan_actions,
@@ -46,6 +55,7 @@ from app.services.thumbnail_service import (
 from app.services.webhook_service import dispatch_webhook
 from app.services.ws_manager import ws_manager
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -67,9 +77,13 @@ async def get_scanner_status(
 
 
 @router.get("/options")
-async def get_scanner_options(user: User = Depends(get_current_user)):
-    """Get available scan options."""
-    return await scan_service.get_options()
+async def get_scanner_options(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get available scan options for the default scanner."""
+    scanner = await get_default_scanner(db)
+    return await scan_service.get_options(scanner.device if scanner else None)
 
 
 @router.post("/scan", response_model=ScanResponse, status_code=201)
@@ -120,8 +134,18 @@ async def initiate_scan(
             "data": {"scan_id": job.scan_id, "progress": percent},
         })
 
+    def set_page_count(count: int) -> None:
+        job.page_count = count
+
+    def set_fed_by_feeder() -> None:
+        # Paper in the feeder took over a glass request: one PDF of every sheet.
+        job.source = "ADF"
+        job.format = "pdf"
+
     try:
         _, filepath = await scan_service.scan(
+            page_count_callback=set_page_count,
+            feeder_callback=set_fed_by_feeder,
             resolution=request.resolution,
             mode=request.mode,
             fmt=request.format,
@@ -149,10 +173,10 @@ async def initiate_scan(
         })
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
-                        detail={"format": request.format, "resolution": request.resolution})
+                        detail={"format": job.format, "resolution": request.resolution})
         await db.commit()
         await dispatch_webhook(
-            db, "scan.complete", {"scan_id": job.scan_id, "format": request.format}
+            db, "scan.complete", {"scan_id": job.scan_id, "format": job.format}
         )
 
         if scanner and scanner.auto_deliver:
@@ -160,18 +184,19 @@ async def initiate_scan(
                 job, scanner, db, default_filename_template=filename_template
             )
 
-    except ScanError as e:
+    except PapyrusError as e:
         job.status = "failed"
         job.error_message = str(e)
         try:
             await db.commit()
         except Exception:
             pass
-        # ScanError is a PapyrusError (502) — let the global handler render it.
+        # PapyrusError carries its own status code — let the global handler render it.
         raise
     except Exception as e:
         job.status = "failed"
-        job.error_message = f"{type(e).__name__}: {e}"
+        logger.exception("Scan failed")
+        job.error_message = user_message(e)
         try:
             await db.commit()
         except Exception:
@@ -262,18 +287,19 @@ async def initiate_batch_scan(
                 job, scanner, db, default_filename_template=filename_template
             )
 
-    except ScanError as e:
+    except PapyrusError as e:
         job.status = "failed"
         job.error_message = str(e)
         try:
             await db.commit()
         except Exception:
             pass
-        # ScanError is a PapyrusError (502) — let the global handler render it.
+        # PapyrusError carries its own status code — let the global handler render it.
         raise
     except Exception as e:
         job.status = "failed"
-        job.error_message = f"{type(e).__name__}: {e}"
+        logger.exception("Scan failed")
+        job.error_message = user_message(e)
         try:
             await db.commit()
         except Exception:
@@ -559,6 +585,208 @@ async def enhance_scan(
     return {"message": "Enhancement applied"}
 
 
+class BacksRequest(BaseModel):
+    rotate_backs: bool = False
+    skip_blank_backs: bool = False
+    reverse_backs: bool = True
+
+
+_BACKS_KEPT_MESSAGE = (
+    "The pages could not be combined, so nothing was merged. "
+    "The back-side scan was saved to your history."
+)
+
+
+class BacksResponse(BaseModel):
+    merged: ScanResponse
+    backs: ScanResponse | None
+    fronts: ScanResponse | None
+    blanks_dropped: int
+
+
+@router.post("/scans/{scan_id}/backs", response_model=BacksResponse)
+async def scan_backs(
+    scan_id: str,
+    body: BacksRequest,
+    user: User = Depends(require_permission("scan")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Scan the other side of a feeder PDF: the user flips the stack, the
+    feeder scans the backs, and fronts and backs are interleaved into a NEW
+    scan. The fronts and the backs both stay in history untouched, so a wrong
+    physical order can simply be deleted and redone.
+    """
+    from app.routers.settings import get_setting
+
+    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
+    job = result.scalar_one_or_none()
+    if job is None or (job.user_id not in (None, user.id) and user.role != "admin"):
+        raise NotFoundError("Scan not found")
+    if (
+        job.status != "completed"
+        or job.source != "ADF"
+        or job.format != "pdf"
+        or not job.filepath
+        or not os.path.exists(job.filepath)
+    ):
+        raise BacksNotEligibleError(
+            "Only a finished feeder scan saved as a PDF can have its other side scanned."
+        )
+    if job.duplex_merged:
+        raise BacksNotEligibleError(
+            "This scan is already part of a double-sided merge. "
+            "Delete the merged scan first if you want to redo it."
+        )
+    if job.duplex_source_scan_id:
+        raise BacksNotEligibleError(
+            "This is the back side of a double-sided merge, so it has no other side to scan."
+        )
+
+    scanner = await db.get(Scanner, job.scanner_id) if job.scanner_id else None
+    if scanner is None:
+        scanner = await get_default_scanner(db)
+    device = scanner.device if scanner else await get_default_scanner_device(db)
+    scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
+    filename_template = (
+        await get_setting(db, "scan_filename_template") or "scan_{date}_{time}_{id}"
+    )
+    front_scan_id, front_path = job.scan_id, job.filepath
+    resolution, mode = job.resolution, job.mode
+    scanner_id = job.scanner_id
+    # Release the transaction before the long feeder scan, like /scan does.
+    await db.commit()
+
+    # Nothing has changed yet if this raises (busy scanner, empty feeder).
+    backs_id, backs_path, backs_count = await scan_service.scan_batch(
+        resolution=resolution, mode=mode, device=device, scan_dir=scan_dir,
+    )
+
+    async def live_scanner_id() -> int | None:
+        """The scanner may have been deleted while the feeder was scanning."""
+        if scanner_id is None:
+            return None
+        found = await db.execute(select(Scanner.id).where(Scanner.id == scanner_id))
+        return found.scalar_one_or_none()
+
+    async def new_row(row_scan_id: str, path: str, pages: int, merged: bool) -> ScanJob:
+        return ScanJob(
+            user_id=user.id,
+            scan_id=row_scan_id,
+            resolution=resolution,
+            mode=mode,
+            format="pdf",
+            source="ADF",
+            page_count=pages,
+            filepath=path,
+            file_size=os.path.getsize(path),
+            status="completed",
+            completed_at=datetime.now(timezone.utc),
+            scanner_id=await live_scanner_id(),
+            duplex_merged=merged,
+            duplex_source_scan_id=front_scan_id,
+        )
+
+    async def snapshot(row: ScanJob) -> ScanResponse | None:
+        """Fresh copy of a row, or None if it was deleted meanwhile."""
+        try:
+            await db.refresh(row)
+        except Exception:
+            return None
+        return ScanResponse.model_validate(row, from_attributes=True)
+
+    async def broadcast(*rows: ScanResponse | None) -> None:
+        for row in rows:
+            if row is not None:
+                await ws_manager.broadcast("scans", {
+                    "type": "scan_completed", "data": row.model_dump(mode="json")
+                })
+
+    async def keep_backs_only() -> None:
+        kept = await new_row(backs_id, backs_path, backs_count, False)
+        db.add(kept)
+        await db.commit()
+        await broadcast(await snapshot(kept))
+
+    merged_id = str(uuid.uuid4())
+    merged_path = os.path.join(scan_dir, f"{merged_id}.pdf")
+    try:
+        async with lock_for(front_path):
+            outcome = await asyncio.to_thread(
+                duplex_service.merge_backs_atomic,
+                front_path,
+                backs_path,
+                merged_path,
+                rotate_backs=body.rotate_backs,
+                skip_blank_backs=body.skip_blank_backs,
+                reverse_backs=body.reverse_backs,
+            )
+    except duplex_service.PageCountMismatchError as e:
+        await keep_backs_only()
+        raise BacksMismatchError(
+            f"The front scan has {e.fronts} pages but the back scan has {e.backs}. "
+            "Nothing was merged; both scans are in your history."
+        )
+    except Exception:
+        logger.exception("Merging back sides failed")
+        await keep_backs_only()
+        raise BacksMismatchError(_BACKS_KEPT_MESSAGE)
+
+    try:
+        await db.refresh(job)
+        if job.duplex_merged:
+            raise RuntimeError("fronts were merged by a concurrent request")
+        job.duplex_merged = True
+        backs_row = await new_row(backs_id, backs_path, backs_count, False)
+        merged_row = await new_row(merged_id, merged_path, outcome.page_count, True)
+        db.add_all([backs_row, merged_row])
+        await db.commit()
+    except Exception:
+        logger.exception("Recording the merged scan failed")
+        await db.rollback()
+        await asyncio.to_thread(cleanup_file, merged_path)
+        await keep_backs_only()
+        raise BacksMismatchError(_BACKS_KEPT_MESSAGE)
+
+    fronts_resp = await snapshot(job)
+    backs_resp = await snapshot(backs_row)
+    merged_resp = await snapshot(merged_row)
+    await broadcast(fronts_resp, backs_resp, merged_resp)
+
+    # Everything below is best effort: the merge itself is already done.
+    try:
+        await log_event(db, "scan.complete", "scan_job", merged_id, user_id=user.id,
+                        detail={"format": "pdf", "pages": outcome.page_count, "duplex": True})
+        await db.commit()
+        await dispatch_webhook(
+            db, "scan.complete",
+            {"scan_id": merged_id, "format": "pdf", "pages": outcome.page_count},
+        )
+        scanner = await db.get(Scanner, scanner_id) if scanner_id else None
+        if scanner is None:
+            scanner = await get_default_scanner(db)
+        if scanner and scanner.auto_deliver:
+            await run_post_scan_actions(
+                merged_row, scanner, db, default_filename_template=filename_template
+            )
+            if os.path.exists(merged_path):
+                merged_row.file_size = os.path.getsize(merged_path)
+            await db.commit()
+        refreshed = await snapshot(merged_row)
+        if refreshed is not None:
+            merged_resp = refreshed
+            await broadcast(refreshed)
+    except Exception:
+        logger.exception("Post-merge delivery failed for scan %s", merged_id)
+        await db.rollback()
+
+    if merged_resp is None:
+        raise NotFoundError("The merged scan was deleted before it could be returned.")
+    return BacksResponse(
+        merged=merged_resp, backs=backs_resp, fronts=fronts_resp,
+        blanks_dropped=outcome.blanks_dropped,
+    )
+
+
 @router.post("/scans/{scan_id}/smb")
 async def save_scan_to_smb(
     scan_id: str,
@@ -613,6 +841,7 @@ async def bulk_delete_scans(
             filepaths.append(job.filepath)
         await db.delete(job)
         deleted += 1
+    freed = await duplex_service.release_fronts(db, jobs)
 
     # F44: rows are deleted and committed before their files are unlinked, so
     # a slow/failing unlink can never leave a committed row pointing at a
@@ -625,6 +854,10 @@ async def bulk_delete_scans(
     for scan_id in body.scan_ids:
         await ws_manager.broadcast("scans", {
             "type": "scan_deleted", "data": {"scan_id": scan_id}
+        })
+    for fronts in freed:
+        await ws_manager.broadcast("scans", {
+            "type": "scan_completed", "data": serialize_scan_job(fronts)
         })
 
     return BulkDeleteResponse(deleted=deleted)
@@ -757,6 +990,7 @@ async def delete_scan(
     filepath = job.filepath
     scan_id_copy = job.scan_id
     await db.delete(job)
+    freed = await duplex_service.release_fronts(db, [job])
     # F44: commit before unlinking, so a slow/failing unlink can never leave
     # a committed row pointing at a file that's already gone.
     await db.commit()
@@ -771,6 +1005,10 @@ async def delete_scan(
     await ws_manager.broadcast("scans", {
         "type": "scan_deleted", "data": {"scan_id": scan_id_copy}
     })
+    for fronts in freed:
+        await ws_manager.broadcast("scans", {
+            "type": "scan_completed", "data": serialize_scan_job(fronts)
+        })
 
 
 # --- Scan Profiles ---

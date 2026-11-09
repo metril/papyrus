@@ -9,6 +9,7 @@ import contextlib
 import ipaddress
 import logging
 import os
+import shutil
 import time
 import uuid
 from datetime import datetime, timezone
@@ -17,13 +18,20 @@ from xml.etree.ElementTree import Element, SubElement, tostring
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 
 from app.database import async_session, get_db
-from app.exceptions import ScannerBusyError
+from app.exceptions import ScannerBusyError, ScanSourceError, user_message
 from app.models import ScanJob
 from app.routers.settings import get_setting
 from app.schemas import serialize_scan_job
-from app.services.scan_service import get_default_scanner_device, scan_service
+from app.services.brother_client import FEEDER_EMPTY_DETAIL
+from app.services.scan_service import (
+    feeder_takes_every_sheet,
+    get_default_scanner_device,
+    is_native_device,
+    scan_service,
+)
 from app.services.ws_manager import ws_manager
 
 _log = logging.getLogger(__name__)
@@ -88,6 +96,7 @@ PWG_NS = "http://www.pwg.org/schemas/2010/12/sm"
 
 # F4: matches the DiscreteResolutions advertised in ScannerCapabilities.
 ESCL_RESOLUTIONS = (75, 100, 150, 200, 300, 600)
+_NEXT_DOCUMENT_WAIT_SECONDS = 20
 # F4: matches the Max{Width,Height} advertised in ScannerCapabilities (A4 at
 # the caps' 300dpi coordinate system) -- the platen/ADF caps this module
 # advertises, in px at that same 300dpi basis.
@@ -114,6 +123,105 @@ _scan_jobs: dict[str, dict] = {}
 _JOB_TTL_SECONDS = 3600.0  # 1 hour
 _TERMINAL_STATES = frozenset({"Completed", "Canceled"})
 
+# The Brother DCP-L2540DW feeder holds 35 sheets (also the brscan4 path).
+_FEEDER_CAPACITY = 35
+_ADF_CACHE_TTL = 10.0
+_ADF_STALE_LIMIT = 60.0
+_ADF_STATUS_TIMEOUT = 3.0
+_PREFLIGHT_TIMEOUT = 3.0
+# device -> (monotonic time, feeder loaded)
+_adf_cache: dict[str, tuple[float, bool]] = {}
+_adf_probing = False
+
+
+def _scan_active() -> bool:
+    return scan_service.is_busy() or any(
+        j["state"] in ("Pending", "Processing") for j in _scan_jobs.values()
+    )
+
+
+async def _native_device(db) -> str | None:
+    try:
+        device = await get_default_scanner_device(db)
+    except Exception:
+        return None
+    return device if is_native_device(device) else None
+
+
+async def _adf_loaded(db) -> bool | None:
+    """Feeder state for ScannerStatus: cached, never read while a scan runs,
+    bounded, None when unknown."""
+    global _adf_probing
+    if _scan_active():
+        return None
+    device = await _native_device(db)
+    if device is None:
+        return None
+    now = time.monotonic()
+    cached = _adf_cache.get(device)
+    if cached and now - cached[0] < _ADF_CACHE_TTL:
+        return cached[1]
+    reading = None
+    if not _adf_probing:
+        _adf_probing = True
+        try:
+            reading = await asyncio.wait_for(
+                scan_service.native_feeder_reading(device, _ADF_STATUS_TIMEOUT),
+                _ADF_STATUS_TIMEOUT + 0.2,
+            )
+        except Exception:
+            reading = None
+        finally:
+            _adf_probing = False
+    if reading is not None and not _scan_active():
+        _adf_cache[device] = (time.monotonic(), reading.loaded)
+        return reading.loaded
+    if cached and now - cached[0] < _ADF_STALE_LIMIT:
+        return cached[1]
+    return None
+
+
+async def _refuse_impossible_source(db, source: str) -> None:
+    """409 before a job exists when a feeder request has no paper, since the
+    printer would silently scan the glass instead. Anything unreadable falls
+    through: the scan's own check still guards it. A glass request is never
+    refused; paper in the feeder takes it over."""
+    if source != "ADF" or _scan_active():
+        return
+    device = await _native_device(db)
+    if device is None:
+        return
+    try:
+        reading = await asyncio.wait_for(
+            scan_service.native_feeder_reading(device, _PREFLIGHT_TIMEOUT),
+            _PREFLIGHT_TIMEOUT + 0.2,
+        )
+    except Exception:
+        return
+    if reading is None:
+        return
+    if not reading.loaded:
+        raise ScanSourceError(FEEDER_EMPTY_DETAIL)
+
+
+def _discard_job_files(job: dict) -> None:
+    """Delete a job's held page files (its per-job directory)."""
+    page_dir = job.get("page_dir")
+    if page_dir:
+        shutil.rmtree(page_dir, ignore_errors=True)
+    job["pages"] = []
+
+
+def _pages_remaining(job: dict) -> int:
+    return len(job.get("pages") or [])
+
+
+def _reported_state(job: dict) -> str:
+    """A finished job still holding unserved pages is still Processing."""
+    if job["state"] == "Completed" and _pages_remaining(job):
+        return "Processing"
+    return job["state"]
+
 
 def _purge_stale_jobs() -> None:
     """Evict terminal-state jobs whose ``terminal_at`` stamp is older than
@@ -131,14 +239,24 @@ def _purge_stale_jobs() -> None:
         and now - job["terminal_at"] > _JOB_TTL_SECONDS
     ]
     for job_id in stale_ids:
-        _scan_jobs.pop(job_id, None)
+        _discard_job_files(_scan_jobs.pop(job_id))
 
 
-def _snap_resolution(value: int) -> int:
+async def _device_resolutions(db) -> tuple[int, ...] | None:
+    """Resolutions the default device supports, or None if undeterminable."""
+    try:
+        device = await get_default_scanner_device(db)
+        opts = await scan_service.get_options(device)
+        return tuple(sorted(opts["resolutions"]))
+    except Exception:
+        return None
+
+
+def _snap_resolution(value: int, allowed: tuple[int, ...] = ESCL_RESOLUTIONS) -> int:
     """Snap a client-requested XResolution to the nearest advertised
     discrete resolution (F4) — an out-of-range value (e.g. a client sending
     an arbitrary DPI) must never reach `scanimage --resolution` unclamped."""
-    return min(ESCL_RESOLUTIONS, key=lambda r: abs(r - value))
+    return min(allowed, key=lambda r: abs(r - value))
 
 
 def _clamp_scan_region(region: dict) -> dict:
@@ -188,6 +306,12 @@ async def scanner_capabilities(db: AsyncSession = Depends(get_db)):
     if not escl_enabled:
         raise HTTPException(status_code=503, detail="eSCL scanner disabled")
 
+    device_dpis = await _device_resolutions(db) or (75, 150, 300, 600)
+    try:
+        device = await get_default_scanner_device(db)
+    except Exception:
+        device = ""
+
     root = Element("scan:ScannerCapabilities")
     root.set("xmlns:scan", ESCL_NS)
     root.set("xmlns:pwg", PWG_NS)
@@ -231,7 +355,7 @@ async def scanner_capabilities(db: AsyncSession = Depends(get_db)):
     # Resolutions
     resolutions = SubElement(profile, "scan:SupportedResolutions")
     discrete = SubElement(resolutions, "scan:DiscreteResolutions")
-    for dpi in (75, 150, 300, 600):
+    for dpi in device_dpis:
         res = SubElement(discrete, "scan:DiscreteResolution")
         SubElement(res, "scan:XResolution").text = str(dpi)
         SubElement(res, "scan:YResolution").text = str(dpi)
@@ -267,10 +391,16 @@ async def scanner_capabilities(db: AsyncSession = Depends(get_db)):
 
     adf_resolutions = SubElement(adf_profile, "scan:SupportedResolutions")
     adf_discrete = SubElement(adf_resolutions, "scan:DiscreteResolutions")
-    for dpi in (75, 150, 300, 600):
+    for dpi in device_dpis:
         adf_res = SubElement(adf_discrete, "scan:DiscreteResolution")
         SubElement(adf_res, "scan:XResolution").text = str(dpi)
         SubElement(adf_res, "scan:YResolution").text = str(dpi)
+
+    if feeder_takes_every_sheet(device):
+        SubElement(adf, "scan:FeederCapacity").text = str(_FEEDER_CAPACITY)
+    if is_native_device(device):
+        adf_options = SubElement(adf, "scan:AdfOptions")
+        SubElement(adf_options, "scan:AdfOption").text = "DetectPaperLoaded"
 
     return _xml_response(root)
 
@@ -293,18 +423,48 @@ async def scanner_status(db: AsyncSession = Depends(get_db)):
 
     _purge_stale_jobs()
 
-    # Report active jobs so clients can track state transitions
-    active_jobs = {jid: j for jid, j in _scan_jobs.items() if j["state"] != "Canceled"}
-    if active_jobs:
+    loaded = await _adf_loaded(db)
+    if loaded is not None:
+        SubElement(root, "scan:AdfState").text = "ScannerAdfLoaded" if loaded else "ScannerAdfEmpty"
+
+    if _scan_jobs:
         jobs_elem = SubElement(root, "scan:Jobs")
-        for job_id, job in active_jobs.items():
+        for job_id, job in _scan_jobs.items():
             job_info = SubElement(jobs_elem, "scan:JobInfo")
             SubElement(job_info, "pwg:JobUri").text = f"/eSCL/ScanJobs/{job_id}"
             SubElement(job_info, "pwg:JobUuid").text = job_id
             SubElement(job_info, "scan:Age").text = "0"
-            SubElement(job_info, "pwg:JobState").text = job["state"]
+            if job.get("held"):
+                SubElement(job_info, "pwg:ImagesCompleted").text = str(
+                    job["pages_total"] - _pages_remaining(job)
+                )
+                SubElement(job_info, "pwg:ImagesToTransfer").text = str(_pages_remaining(job))
+            if job["state"] == "Canceled":
+                SubElement(job_info, "pwg:JobState").text = "Aborted"
+                reasons = SubElement(job_info, "pwg:JobStateReasons")
+                SubElement(reasons, "pwg:JobStateReason").text = "AbortedBySystem"
+            else:
+                SubElement(job_info, "pwg:JobState").text = _reported_state(job)
 
     return _xml_response(root)
+
+
+def _fit_image(path: str, fmt: str, req_w: int, req_h: int, res: int, job_id: str) -> None:
+    """Re-save an image at exactly req_w x req_h (white padding / cropping)."""
+    from PIL import Image as _PILImage
+
+    with _PILImage.open(path) as img:
+        actual = img.size
+        _log.info(
+            "eSCL job %s: actual=%s expected=%sx%s dpi=%s",
+            job_id, actual, req_w, req_h, img.info.get("dpi"),
+        )
+        if actual != (req_w, req_h):
+            canvas = _PILImage.new(img.mode, (req_w, req_h), (255,) * len(img.mode))
+            canvas.paste(img.copy(), (0, 0))
+        else:
+            canvas = img.copy()
+        canvas.save(path, format="JPEG" if fmt == "jpeg" else "PNG", dpi=(res, res))
 
 
 async def _run_scan(job_id: str) -> None:
@@ -314,8 +474,16 @@ async def _run_scan(job_id: str) -> None:
     if job is None:
         return
     job["state"] = "Processing"
+    _adf_cache.clear()
 
     db_job_id: int | None = None
+    filepath: str | None = None
+    row_owns_file = False
+
+    def drop_unowned_file() -> None:
+        if filepath and not row_owns_file and os.path.exists(filepath):
+            with contextlib.suppress(OSError):
+                os.unlink(filepath)
 
     try:
         async with async_session() as db:
@@ -361,50 +529,69 @@ async def _run_scan(job_id: str) -> None:
             req_w, req_h, width_mm or 0, height_mm or 0,
         )
 
-        def _capture_process(proc: asyncio.subprocess.Process) -> None:
-            # F110: keep a handle to the running scanimage subprocess so
-            # DELETE /ScanJobs/{id} has one available, alongside the task
-            # handle set on job creation, even though scan()'s own
-            # CancelledError handling is what actually kills it.
-            job["process"] = proc
-
-        scan_id, filepath = await scan_service.scan(
-            resolution=res,
-            mode=job["color_mode"],
-            fmt=job["format"],
-            source=job["source"],
-            device=device,
-            scan_dir=scan_dir,
-            on_process_start=_capture_process,
-            left_mm=left_mm,
-            top_mm=top_mm,
-            width_mm=width_mm,
-            height_mm=height_mm,
+        page_count = 1
+        fed_glass = False
+        glass_request = False
+        held = (
+            job["source"] == "ADF"
+            and job["format"] != "pdf"
+            and feeder_takes_every_sheet(device)
         )
+        if job["source"] != "ADF" and job["format"] != "pdf" and is_native_device(device):
+            # Paper in the feeder takes over a glass request and delivers every
+            # sheet, which only the held-pages path can hand out as images.
+            reading = await scan_service.native_feeder_reading(device)
+            glass_request = held = reading is not None and reading.takes_over_glass
+
+        def set_page_count(count: int) -> None:
+            nonlocal page_count
+            page_count = count
+
+        def set_fed_glass() -> None:
+            nonlocal fed_glass
+            fed_glass = True
+            if not held:
+                job["format"] = "pdf"
+
+        if held:
+            scan_id, filepath, page_dir, pages = await scan_service.scan_feeder_pages(
+                resolution=res,
+                mode=job["color_mode"],
+                fmt=job["format"],
+                device=device,
+                scan_dir=scan_dir,
+                glass_request=glass_request,
+                feeder_callback=set_fed_glass,
+            )
+            job["page_dir"] = page_dir
+            job["pages"] = list(pages)
+            job["pages_total"] = page_count = len(pages)
+            job["held"] = True
+        else:
+            scan_id, filepath = await scan_service.scan(
+                page_count_callback=set_page_count,
+                feeder_callback=set_fed_glass,
+                resolution=res,
+                mode=job["color_mode"],
+                fmt=job["format"],
+                source=job["source"],
+                device=device,
+                scan_dir=scan_dir,
+                left_mm=left_mm,
+                top_mm=top_mm,
+                width_mm=width_mm,
+                height_mm=height_mm,
+            )
 
         # Always re-save JPEG/PNG with correct DPI and exact dimensions.
         # ICA pre-allocates an exact buffer (width×height×3 bytes) and will
         # corrupt the saved file if our dimensions don't match precisely.
         if req_w and req_h and job["format"] in ("jpeg", "png"):
-            from PIL import Image as _PILImage
-
-            def _trim() -> None:
-                with _PILImage.open(filepath) as img:
-                    actual = img.size
-                    _log.info(
-                        "eSCL job %s: actual=%s expected=%sx%s dpi=%s",
-                        job_id, actual, req_w, req_h, img.info.get("dpi"),
-                    )
-                    if actual != (req_w, req_h):
-                        canvas = _PILImage.new(img.mode, (req_w, req_h),
-                                               (255,) * len(img.mode))
-                        canvas.paste(img.copy(), (0, 0))
-                    else:
-                        canvas = img.copy()
-                    fmt_str = "JPEG" if job["format"] == "jpeg" else "PNG"
-                    canvas.save(filepath, format=fmt_str, dpi=(res, res))
-
-            await asyncio.get_event_loop().run_in_executor(None, _trim)
+            targets = job["pages"] if held else [filepath]
+            for target in targets:
+                await asyncio.get_event_loop().run_in_executor(
+                    None, _fit_image, target, job["format"], req_w, req_h, res, job_id
+                )
 
         file_size = os.path.getsize(filepath)
 
@@ -416,9 +603,16 @@ async def _run_scan(job_id: str) -> None:
                 result.scan_id = scan_id
                 result.filepath = filepath
                 result.file_size = file_size
+                result.page_count = page_count
+                if held:
+                    result.format = "pdf"
+                if fed_glass:
+                    result.format = "pdf"
+                    result.source = "ADF"
                 result.status = "completed"
                 result.completed_at = datetime.now(timezone.utc)
                 await db.commit()
+                row_owns_file = True
                 await db.refresh(result)
                 scan_payload = serialize_scan_job(result)
 
@@ -437,21 +631,39 @@ async def _run_scan(job_id: str) -> None:
         job["state"] = "Completed"
         job["terminal_at"] = time.monotonic()
 
-    except Exception as e:
-        _log.error("eSCL scan %s failed: %s", job_id, e, exc_info=True)
+    except asyncio.CancelledError:
+        _discard_job_files(job)
+        drop_unowned_file()
         if db_job_id is not None:
             try:
                 async with async_session() as db:
                     result = await db.get(ScanJob, db_job_id)
                     if result:
                         result.status = "failed"
-                        result.error_message = str(e)
+                        result.error_message = "Scan cancelled"
+                        await db.commit()
+            except Exception:
+                pass
+        raise
+    except Exception as e:
+        _log.error("eSCL scan %s failed: %s", job_id, e, exc_info=True)
+        _discard_job_files(job)
+        drop_unowned_file()
+        if db_job_id is not None:
+            try:
+                async with async_session() as db:
+                    result = await db.get(ScanJob, db_job_id)
+                    if result:
+                        result.status = "failed"
+                        result.error_message = user_message(e)
                         await db.commit()
             except Exception:
                 pass
         job["state"] = "Canceled"
-        job["error"] = str(e)
+        job["error"] = user_message(e)
         job["terminal_at"] = time.monotonic()
+    finally:
+        _adf_cache.clear()
 
 
 @router.post("/ScanJobs")
@@ -483,7 +695,9 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
         if elem is not None and elem.text:
             color_mode = ESCL_COLOR_MAP.get(elem.text, "Color")
 
-        elem = _find_local(root, "DocumentFormatExt") or _find_local(root, "DocumentFormat")
+        elem = _find_local(root, "DocumentFormatExt")
+        if elem is None:
+            elem = _find_local(root, "DocumentFormat")
         if elem is not None and elem.text:
             mime = elem.text.lower()
             if "jpeg" in mime:
@@ -518,10 +732,12 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
     # F4/F135: snap resolution to an advertised discrete value and
     # validate/clamp the requested region against the advertised caps
     # (or fall back to a full-bed scan) before anything is stored or acted on.
-    resolution = _snap_resolution(resolution)
+    resolution = _snap_resolution(resolution, await _device_resolutions(db) or ESCL_RESOLUTIONS)
     scan_region = _clamp_scan_region(scan_region)
 
     _purge_stale_jobs()
+
+    await _refuse_impossible_source(db, source)
 
     # F3: reject a new job outright while the scanner is already busy (either
     # a real scan in progress, or another eSCL job still Pending/Processing)
@@ -542,13 +758,17 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
         "scan_region": scan_region,
         "filepath": None,
         "served": False,
+        "held": False,
+        "pages": [],
+        "pages_total": 0,
+        "page_dir": None,
+        "in_flight": None,
         "error": None,
         "terminal_at": None,
     }
 
     # Start scan immediately in background — clients poll ScannerStatus for
-    # Completed. The task handle is kept on the job entry (alongside the
-    # subprocess handle _run_scan captures once scanning starts) so
+    # Completed. The task handle is kept on the job entry so
     # DELETE /ScanJobs/{id} can actually cancel an in-flight scan (F110).
     task = asyncio.create_task(_run_scan(job_id))
     _scan_jobs[job_id]["task"] = task
@@ -560,20 +780,44 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/ScanJobs/{job_id}/NextDocument")
-async def get_next_document(job_id: str):
+async def get_next_document(job_id: str, request: Request):
     """Return the scanned document once the background scan has completed."""
     _purge_stale_jobs()
     job = _scan_jobs.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Scan job not found")
 
+    # Hold the request while the scan runs, as real scanners do. Clients retry a
+    # 503 only so many times (sane-airscan gives up after about 30), and a feeder
+    # stack can take far longer than that many immediate answers would cover.
+    task = job.get("task")
+    if job["state"] in ("Pending", "Processing") and task is not None:
+        await asyncio.wait({task}, timeout=_NEXT_DOCUMENT_WAIT_SECONDS)
+        # A client that left during the hold must not use up the page; its retry gets it.
+        if await request.is_disconnected():
+            return Response(status_code=499)
+        job = _scan_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Scan job not found")
+
     if job["state"] == "Canceled":
-        raise HTTPException(status_code=503, detail=job.get("error") or "Scan failed")
+        raise HTTPException(status_code=410, detail=job.get("error") or "Scan failed")
 
     if job["state"] in ("Pending", "Processing"):
-        raise HTTPException(status_code=503, detail="Scan in progress")
+        raise HTTPException(
+            status_code=503, detail="Scan in progress", headers={"Retry-After": "1"}
+        )
 
     # state == "Completed"
+    if job.get("held"):
+        if not job["pages"]:
+            raise HTTPException(status_code=404, detail="No more pages")
+        page = job["pages"][0]
+        token = object()
+        job["in_flight"] = token
+        job["terminal_at"] = time.monotonic()
+        return _file_response(job, page, BackgroundTask(_finish_page, job, token, page))
+
     if job["served"]:
         # No more pages — signal end of job to client
         raise HTTPException(status_code=404, detail="No more pages")
@@ -587,11 +831,13 @@ async def cancel_scan_job(job_id: str):
     """Cancel a scan job and clean up.
 
     F110: a Pending/Processing job's background task is actually cancelled
-    (not just forgotten) — `scan_service.scan`'s own CancelledError handling
-    kills the scanimage subprocess and removes any partial output before the
-    cancellation propagates back here, so a client that cancels no longer
-    gets a 200 while the scan silently keeps running, holds the scanner
-    lock, and shows up in the web UI anyway.
+    (not just forgotten) — the backend's CancelledError handling stops the
+    scan (killing scanimage; a native glass scan drops its connection) and
+    `scan_service.scan` removes any partial output before the cancellation
+    propagates back here. A native feeder stream cannot be stopped, so its
+    connection is kept and read to the job end first (bounded by the idle
+    timeout) and this call returns only after that; the scanner lock is
+    released then.
     """
     _purge_stale_jobs()
     job = _scan_jobs.pop(job_id, None)
@@ -604,6 +850,8 @@ async def cancel_scan_job(job_id: str):
         with contextlib.suppress(asyncio.CancelledError):
             await task
 
+    _discard_job_files(job)
+
     # Only delete the file for canceled/failed scans; completed scans live in the web UI
     if job.get("state") != "Completed" and job.get("filepath") and os.path.exists(job["filepath"]):
         os.unlink(job["filepath"])
@@ -611,9 +859,24 @@ async def cancel_scan_job(job_id: str):
     return Response(status_code=200)
 
 
-def _file_response(job: dict) -> FileResponse:
+def _finish_page(job: dict, token: object, path: str) -> None:
+    """Runs only after the page was fully sent; only the latest send counts."""
+    if job.get("in_flight") is not token or not job["pages"] or job["pages"][0] != path:
+        return
+    job["pages"].pop(0)
+    job["in_flight"] = None
+    job["terminal_at"] = time.monotonic()
+    with contextlib.suppress(OSError):
+        os.unlink(path)
+    if not job["pages"] and job.get("page_dir"):
+        shutil.rmtree(job["page_dir"], ignore_errors=True)
+
+
+def _file_response(
+    job: dict, filepath: str | None = None, background: BackgroundTask | None = None
+) -> FileResponse:
     """Return the scanned file with appropriate MIME type."""
-    filepath = job["filepath"]
+    filepath = filepath or job["filepath"]
     fmt = job["format"]
 
     media_types = {
@@ -626,4 +889,5 @@ def _file_response(job: dict) -> FileResponse:
         path=filepath,
         media_type=media_types.get(fmt, "application/octet-stream"),
         filename=f"scan.{fmt}",
+        background=background,
     )

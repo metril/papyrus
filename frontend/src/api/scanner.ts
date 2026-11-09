@@ -10,6 +10,7 @@ export async function getScannerOptions(): Promise<{
   resolutions: number[];
   modes: string[];
   formats: string[];
+  feeder_formats?: string[];
   sources: string[];
 }> {
   const { data } = await api.get('/scanner/options');
@@ -23,6 +24,28 @@ export async function initiateScan(request: ScanRequest): Promise<ScanJob> {
 
 export async function initiateBatchScan(request: ScanRequest): Promise<ScanJob> {
   const { data } = await api.post('/scanner/scan/batch', request);
+  return data;
+}
+
+export interface ScanBacksOptions {
+  rotate_backs: boolean;
+  skip_blank_backs: boolean;
+}
+
+export interface ScanBacksResult {
+  merged: ScanJob;
+  backs: ScanJob | null;
+  fronts: ScanJob | null;
+  blanks_dropped: number;
+}
+
+/** Scans the other side of a feeder PDF and merges it into a new scan. The
+ * request stays open for the whole feeder scan, so no client timeout is applied. */
+export async function scanBacks(
+  scanId: string,
+  options: ScanBacksOptions,
+): Promise<ScanBacksResult> {
+  const { data } = await api.post(`/scanner/scans/${scanId}/backs`, options);
   return data;
 }
 

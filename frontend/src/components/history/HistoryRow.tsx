@@ -1,12 +1,14 @@
 import { memo, useState } from 'react';
-import { Download, Eye, Lock, Printer, ScanLine, Trash2 } from 'lucide-react';
+import { Download, Eye, FlipHorizontal2, Lock, Printer, ScanLine, Trash2 } from 'lucide-react';
 import { getJobThumbnailUrl, getScanThumbnailUrl } from '../../api/scanner';
 import { useAuthStore } from '../../store/authStore';
 import { isLockedForViewer } from '../../lib/jobAccess';
 import StatusBadge from '../common/StatusBadge';
 import Button from '../common/Button';
+import ScanBacksDialog from '../scan/ScanBacksDialog';
+import { canScanBacks } from '../../lib/scanBacks';
 import type { HistoryItem } from '../../pages/HistoryPage';
-import type { PrintJob, User } from '../../types';
+import type { PrintJob, ScanJob, User } from '../../types';
 
 function canPreview(item: HistoryItem): boolean {
   return item.status === 'completed' || item.status === 'held';
@@ -103,6 +105,8 @@ export function HistoryRowComponent({ item, selected, onToggleSelect, onPreview,
   const locked = isHistoryItemLocked(item, viewer);
   const previewable = canPreview(item) && !locked;
   const TypeIcon = item.type === 'print' ? Printer : ScanLine;
+  const [backsOpen, setBacksOpen] = useState(false);
+  const backsAllowed = item.type === 'scan' && !!item.scanId && canScanBacks(item.raw as ScanJob);
 
   // Dispatch which stable mutate-ref to call here (in the row, which already
   // knows the item's type) rather than in the parent — keeps both callback
@@ -165,6 +169,12 @@ export function HistoryRowComponent({ item, selected, onToggleSelect, onPreview,
             </Button>
           </a>
         )}
+        {backsAllowed && (
+          <Button size="sm" variant="secondary" onClick={() => setBacksOpen(true)}>
+            <FlipHorizontal2 className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden="true" />
+            Scan other side
+          </Button>
+        )}
         <Button
           size="sm"
           variant="danger"
@@ -174,6 +184,9 @@ export function HistoryRowComponent({ item, selected, onToggleSelect, onPreview,
           Delete
         </Button>
       </div>
+      {backsOpen && item.scanId && (
+        <ScanBacksDialog scanId={item.scanId} onClose={() => setBacksOpen(false)} />
+      )}
     </div>
   );
 }

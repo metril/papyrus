@@ -16,6 +16,11 @@ import pytest
 from app.routers import escl
 
 
+class _ConnectedRequest:
+    async def is_disconnected(self):
+        return False
+
+
 @pytest.fixture(autouse=True)
 def _clear_scan_jobs():
     """Module-level dict; isolate each test."""
@@ -158,7 +163,7 @@ async def test_get_next_document_purges_stale_siblings_before_serving(monkeypatc
     target["filepath"] = str(scan_file)
     escl._scan_jobs["target"] = target
 
-    response = await escl.get_next_document("target")
+    response = await escl.get_next_document("target", _ConnectedRequest())
 
     assert "stale-sibling" not in escl._scan_jobs
     assert response.status_code == 200

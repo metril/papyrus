@@ -103,3 +103,69 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
+
+  arm64:
+    # Native arm64 runner: the image must build, the backend suite must pass,
+    # and the container must answer /health. brscan4 is amd64-only, so this
+    # image ships native Brother scanning only.
+    runs-on: ubuntu-24.04-arm
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: papyrus
+          POSTGRES_PASSWORD: papyrus
+          POSTGRES_DB: papyrus_test
+        ports:
+          - "5433:5432"
+        options: >-
+          --health-cmd "pg_isready -U papyrus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libcups2-dev ghostscript
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: pip install -e ".[dev]"
+
+      - name: Pytest
+        working-directory: backend
+        env:
+          PAPYRUS_TEST_DB_URL: postgresql+asyncpg://papyrus:papyrus@localhost:5433/papyrus_test
+        run: pytest -q
+
+      - name: Build image
+        run: docker build -f docker/Dockerfile -t papyrus:arm64-ci .
+
+      - name: Image has the native stack and no brscan4
+        run: |
+          docker run --rm --entrypoint python papyrus:arm64-ci \
+            -c 'import app.services.brother_client, app.services.scan_service, img2pdf, PIL'
+          docker run --rm --entrypoint sh papyrus:arm64-ci -c \
+            'which scanimage && ! which brsaneconfig4'
+
+      - name: Container answers /health
+        run: |
+          docker run -d --name papyrus --network host --cap-add SYS_ADMIN \
+            -e PAPYRUS_DB_URL=postgresql+asyncpg://papyrus:papyrus@localhost:5433/papyrus_test \
+            -e PAPYRUS_SESSION_SECRET=ci-session-secret-not-for-production \
+            -e PAPYRUS_BASE_URL=http://localhost:8080 \
+            -e PAPYRUS_DEV_MODE=true \
+            papyrus:arm64-ci
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/api/system/health; then exit 0; fi
+            sleep 2
+          done
+          docker logs papyrus
+          exit 1

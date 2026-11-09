@@ -133,4 +133,113 @@ describe('ScanForm', () => {
 
     expect(postedIds[0]).not.toBe(postedIds[1]);
   });
+
+  it('shows the source, format and pages the scan really used', async () => {
+    server.use(
+      http.post('/api/scanner/scan', async ({ request }) => {
+        const body = (await request.json()) as { scan_id?: string };
+        return HttpResponse.json({
+          id: 1,
+          scan_id: body.scan_id,
+          status: 'completed',
+          resolution: 300,
+          mode: 'Color',
+          format: 'pdf',
+          source: 'ADF',
+          page_count: 3,
+          file_size: 1234,
+          error_message: null,
+          created_at: '2026-08-26T00:00:00Z',
+          completed_at: '2026-08-26T00:00:00Z',
+        });
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<ScanForm />, { wrapper: makeWrapper() });
+    await user.click(screen.getByRole('button', { name: 'Start scan' }));
+
+    await waitFor(() => expect(screen.getByText('ADF · PDF · 3 pages')).toBeInTheDocument());
+    expect(screen.getByText(/paper in the feeder/i)).toBeInTheDocument();
+  });
+
+  it('adds no note when the scan used what was asked for', async () => {
+    server.use(
+      http.post('/api/scanner/scan', async ({ request }) => {
+        const body = (await request.json()) as { scan_id?: string };
+        return HttpResponse.json({
+          id: 1,
+          scan_id: body.scan_id,
+          status: 'completed',
+          resolution: 300,
+          mode: 'Color',
+          format: 'pdf',
+          source: 'Flatbed',
+          page_count: 1,
+          file_size: 1234,
+          error_message: null,
+          created_at: '2026-08-26T00:00:00Z',
+          completed_at: '2026-08-26T00:00:00Z',
+        });
+      }),
+    );
+
+    const user = userEvent.setup();
+    render(<ScanForm />, { wrapper: makeWrapper() });
+    await user.click(screen.getByRole('button', { name: 'Start scan' }));
+
+    await waitFor(() => expect(screen.getByText('Flatbed · PDF · 1 page')).toBeInTheDocument());
+    expect(screen.queryByText(/paper in the feeder/i)).toBeNull();
+  });
+
+  describe('feeder format restriction', () => {
+    const base = {
+      resolutions: [100, 300],
+      modes: ['Color'],
+      formats: ['png', 'jpeg', 'tiff', 'pdf'],
+      sources: ['Flatbed', 'ADF'],
+    };
+
+    async function renderWith(feeder_formats: string[]) {
+      server.use(
+        http.get('/api/scanner/options', () => HttpResponse.json({ ...base, feeder_formats })),
+      );
+      const user = userEvent.setup();
+      render(<ScanForm />, { wrapper: makeWrapper() });
+      await screen.findByRole('option', { name: '100 DPI' });
+      return user;
+    }
+
+    it('offers only PDF for the feeder when the device requires it, and says why', async () => {
+      const user = await renderWith(['pdf']);
+      await user.selectOptions(screen.getByDisplayValue('Flatbed'), 'ADF');
+      expect(screen.queryByRole('option', { name: 'JPEG' })).not.toBeInTheDocument();
+      expect(screen.getByText(/saves as PDF only/)).toBeInTheDocument();
+    });
+
+    it('sends pdf even if a profile or earlier choice was jpeg', async () => {
+      let body: { format?: string } = {};
+      server.use(
+        http.post('/api/scanner/scan', async ({ request }) => {
+          body = (await request.json()) as { format?: string };
+          return HttpResponse.json(
+            { id: 1, scan_id: 'x', status: 'completed', format: 'pdf', source: 'ADF', page_count: 1 },
+            { status: 201 },
+          );
+        }),
+      );
+      const user = await renderWith(['pdf']);
+      await user.selectOptions(screen.getByDisplayValue('PDF'), 'jpeg');
+      await user.selectOptions(screen.getByDisplayValue('Flatbed'), 'ADF');
+      await user.click(screen.getByRole('button', { name: 'Start scan' }));
+      await waitFor(() => expect(body.format).toBe('pdf'));
+    });
+
+    it('leaves every format available when the feeder has no restriction', async () => {
+      const user = await renderWith(['png', 'jpeg', 'tiff', 'pdf']);
+      await user.selectOptions(screen.getByDisplayValue('Flatbed'), 'ADF');
+      expect(screen.getByRole('option', { name: 'JPEG' })).toBeInTheDocument();
+      expect(screen.queryByText(/saves as PDF only/)).not.toBeInTheDocument();
+    });
+  });
 });

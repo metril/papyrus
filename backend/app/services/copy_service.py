@@ -2,7 +2,12 @@ import logging
 
 from app.exceptions import PapyrusError
 from app.services.cups_service import CupsService
-from app.services.scan_service import ScanError, scan_service
+from app.services.scan_service import (
+    ScanError,
+    feeder_takes_every_sheet,
+    is_native_device,
+    scan_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +29,7 @@ class CopyService:
         media: str = "A4",
         progress_callback=None,
         scan_dir: str | None = None,
+        on_scanned=None,
     ) -> dict:
         """Perform a copy: scan a page then print it.
 
@@ -37,12 +43,31 @@ class CopyService:
 
         Returns dict with scan_id and cups_job_id.
         """
+        # These feeders take every sheet and are PDF-only.
+        native_feeder = feeder_takes_every_sheet(device) and source.lower() == "adf"
+        fmt = "pdf" if native_feeder else "tiff"
+        page_count = 1
+        fed_source = None
+
+        def set_page_count(count: int) -> None:
+            nonlocal page_count
+            page_count = count
+
+        def set_fed_by_feeder() -> None:
+            nonlocal fed_source
+            fed_source = "ADF"
+
         # Step 1: Scan
         try:
             scan_id, filepath = await scan_service.scan(
                 resolution=resolution,
                 mode=mode,
-                fmt="tiff",  # Use TIFF for best print quality
+                fmt=fmt,  # TIFF for best print quality
+                **(
+                    {"page_count_callback": set_page_count, "feeder_callback": set_fed_by_feeder}
+                    if native_feeder or is_native_device(device)
+                    else {}
+                ),
                 source=source,
                 progress_callback=progress_callback,
                 device=device,
@@ -51,6 +76,18 @@ class CopyService:
         except ScanError as e:
             logger.warning("Copy: scan step failed: %s", e)
             raise CopyError("Scan failed while making a copy")
+
+        # Paper in the feeder takes over a glass request: the whole stack is one PDF.
+        if fed_source:
+            fmt = "pdf"
+            source = fed_source
+
+        # The scan is kept in history even if printing fails below.
+        if on_scanned is not None:
+            await on_scanned({
+                "scan_id": scan_id, "filepath": filepath, "format": fmt,
+                "page_count": page_count, "source": source,
+            })
 
         # Step 2: Print the scanned image
         try:
@@ -64,12 +101,17 @@ class CopyService:
             await cups.release_job(cups_job_id)
         except Exception as e:
             logger.warning("Copy: print step failed: %s", e)
-            raise CopyError("Print failed while making a copy")
+            raise CopyError(
+                "Print failed while making a copy. The scan was saved to the scan history."
+            )
 
         return {
             "scan_id": scan_id,
             "cups_job_id": cups_job_id,
             "filepath": filepath,
+            "format": fmt,
+            "page_count": page_count,
+            "source": source,
         }
 
 

@@ -43,6 +43,27 @@ async def create_copy(
     scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
     cups = CupsService(printer_name=queue)
 
+    async def record_scan(info: dict) -> None:
+        scan_job = ScanJob(
+            user_id=user.id,
+            scan_id=info["scan_id"],
+            status="completed",
+            resolution=request.resolution,
+            mode=request.mode,
+            format=info["format"],
+            page_count=info["page_count"],
+            source=info["source"],
+            filepath=info["filepath"],
+            completed_at=datetime.now(timezone.utc),
+        )
+        db.add(scan_job)
+        await db.commit()
+        await db.refresh(scan_job)
+        await ws_manager.broadcast("scans", {
+            "type": "scan_completed",
+            "data": serialize_scan_job(scan_job),
+        })
+
     result = await copy_service.copy(
         cups=cups,
         device=device,
@@ -53,27 +74,14 @@ async def create_copy(
         duplex=request.duplex,
         media=request.media,
         scan_dir=scan_dir,
+        on_scanned=record_scan,
     )
-
-    # Record both the scan and print jobs
-    scan_job = ScanJob(
-        user_id=user.id,
-        scan_id=result["scan_id"],
-        status="completed",
-        resolution=request.resolution,
-        mode=request.mode,
-        format="tiff",
-        source=request.source,
-        filepath=result["filepath"],
-        completed_at=datetime.now(timezone.utc),
-    )
-    db.add(scan_job)
 
     # The print job gets its own copy of the scanned file rather than
     # aliasing the scan's path (F29) — deleting either row's file must not
     # take the other row's file with it.
     upload_dir = await get_setting(db, "upload_dir") or "/app/data/uploads"
-    print_filename = f"copy_{result['scan_id']}.tiff"
+    print_filename = f"copy_{result['scan_id']}.{result['format']}"
     print_filepath = get_upload_path(print_filename, upload_dir=upload_dir)
     os.makedirs(os.path.dirname(print_filepath), exist_ok=True)
     await asyncio.to_thread(shutil.copy2, result["filepath"], print_filepath)
@@ -85,7 +93,7 @@ async def create_copy(
         filename=print_filename,
         filepath=print_filepath,
         file_size=0,
-        mime_type="image/tiff",
+        mime_type="application/pdf" if result["format"] == "pdf" else "image/tiff",
         status="printing",
         copies=request.copies,
         duplex=request.duplex,
@@ -95,14 +103,9 @@ async def create_copy(
     db.add(print_job)
     await db.commit()
 
-    # Surface both records to connected clients incrementally, or they
+    # Surface the print record to connected clients incrementally, or it
     # wouldn't appear until a manual refetch.
-    await db.refresh(scan_job)
     await db.refresh(print_job)
-    await ws_manager.broadcast("scans", {
-        "type": "scan_completed",
-        "data": serialize_scan_job(scan_job),
-    })
     await ws_manager.broadcast("jobs", {
         "type": "job_created",
         "data": serialize_print_job(print_job),

@@ -3,13 +3,17 @@ import logging
 import os
 import re
 import shutil
+import time
 import uuid
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.exceptions import PapyrusError, ScannerBusyError
+from app.exceptions import PapyrusError, ScannerBusyError, ScanRequestError
+from app.services import brother_protocol as bp
+from app.services.brother_client import BrotherScanClient, FeederReading
+from app.services.net_guard import UnsafeHostError, assert_safe_host
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +27,12 @@ _SCAN_TIMEOUT_SECONDS = 300
 # (many pages at high resolution); the PDF merge step is CPU-bound and
 # shouldn't need anywhere near as long.
 _BATCH_SCAN_TIMEOUT_SECONDS = 900
+# brother4 batches may legitimately run for many minutes while paper moves;
+# only a stall (no stderr line, no new page file) for this long is a hang.
+_BATCH_NO_PROGRESS_SECONDS = 120
+_BATCH_POLL_SECONDS = 1.0
+# Lower-case text scanimage prints when the feeder simply ran empty.
+SANE_END_OF_FEED_TEXT = "out of documents"
 _PDF_MERGE_TIMEOUT_SECONDS = 300
 
 
@@ -52,6 +62,525 @@ def _scanimage_match_candidates(device: str) -> list[str]:
         if len(parts) >= 3:
             candidates.append(":".join(parts[:3]))
     return candidates
+
+
+def _driver_options(device: str, mode: str, source: str) -> tuple[str, str]:
+    """Translate Papyrus's mode and source names into what `device`'s driver
+    accepts. brscan4 rejects the generic names outright (scanimage: "setting
+    of option --mode failed"); other drivers take them as they are."""
+    if not device.startswith("brother4:"):
+        return mode, source
+    return (
+        {"Color": "24bit Color", "Gray": "True Gray", "Lineart": "Black & White"}.get(mode, mode),
+        {
+            "flatbed": "FlatBed",
+            "adf": "Automatic Document Feeder(left aligned)",
+        }.get(source.lower(), source),
+    )
+
+
+async def _await_with_timeout(coro, process: asyncio.subprocess.Process,
+                               timeout: float, timeout_message: str):
+    """Await `coro` (which itself awaits/reads from `process`), bounded
+    by `timeout` and cancellation-safe (F41/F110): on a timeout OR the
+    calling task being cancelled (e.g. an eSCL client cancelling the
+    job, or a future caller of scan_batch), `process` is killed and
+    reaped before the exception propagates, instead of being left
+    running unreaped -- a hung subprocess otherwise holds `self._lock`
+    forever, wedging every subsequent scan (web UI and eSCL alike) with
+    "Scanner is busy" until the process restarts.
+    """
+    try:
+        return await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError:
+        process.kill()
+        await process.wait()
+        raise ScanError(timeout_message)
+    except asyncio.CancelledError:
+        process.kill()
+        await process.wait()
+        raise
+
+
+class ScanBackend(Protocol):
+    """A way of talking to a scanner. `ScanService` owns locking, format
+    conversion, merging and cleanup; a backend only acquires raw page images
+    and reports on the device."""
+
+    async def acquire_page(
+        self,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        source: str,
+        tiff_file: str,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        left_mm: float | None = None,
+        top_mm: float | None = None,
+        width_mm: float | None = None,
+        height_mm: float | None = None,
+    ) -> list[str] | None:
+        """Scan one page and write it as a TIFF to `tiff_file`. A backend whose
+        device feeds a glass request instead returns the page paths (in a
+        directory the caller owns) and leaves `tiff_file` unwritten."""
+        ...
+
+    async def acquire_batch(
+        self,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        page_dir: str,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        glass_request: bool = False,
+    ) -> bool | None:
+        """Scan an ADF batch, writing page TIFFs (``*.tiff``) into `page_dir`.
+        `glass_request` is a glass scan the device may serve from the feeder; the
+        result says whether the feeder served it (None: not reported)."""
+        ...
+
+    async def probe(self, device: str) -> dict:
+        """Report whether `device` is reachable (see `ScanService.check_device`)."""
+        ...
+
+    async def options(self, device: str) -> dict:
+        """Supported resolutions/modes/formats/sources for `device`."""
+        ...
+
+
+class SaneBackend:
+    """`scanimage` (SANE) subprocess backend."""
+
+    async def probe(self, device: str) -> dict:
+        process = await asyncio.create_subprocess_exec(
+            "scanimage", "-L",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=_LIST_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+            raise ScannerBusyError("Timed out listing scanner devices")
+
+        output = stdout.decode() + stderr.decode()
+        candidates = _scanimage_match_candidates(device) if device else []
+
+        return {
+            "available": any(c in output for c in candidates),
+            "device": device,
+            "output": output.strip(),
+        }
+
+    async def options(self, device: str) -> dict:
+        return {
+            "resolutions": (
+                [100, 150, 200, 300, 400, 600] if device.startswith("brother4:")
+                else [75, 100, 150, 200, 300, 600]
+            ),
+            "modes": ["Color", "Gray", "Lineart"],
+            "formats": ["png", "jpeg", "tiff", "pdf"],
+            "feeder_formats": (
+                ["pdf"] if device.startswith("brother4:") else ["png", "jpeg", "tiff", "pdf"]
+            ),
+            "sources": ["Flatbed", "ADF"],
+        }
+
+    async def acquire_page(
+        self,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        source: str,
+        tiff_file: str,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        left_mm: float | None = None,
+        top_mm: float | None = None,
+        width_mm: float | None = None,
+        height_mm: float | None = None,
+    ) -> None:
+        _mode, _source = _driver_options(device, mode, source)
+
+        cmd = [
+            "scanimage",
+            "-d", device,
+            "--resolution", str(resolution),
+            "--mode", _mode,
+            "--format=tiff",
+            "--source", _source,
+            "--progress",
+            "-o", tiff_file,
+        ]
+
+        # Scan geometry: restrict to requested area (all values in mm)
+        if left_mm is not None:
+            cmd += ["-l", str(round(left_mm, 2))]
+        if top_mm is not None:
+            cmd += ["-t", str(round(top_mm, 2))]
+        if width_mm is not None:
+            cmd += ["-x", str(round(width_mm, 2))]
+        if height_mm is not None:
+            cmd += ["-y", str(round(height_mm, 2))]
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stderr_lines = await self._read_scan_output(process, scan_id, progress_callback)
+
+        if process.returncode != 0:
+            logger.warning(
+                "scanimage exited %s: %s",
+                process.returncode, "; ".join(ln for ln in stderr_lines if ln),
+            )
+            raise ScanError("The scan failed. Check the scanner and try again.")
+
+    async def _read_scan_output(
+        self,
+        process: asyncio.subprocess.Process,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None,
+    ) -> list[str]:
+        """Read `process`'s stderr for progress lines and wait for exit,
+        bounded by `_SCAN_TIMEOUT_SECONDS` (F41) and cancellation-safe (F110)
+        via `_await_with_timeout`.
+        """
+
+        async def _read() -> list[str]:
+            stderr_lines: list[str] = []
+            if process.stderr:
+                async for line in process.stderr:
+                    text = line.decode().strip()
+                    stderr_lines.append(text)
+                    match = re.search(r"Progress: (\d+\.?\d*)%", text)
+                    if match and progress_callback:
+                        await progress_callback(scan_id, float(match.group(1)))
+            await process.wait()
+            return stderr_lines
+
+        return await _await_with_timeout(
+            _read(), process, _SCAN_TIMEOUT_SECONDS, "Scan timed out"
+        )
+
+    async def acquire_batch(
+        self,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        page_dir: str,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        glass_request: bool = False,
+    ) -> None:
+        _mode, _source = _driver_options(device, mode, "ADF")
+
+        # scanimage --batch mode scans all pages from ADF
+        cmd = [
+            "scanimage",
+            "-d", device,
+            "--resolution", str(resolution),
+            "--mode", _mode,
+            "--format=tiff",
+            "--source", _source,
+            # --batch takes its optional value only in the = form.
+            f"--batch={os.path.join(page_dir, 'page_%04d.tiff')}",
+            "--progress",
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stderr_lines: list[str] = []
+        last_activity = [time.monotonic()]
+
+        async def _read_batch() -> None:
+            if process.stderr:
+                async for line in process.stderr:
+                    last_activity[0] = time.monotonic()
+                    text = line.decode().strip()
+                    match = re.search(r"Progress: (\d+\.?\d*)%", text)
+                    if match:
+                        if progress_callback:
+                            await progress_callback(scan_id, float(match.group(1)))
+                    elif text:
+                        stderr_lines.append(text)
+            await process.wait()
+
+        if device.startswith("brother4:"):
+            await _run_with_progress_watchdog(
+                _read_batch(), process, page_dir, last_activity, "Batch scan timed out"
+            )
+        else:
+            await _await_with_timeout(
+                _read_batch(), process, _BATCH_SCAN_TIMEOUT_SECONDS, "Batch scan timed out"
+            )
+
+        if process.returncode != 0:
+            tail = "; ".join(stderr_lines[-5:])
+            if device.startswith("brother4:") and not any(
+                SANE_END_OF_FEED_TEXT in ln.lower() for ln in stderr_lines
+            ):
+                logger.warning("scanimage batch exited %s: %s", process.returncode, tail)
+                raise ScanError("The scan failed. Check the scanner and try again.")
+            # A non-zero exit is normal once the feeder runs out, so it can't fail
+            # the batch here, but with no pages it's the only clue to what went wrong.
+            if not any(f.endswith(".tiff") for f in os.listdir(page_dir)):
+                logger.warning(
+                    "scanimage batch exited %s with no pages: %s", process.returncode, tail
+                )
+
+
+async def _run_with_progress_watchdog(
+    coro, process, page_dir: str, last_activity: list[float], timeout_message: str
+):
+    """Run `coro`, killing `process` if nothing (stderr line or new page file)
+    happens for `_BATCH_NO_PROGRESS_SECONDS`. Cancellation also kills it."""
+
+    def page_count() -> int:
+        try:
+            return sum(1 for f in os.listdir(page_dir) if f.endswith(".tiff"))
+        except OSError:
+            return 0
+
+    stalled = False
+    reader = asyncio.ensure_future(coro)
+
+    async def watchdog() -> None:
+        nonlocal stalled
+        seen = page_count()
+        while True:
+            await asyncio.sleep(_BATCH_POLL_SECONDS)
+            now_pages = page_count()
+            if now_pages > seen:
+                seen = now_pages
+                last_activity[0] = time.monotonic()
+            if time.monotonic() - last_activity[0] > _BATCH_NO_PROGRESS_SECONDS:
+                stalled = True
+                process.kill()
+                reader.cancel()
+                return
+
+    dog = asyncio.ensure_future(watchdog())
+    try:
+        return await reader
+    except asyncio.CancelledError:
+        if not stalled:
+            reader.cancel()
+            process.kill()
+        await process.wait()
+        if stalled:
+            raise ScanError(timeout_message) from None
+        raise
+    finally:
+        dog.cancel()
+
+
+BROTHERNET_PREFIX = "brothernet:"
+FEEDER_PDF_ONLY_DETAIL = (
+    "Feeder scans on this scanner take every sheet at once, so they can only be "
+    "saved as PDF. Choose PDF or scan from the glass."
+)
+_NATIVE_MODES = {"Color": "CGRAY", "Gray": "GRAY64", "Lineart": "TEXT"}
+_HOST_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
+
+
+def is_native_device(device: str) -> bool:
+    return device.startswith(BROTHERNET_PREFIX)
+
+
+def feeder_takes_every_sheet(device: str) -> bool:
+    """Devices whose single feeder request always pulls the whole stack."""
+    return is_native_device(device) or device.startswith("brother4:")
+
+
+def parse_native_device(device: str) -> str:
+    """Return the host of a `brothernet:<host>` device string."""
+    host = device[len(BROTHERNET_PREFIX):] if is_native_device(device) else ""
+    if not _HOST_RE.match(host):
+        raise ScanRequestError("The scanner address is not valid.")
+    return host
+
+
+class BrotherNetBackend:
+    """Native Brother network protocol backend (`brothernet:<host>` devices)."""
+
+    def __init__(self, port: int = bp.PORT, **client_kwargs) -> None:
+        self._port = port
+        self._client_kwargs = client_kwargs
+
+    def _client(self, device: str) -> BrotherScanClient:
+        return BrotherScanClient(parse_native_device(device), self._port, **self._client_kwargs)
+
+    @staticmethod
+    def _progress(scan_id: str, callback):
+        if callback is None:
+            return None
+
+        async def adapt(_page: int, percent: int) -> None:
+            await callback(scan_id, float(percent))
+
+        return adapt
+
+    @staticmethod
+    def _protocol_mode(mode: str) -> str:
+        try:
+            return _NATIVE_MODES[mode]
+        except KeyError:
+            raise ScanRequestError("Unsupported scan mode.") from None
+
+    async def probe(self, device: str) -> dict:
+        try:
+            result = await self._client(device).probe()
+        except ScanRequestError:
+            raise
+        except PapyrusError:
+            return {"available": False, "busy": False, "device": device, "output": ""}
+        return {"available": result["available"], "busy": result["busy"],
+                "device": device, "output": ""}
+
+    async def feeder_reading(self, device: str, timeout: float) -> FeederReading | None:
+        return await self._client(device).feeder_reading(timeout)
+
+    async def options(self, device: str) -> dict:
+        return {
+            "resolutions": list(bp.RESOLUTIONS),
+            "modes": ["Color", "Gray", "Lineart"],
+            "formats": ["png", "jpeg", "tiff", "pdf"],
+            "feeder_formats": ["pdf"],
+            "sources": ["Flatbed", "ADF"],
+        }
+
+    async def acquire_page(
+        self,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        source: str,
+        tiff_file: str,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        left_mm: float | None = None,
+        top_mm: float | None = None,
+        width_mm: float | None = None,
+        height_mm: float | None = None,
+    ) -> list[str] | None:
+        """Scan the glass. If the printer feeds instead (paper in the feeder), the
+        request goes out as a full-page feeder request and the page paths are
+        returned, in a ``batch_<scan_id>`` directory the caller owns; otherwise the
+        single page is at ``tiff_file`` and None is returned."""
+        client = self._client(device)
+        if source.lower() == "adf":
+            raise ScanRequestError(FEEDER_PDF_ONLY_DETAIL)
+        area = None
+        if width_mm and height_mm:
+            area = (left_mm or 0.0, top_mm or 0.0, width_mm, height_mm)
+        work = os.path.join(os.path.dirname(tiff_file), f"batch_{scan_id}")
+        os.makedirs(work, exist_ok=True)
+        keep = False
+        try:
+            pages = await client.scan(
+                mode=self._protocol_mode(mode),
+                dpi=resolution,
+                source="flatbed",
+                out_dir=work,
+                area_mm=area,
+                progress=self._progress(scan_id, progress_callback),
+            )
+            if pages[0].from_feeder:
+                keep = True
+                return [p.path for p in pages]
+            os.replace(pages[0].path, tiff_file)
+            return None
+        finally:
+            if not keep:
+                shutil.rmtree(work, ignore_errors=True)
+
+    async def acquire_batch(
+        self,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        page_dir: str,
+        scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        glass_request: bool = False,
+    ) -> bool:
+        """Scan the feeder into ``page_dir``; True if the printer fed it.
+
+        ``glass_request`` sends the request the way a full glass scan goes, so
+        paper in the feeder takes over but an emptied feeder falls back to the
+        glass instead of failing.
+        """
+        client = self._client(device)
+        pages = await client.scan(
+            mode=self._protocol_mode(mode),
+            dpi=resolution,
+            source="flatbed" if glass_request else "adf",
+            out_dir=page_dir,
+            progress=self._progress(scan_id, progress_callback),
+        )
+        return pages[0].from_feeder
+
+
+_LEFTOVER_DIR_RE = re.compile(
+    r"^(?:(?:pages|batch)_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"|native_[A-Za-z0-9_]{8})$"
+)
+
+
+def remove_scan_leftovers(scan_dir: str) -> int:
+    """Delete transient per-scan directories a previous run left behind.
+
+    Only real directories whose names match the exact patterns this module
+    creates are touched. Returns how many were removed.
+    """
+    removed = 0
+    try:
+        names = os.listdir(scan_dir)
+    except OSError:
+        return 0
+    for name in names:
+        path = os.path.join(scan_dir, name)
+        if _LEFTOVER_DIR_RE.match(name) and os.path.isdir(path) and not os.path.islink(path):
+            shutil.rmtree(path, ignore_errors=True)
+            removed += 1
+    return removed
+
+
+async def _merge_pages_to_pdf(page_paths: list[str], pdf_file: str) -> None:
+    pdf_process = await asyncio.create_subprocess_exec(
+        "img2pdf", *page_paths, "-o", pdf_file,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    await _await_with_timeout(
+        pdf_process.wait(), pdf_process,
+        _PDF_MERGE_TIMEOUT_SECONDS, "PDF merge timed out",
+    )
+
+    if pdf_process.returncode != 0:
+        raise ScanError("Failed to merge pages into PDF")
+
+
+_sane_backend = SaneBackend()
+_brothernet_backend = BrotherNetBackend()
 
 
 class ScanService:
@@ -91,38 +620,40 @@ class ScanService:
         empty/unconfigured one.
         """
         _device = device if device is not None else self._scanner_device
+        await self._guard(_device)
+        return await self._backend_for(_device).probe(_device)
 
-        process = await asyncio.create_subprocess_exec(
-            "scanimage", "-L",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+    async def native_feeder_reading(
+        self, device: str, timeout: float = 3.0
+    ) -> FeederReading | None:
+        """Feeder state of a `brothernet:` device without scanning; None if it
+        isn't one, can't be read, or is busy."""
+        if not is_native_device(device):
+            return None
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=_LIST_TIMEOUT_SECONDS
-            )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            raise ScannerBusyError("Timed out listing scanner devices")
+            await self._guard(device)
+            return await _brothernet_backend.feeder_reading(device, timeout)
+        except PapyrusError:
+            return None
 
-        output = stdout.decode() + stderr.decode()
-        candidates = _scanimage_match_candidates(_device) if _device else []
+    async def get_options(self, device: str | None = None) -> dict:
+        """Get available scanner options for `device` (default: the configured one)."""
+        _device = device if device is not None else self._scanner_device
+        return await self._backend_for(_device).options(_device)
 
-        return {
-            "available": any(c in output for c in candidates),
-            "device": _device,
-            "output": output.strip(),
-        }
+    def _backend_for(self, device: str) -> ScanBackend:
+        """Pick the backend that drives `device`."""
+        return _brothernet_backend if is_native_device(device) else _sane_backend
 
-    async def get_options(self) -> dict:
-        """Get available scanner options for the configured device."""
-        return {
-            "resolutions": [75, 100, 150, 200, 300, 600],
-            "modes": ["Color", "Gray", "Lineart"],
-            "formats": ["png", "jpeg", "tiff", "pdf"],
-            "sources": ["Flatbed", "ADF"],
-        }
+    async def _guard(self, device: str) -> None:
+        """Validate a native device's address before any connection to it."""
+        if not is_native_device(device):
+            return
+        host = parse_native_device(device)
+        try:
+            await assert_safe_host(host)
+        except UnsafeHostError:
+            raise ScanRequestError("The scanner address is not allowed.") from None
 
     # ------------------------------------------------------------------
     # Synchronous bodies (run inside a worker thread).
@@ -169,13 +700,14 @@ class ScanService:
         device: str | None = None,
         scan_dir: str | None = None,
         filename_template: str | None = None,
-        on_process_start: Callable[[asyncio.subprocess.Process], None] | None = None,
         left_mm: float | None = None,
         top_mm: float | None = None,
         width_mm: float | None = None,
         height_mm: float | None = None,
+        page_count_callback: Callable[[int], None] | None = None,
+        feeder_callback: Callable[[], None] | None = None,
     ) -> tuple[str, str]:
-        """Perform a single-page scan.
+        """Perform a scan.
 
         Args:
             resolution: DPI (75-600)
@@ -191,14 +723,23 @@ class ScanService:
                 not consumed here, since the intermediate/output files are
                 always named from `scan_id`; callers use it for the
                 delivered filename (see `run_post_scan_actions`).
-            on_process_start: optional callback invoked with the running
-                `scanimage` subprocess as soon as it's spawned, so a caller
-                that tracks in-flight jobs (eSCL) can keep a handle to kill
-                it directly if needed (F110).
 
         Returns:
             Tuple of (scan_id, output_filepath)
+
+        A native Brother or brother4 feeder request delivers every sheet, so it is
+        PDF-only and `page_count_callback` (if given) receives the sheet count.
+
+        On a `brothernet:` device paper in the feeder takes over a glass request
+        too: it is scanned as a full-page feeder request, every sheet is kept and
+        the result is one PDF whatever `fmt` asked for. `feeder_callback` is called
+        when that happened to a glass request.
         """
+        native_feeder = feeder_takes_every_sheet(device or self._scanner_device) and (
+            source.lower() == "adf"
+        )
+        if native_feeder and fmt != "pdf":
+            raise ScanRequestError(FEEDER_PDF_ONLY_DETAIL)
         if self._lock.locked():
             raise ScanError("Scanner is busy. Try again later.")
 
@@ -207,62 +748,63 @@ class ScanService:
             _scan_dir = scan_dir or self._scan_dir
             _device = device or self._scanner_device
 
-            # brscan4 uses "FlatBed" (capital B); map common "Flatbed" spelling
-            _source = source
-            if _device.startswith("brother4:") and source.lower() == "flatbed":
-                _source = "FlatBed"
-
-            # brscan4 uses different mode names than standard SANE
-            _mode = mode
-            if _device.startswith("brother4:"):
-                _mode = {
-                    "Color": "24bit Color", "Gray": "True Gray", "Lineart": "Black & White",
-                }.get(mode, mode)
-
             # Scan to TIFF as intermediate format, then convert to requested output
             tiff_file = os.path.join(_scan_dir, f"{scan_id}.tiff")
 
-            cmd = [
-                "scanimage",
-                "-d", _device,
-                "--resolution", str(resolution),
-                "--mode", _mode,
-                "--format=tiff",
-                "--source", _source,
-                "--progress",
-                "-o", tiff_file,
-            ]
+            glass_over_feeder = False
+            if is_native_device(_device) and not native_feeder:
+                reading = await self.native_feeder_reading(_device)
+                glass_over_feeder = reading is not None and reading.takes_over_glass
 
-            # Scan geometry: restrict to requested area (all values in mm)
-            if left_mm is not None:
-                cmd += ["-l", str(round(left_mm, 2))]
-            if top_mm is not None:
-                cmd += ["-t", str(round(top_mm, 2))]
-            if width_mm is not None:
-                cmd += ["-x", str(round(width_mm, 2))]
-            if height_mm is not None:
-                cmd += ["-y", str(round(height_mm, 2))]
-
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            if on_process_start is not None:
-                on_process_start(process)
+            if native_feeder or glass_over_feeder:
+                pdf_file, count, fed = await self._scan_feeder_pdf(
+                    device=_device,
+                    resolution=resolution,
+                    mode=mode,
+                    scan_dir=_scan_dir,
+                    scan_id=scan_id,
+                    progress_callback=progress_callback,
+                    glass_request=glass_over_feeder,
+                    glass_fmt=fmt,
+                )
+                if page_count_callback is not None:
+                    page_count_callback(count)
+                if fed and glass_over_feeder and feeder_callback is not None:
+                    feeder_callback()
+                return scan_id, pdf_file
 
             keep_tiff = False
             try:
-                stderr_lines = await self._read_scan_output(
-                    process, scan_id, progress_callback
+                await self._guard(_device)
+                fed_pages = await self._backend_for(_device).acquire_page(
+                    device=_device,
+                    resolution=resolution,
+                    mode=mode,
+                    source=source,
+                    tiff_file=tiff_file,
+                    scan_id=scan_id,
+                    progress_callback=progress_callback,
+                    left_mm=left_mm,
+                    top_mm=top_mm,
+                    width_mm=width_mm,
+                    height_mm=height_mm,
                 )
 
-                if process.returncode != 0:
-                    stderr_text = "; ".join(ln for ln in stderr_lines if ln)
-                    raise ScanError(
-                        f"scanimage exited with code {process.returncode}"
-                        + (f": {stderr_text}" if stderr_text else "")
-                    )
+                if fed_pages:
+                    pdf_file = os.path.join(_scan_dir, f"{scan_id}.pdf")
+                    try:
+                        await _merge_pages_to_pdf(fed_pages, pdf_file)
+                    except BaseException:
+                        if os.path.exists(pdf_file):
+                            os.unlink(pdf_file)
+                        raise
+                    finally:
+                        shutil.rmtree(os.path.dirname(fed_pages[0]), ignore_errors=True)
+                    if page_count_callback is not None:
+                        page_count_callback(len(fed_pages))
+                    if feeder_callback is not None:
+                        feeder_callback()
+                    return scan_id, pdf_file
 
                 if not os.path.exists(tiff_file):
                     raise ScanError("Scan produced no output file")
@@ -290,55 +832,151 @@ class ScanService:
                 if not keep_tiff and os.path.exists(tiff_file):
                     os.unlink(tiff_file)
 
-    @staticmethod
-    async def _await_with_timeout(coro, process: asyncio.subprocess.Process,
-                                   timeout: float, timeout_message: str):
-        """Await `coro` (which itself awaits/reads from `process`), bounded
-        by `timeout` and cancellation-safe (F41/F110): on a timeout OR the
-        calling task being cancelled (e.g. an eSCL client cancelling the
-        job, or a future caller of scan_batch), `process` is killed and
-        reaped before the exception propagates, instead of being left
-        running unreaped -- a hung subprocess otherwise holds `self._lock`
-        forever, wedging every subsequent scan (web UI and eSCL alike) with
-        "Scanner is busy" until the process restarts.
-        """
-        try:
-            return await asyncio.wait_for(coro, timeout=timeout)
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            raise ScanError(timeout_message)
-        except asyncio.CancelledError:
-            process.kill()
-            await process.wait()
-            raise
-
-    async def _read_scan_output(
+    async def _scan_feeder_pdf(
         self,
-        process: asyncio.subprocess.Process,
+        *,
+        device: str,
+        resolution: int,
+        mode: str,
+        scan_dir: str,
         scan_id: str,
         progress_callback: Callable[[str, float], Awaitable[None]] | None,
-    ) -> list[str]:
-        """Read `process`'s stderr for progress lines and wait for exit,
-        bounded by `_SCAN_TIMEOUT_SECONDS` (F41) and cancellation-safe (F110)
-        via `_await_with_timeout`.
+        glass_request: bool = False,
+        glass_fmt: str = "pdf",
+    ) -> tuple[str, int, bool]:
+        """Scan every sheet in the feeder into one PDF. Caller holds the lock.
+
+        Returns (path, page_count, fed_by_feeder). A glass request the printer
+        served from the glass after all (paper lifted since the pre-check) comes
+        back as the one scanned page in `glass_fmt`, not as a PDF.
         """
+        page_dir = os.path.join(scan_dir, f"batch_{scan_id}")
+        pdf_file = os.path.join(scan_dir, f"{scan_id}.pdf")
+        os.makedirs(page_dir, exist_ok=True)
 
-        async def _read() -> list[str]:
-            stderr_lines: list[str] = []
-            if process.stderr:
-                async for line in process.stderr:
-                    text = line.decode().strip()
-                    stderr_lines.append(text)
-                    match = re.search(r"Progress: (\d+\.?\d*)%", text)
-                    if match and progress_callback:
-                        await progress_callback(scan_id, float(match.group(1)))
-            await process.wait()
-            return stderr_lines
+        success = False
+        try:
+            pages, fed = await self._acquire_feeder_tiffs(
+                device=device, resolution=resolution, mode=mode, page_dir=page_dir,
+                scan_id=scan_id, progress_callback=progress_callback,
+                glass_request=glass_request,
+            )
+            if glass_request and not fed and glass_fmt != "pdf":
+                ext = {"jpeg": "jpg"}.get(glass_fmt, glass_fmt)
+                out_file = os.path.join(scan_dir, f"{scan_id}.{ext}")
+                if glass_fmt == "tiff":
+                    os.replace(pages[0], out_file)
+                else:
+                    await asyncio.to_thread(
+                        self._convert_scan_sync, pages[0], out_file, glass_fmt, resolution
+                    )
+                shutil.rmtree(page_dir, ignore_errors=True)
+                success = True
+                return out_file, 1, False
 
-        return await self._await_with_timeout(
-            _read(), process, _SCAN_TIMEOUT_SECONDS, "Scan timed out"
+            await _merge_pages_to_pdf(pages, pdf_file)
+
+            # Clean up individual page files
+            shutil.rmtree(page_dir, ignore_errors=True)
+
+            success = True
+            return pdf_file, len(pages), fed
+        finally:
+            # F22: any non-success exit leaks page_dir and every page
+            # TIFF in it (up to hundreds of MB for a large ADF batch)
+            # unless cleaned up here -- nothing references page_dir from
+            # the DB, so retention can never reclaim it either.
+            if not success:
+                shutil.rmtree(page_dir, ignore_errors=True)
+                for leftover in (pdf_file, *(
+                    os.path.join(scan_dir, f"{scan_id}.{e}") for e in ("jpg", "png", "tiff")
+                )):
+                    if os.path.exists(leftover):
+                        os.unlink(leftover)
+
+    async def _acquire_feeder_tiffs(
+        self, *, device: str, resolution: int, mode: str, page_dir: str, scan_id: str,
+        progress_callback: Callable[[str, float], Awaitable[None]] | None,
+        glass_request: bool = False,
+    ) -> tuple[list[str], bool]:
+        await self._guard(device)
+        fed = await self._backend_for(device).acquire_batch(
+            device=device,
+            resolution=resolution,
+            mode=mode,
+            page_dir=page_dir,
+            scan_id=scan_id,
+            progress_callback=progress_callback,
+            glass_request=glass_request,
         )
+
+        # scanimage returns non-zero when ADF runs out of paper, which is expected
+        # Check if we got any pages
+        pages = sorted(f for f in os.listdir(page_dir) if f.endswith(".tiff"))
+        if not pages:
+            raise ScanError("No pages scanned from ADF")
+        return [os.path.join(page_dir, p) for p in pages], bool(fed)
+
+    async def scan_feeder_pages(
+        self,
+        resolution: int = 300,
+        mode: str = "Color",
+        fmt: str = "jpeg",
+        progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        device: str | None = None,
+        scan_dir: str | None = None,
+        glass_request: bool = False,
+        feeder_callback: Callable[[], None] | None = None,
+    ) -> tuple[str, str, str, list[str]]:
+        """Scan every feeder sheet and keep each as its own `fmt` file.
+
+        `glass_request` is for a glass request that paper in the feeder takes
+        over; `feeder_callback` is called if the feeder served it.
+
+        Returns (scan_id, pdf_path, page_dir, page_files): the pages sit in
+        `page_dir`, which the caller owns from here on; `pdf_path` is a merged
+        copy for history. Nothing is left behind if this fails or is cancelled.
+        """
+        if self._lock.locked():
+            raise ScanError("Scanner is busy. Try again later.")
+
+        async with self._lock:
+            scan_id = str(uuid.uuid4())
+            _scan_dir = scan_dir or self._scan_dir
+            _device = device or self._scanner_device
+            page_dir = os.path.join(_scan_dir, f"pages_{scan_id}")
+            pdf_file = os.path.join(_scan_dir, f"{scan_id}.pdf")
+            os.makedirs(page_dir, exist_ok=True)
+
+            success = False
+            try:
+                tiffs, fed = await self._acquire_feeder_tiffs(
+                    device=_device, resolution=resolution, mode=mode, page_dir=page_dir,
+                    scan_id=scan_id, progress_callback=progress_callback,
+                    glass_request=glass_request,
+                )
+                await _merge_pages_to_pdf(tiffs, pdf_file)
+                if fmt == "tiff":
+                    files = tiffs
+                else:
+                    ext = {"jpeg": "jpg"}.get(fmt, fmt)
+                    files = []
+                    for i, tiff in enumerate(tiffs, 1):
+                        out = os.path.join(page_dir, f"page_{i:04d}.{ext}")
+                        await asyncio.to_thread(
+                            self._convert_scan_sync, tiff, out, fmt, resolution
+                        )
+                        os.unlink(tiff)
+                        files.append(out)
+                success = True
+                if fed and glass_request and feeder_callback is not None:
+                    feeder_callback()
+                return scan_id, pdf_file, page_dir, files
+            finally:
+                if not success:
+                    shutil.rmtree(page_dir, ignore_errors=True)
+                    if os.path.exists(pdf_file):
+                        os.unlink(pdf_file)
 
     async def scan_batch(
         self,
@@ -358,84 +996,15 @@ class ScanService:
 
         async with self._lock:
             scan_id = str(uuid.uuid4())
-            _scan_dir = scan_dir or self._scan_dir
-            page_dir = os.path.join(_scan_dir, f"batch_{scan_id}")
-            os.makedirs(page_dir, exist_ok=True)
-
-            _device = device or self._scanner_device
-            # scanimage --batch mode scans all pages from ADF
-            cmd = [
-                "scanimage",
-                "-d", _device,
-                "--resolution", str(resolution),
-                "--mode", mode,
-                "--format=tiff",
-                "--source", "ADF",
-                "--batch", os.path.join(page_dir, "page_%04d.tiff"),
-                "--progress",
-            ]
-
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            pdf_file, count, _ = await self._scan_feeder_pdf(
+                device=device or self._scanner_device,
+                resolution=resolution,
+                mode=mode,
+                scan_dir=scan_dir or self._scan_dir,
+                scan_id=scan_id,
+                progress_callback=progress_callback,
             )
-
-            success = False
-            try:
-                async def _read_batch() -> None:
-                    if process.stderr:
-                        async for line in process.stderr:
-                            text = line.decode().strip()
-                            match = re.search(r"Progress: (\d+\.?\d*)%", text)
-                            if match and progress_callback:
-                                await progress_callback(scan_id, float(match.group(1)))
-                    await process.wait()
-
-                await self._await_with_timeout(
-                    _read_batch(), process, _BATCH_SCAN_TIMEOUT_SECONDS, "Batch scan timed out"
-                )
-
-                # scanimage returns non-zero when ADF runs out of paper, which is expected
-                # Check if we got any pages
-                pages = sorted(
-                    f for f in os.listdir(page_dir) if f.endswith(".tiff")
-                )
-
-                if not pages:
-                    raise ScanError("No pages scanned from ADF")
-
-                # Merge all pages into a single PDF
-                pdf_file = os.path.join(_scan_dir, f"{scan_id}.pdf")
-                page_paths = [os.path.join(page_dir, p) for p in pages]
-
-                pdf_process = await asyncio.create_subprocess_exec(
-                    "img2pdf", *page_paths, "-o", pdf_file,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await self._await_with_timeout(
-                    pdf_process.wait(), pdf_process,
-                    _PDF_MERGE_TIMEOUT_SECONDS, "PDF merge timed out",
-                )
-
-                if pdf_process.returncode != 0:
-                    raise ScanError("Failed to merge pages into PDF")
-
-                # Clean up individual page files
-                for p in page_paths:
-                    os.unlink(p)
-                os.rmdir(page_dir)
-
-                success = True
-                return scan_id, pdf_file, len(pages)
-            finally:
-                # F22: any non-success exit leaks page_dir and every page
-                # TIFF in it (up to hundreds of MB for a large ADF batch)
-                # unless cleaned up here -- nothing references page_dir from
-                # the DB, so retention can never reclaim it either.
-                if not success:
-                    shutil.rmtree(page_dir, ignore_errors=True)
+            return scan_id, pdf_file, count
 
 
 scan_service = ScanService()

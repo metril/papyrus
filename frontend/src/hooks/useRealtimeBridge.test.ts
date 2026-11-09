@@ -7,6 +7,7 @@ import {
   applyJobEvent,
   applyScanEvent,
   applyPrinterEvent,
+  shouldToastScanCompleted,
   useRealtimeBridge,
 } from './useRealtimeBridge';
 import { queryKeys } from '../api/queries';
@@ -51,6 +52,8 @@ function makeScan(scanId: string, overrides: Partial<ScanJob> = {}): ScanJob {
     error_message: null,
     created_at: '2026-07-05T00:00:00Z',
     completed_at: '2026-07-05T00:00:00Z',
+    duplex_merged: false,
+    duplex_source_scan_id: null,
     ...overrides,
   };
 }
@@ -230,6 +233,38 @@ describe('applyScanEvent', () => {
     applyScanEvent(qc, msg('scan_deleted', { scan_id: 'abc' }));
     expect(qc.getQueryData<ScansCache>(key)).toBeUndefined();
     expect(qc.getQueryCache().find({ queryKey: key })).toBeUndefined();
+  });
+});
+
+describe('shouldToastScanCompleted', () => {
+  const key = queryKeys.scans.list();
+  const frame = (over: Partial<ScanJob>) => msg('scan_completed', makeScan('s1', over));
+
+  it('toasts a new scan', () => {
+    const qc = new QueryClient();
+    qc.setQueryData<ScansCache>(key, { scans: [], total: 0 });
+    expect(shouldToastScanCompleted(qc, frame({}))).toBe(true);
+  });
+
+  it('does not toast a rebroadcast of a row already in the cache (fronts, merged after delivery)', () => {
+    const qc = new QueryClient();
+    qc.setQueryData<ScansCache>(key, { scans: [makeScan('s1')], total: 1 });
+    expect(shouldToastScanCompleted(qc, frame({ duplex_merged: true }))).toBe(false);
+  });
+
+  it('does not toast a back-side scan, but does toast the merged result', () => {
+    const qc = new QueryClient();
+    qc.setQueryData<ScansCache>(key, { scans: [], total: 0 });
+    expect(shouldToastScanCompleted(qc, frame({ duplex_source_scan_id: 'f' }))).toBe(false);
+    expect(
+      shouldToastScanCompleted(qc, frame({ duplex_source_scan_id: 'f', duplex_merged: true })),
+    ).toBe(true);
+  });
+
+  it('ignores other event types', () => {
+    expect(shouldToastScanCompleted(new QueryClient(), msg('scan_deleted', { scan_id: 'x' }))).toBe(
+      false,
+    );
   });
 });
 
