@@ -21,13 +21,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 
 from app.database import async_session, get_db
-from app.exceptions import ScannerBusyError, user_message
+from app.exceptions import ScannerBusyError, ScanSourceError, user_message
 from app.models import ScanJob
 from app.routers.settings import get_setting
 from app.schemas import serialize_scan_job
+from app.services.brother_client import FEEDER_EMPTY_DETAIL, FLATBED_BLOCKED_DETAIL
 from app.services.scan_service import (
     feeder_takes_every_sheet,
     get_default_scanner_device,
+    is_native_device,
     scan_service,
 )
 from app.services.ws_manager import ws_manager
@@ -120,6 +122,86 @@ _scan_jobs: dict[str, dict] = {}
 # back) must never be evicted out from under itself.
 _JOB_TTL_SECONDS = 3600.0  # 1 hour
 _TERMINAL_STATES = frozenset({"Completed", "Canceled"})
+
+# The Brother DCP-L2540DW feeder holds 35 sheets (also the brscan4 path).
+_FEEDER_CAPACITY = 35
+_ADF_CACHE_TTL = 10.0
+_ADF_STALE_LIMIT = 60.0
+_ADF_STATUS_TIMEOUT = 3.0
+_PREFLIGHT_TIMEOUT = 3.0
+# device -> (monotonic time, feeder loaded)
+_adf_cache: dict[str, tuple[float, bool]] = {}
+_adf_probing = False
+
+
+def _scan_active() -> bool:
+    return scan_service.is_busy() or any(
+        j["state"] in ("Pending", "Processing") for j in _scan_jobs.values()
+    )
+
+
+async def _native_device(db) -> str | None:
+    try:
+        device = await get_default_scanner_device(db)
+    except Exception:
+        return None
+    return device if is_native_device(device) else None
+
+
+async def _adf_loaded(db) -> bool | None:
+    """Feeder state for ScannerStatus: cached, never read while a scan runs,
+    bounded, None when unknown."""
+    global _adf_probing
+    if _scan_active():
+        return None
+    device = await _native_device(db)
+    if device is None:
+        return None
+    now = time.monotonic()
+    cached = _adf_cache.get(device)
+    if cached and now - cached[0] < _ADF_CACHE_TTL:
+        return cached[1]
+    reading = None
+    if not _adf_probing:
+        _adf_probing = True
+        try:
+            reading = await asyncio.wait_for(
+                scan_service.native_feeder_reading(device, _ADF_STATUS_TIMEOUT),
+                _ADF_STATUS_TIMEOUT + 0.2,
+            )
+        except Exception:
+            reading = None
+        finally:
+            _adf_probing = False
+    if reading is not None and not _scan_active():
+        _adf_cache[device] = (time.monotonic(), reading.loaded)
+        return reading.loaded
+    if cached and now - cached[0] < _ADF_STALE_LIMIT:
+        return cached[1]
+    return None
+
+
+async def _refuse_impossible_source(db, source: str) -> None:
+    """409 before a job exists when the feeder state rules the source out.
+    Anything unreadable falls through: the scan's own check still guards it."""
+    if _scan_active():
+        return
+    device = await _native_device(db)
+    if device is None:
+        return
+    try:
+        reading = await asyncio.wait_for(
+            scan_service.native_feeder_reading(device, _PREFLIGHT_TIMEOUT),
+            _PREFLIGHT_TIMEOUT + 0.2,
+        )
+    except Exception:
+        return
+    if reading is None:
+        return
+    if source == "Flatbed" and reading.blocks_flatbed:
+        raise ScanSourceError(FLATBED_BLOCKED_DETAIL)
+    if source == "ADF" and not reading.loaded:
+        raise ScanSourceError(FEEDER_EMPTY_DETAIL)
 
 
 def _discard_job_files(job: dict) -> None:
@@ -225,6 +307,10 @@ async def scanner_capabilities(db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=503, detail="eSCL scanner disabled")
 
     device_dpis = await _device_resolutions(db) or (75, 150, 300, 600)
+    try:
+        device = await get_default_scanner_device(db)
+    except Exception:
+        device = ""
 
     root = Element("scan:ScannerCapabilities")
     root.set("xmlns:scan", ESCL_NS)
@@ -310,6 +396,12 @@ async def scanner_capabilities(db: AsyncSession = Depends(get_db)):
         SubElement(adf_res, "scan:XResolution").text = str(dpi)
         SubElement(adf_res, "scan:YResolution").text = str(dpi)
 
+    if feeder_takes_every_sheet(device):
+        SubElement(adf, "scan:FeederCapacity").text = str(_FEEDER_CAPACITY)
+    if is_native_device(device):
+        adf_options = SubElement(adf, "scan:AdfOptions")
+        SubElement(adf_options, "scan:AdfOption").text = "DetectPaperLoaded"
+
     return _xml_response(root)
 
 
@@ -331,11 +423,13 @@ async def scanner_status(db: AsyncSession = Depends(get_db)):
 
     _purge_stale_jobs()
 
-    # Report active jobs so clients can track state transitions
-    active_jobs = {jid: j for jid, j in _scan_jobs.items() if j["state"] != "Canceled"}
-    if active_jobs:
+    loaded = await _adf_loaded(db)
+    if loaded is not None:
+        SubElement(root, "scan:AdfState").text = "ScannerAdfLoaded" if loaded else "ScannerAdfEmpty"
+
+    if _scan_jobs:
         jobs_elem = SubElement(root, "scan:Jobs")
-        for job_id, job in active_jobs.items():
+        for job_id, job in _scan_jobs.items():
             job_info = SubElement(jobs_elem, "scan:JobInfo")
             SubElement(job_info, "pwg:JobUri").text = f"/eSCL/ScanJobs/{job_id}"
             SubElement(job_info, "pwg:JobUuid").text = job_id
@@ -345,7 +439,12 @@ async def scanner_status(db: AsyncSession = Depends(get_db)):
                     job["pages_total"] - _pages_remaining(job)
                 )
                 SubElement(job_info, "pwg:ImagesToTransfer").text = str(_pages_remaining(job))
-            SubElement(job_info, "pwg:JobState").text = _reported_state(job)
+            if job["state"] == "Canceled":
+                SubElement(job_info, "pwg:JobState").text = "Aborted"
+                reasons = SubElement(job_info, "pwg:JobStateReasons")
+                SubElement(reasons, "pwg:JobStateReason").text = "AbortedBySystem"
+            else:
+                SubElement(job_info, "pwg:JobState").text = _reported_state(job)
 
     return _xml_response(root)
 
@@ -375,6 +474,7 @@ async def _run_scan(job_id: str) -> None:
     if job is None:
         return
     job["state"] = "Processing"
+    _adf_cache.clear()
 
     db_job_id: int | None = None
     filepath: str | None = None
@@ -543,6 +643,8 @@ async def _run_scan(job_id: str) -> None:
         job["state"] = "Canceled"
         job["error"] = user_message(e)
         job["terminal_at"] = time.monotonic()
+    finally:
+        _adf_cache.clear()
 
 
 @router.post("/ScanJobs")
@@ -616,6 +718,8 @@ async def create_scan_job(request: Request, db: AsyncSession = Depends(get_db)):
 
     _purge_stale_jobs()
 
+    await _refuse_impossible_source(db, source)
+
     # F3: reject a new job outright while the scanner is already busy (either
     # a real scan in progress, or another eSCL job still Pending/Processing)
     # instead of inserting a DB row and a job entry that's doomed to fail
@@ -678,7 +782,7 @@ async def get_next_document(job_id: str, request: Request):
             raise HTTPException(status_code=404, detail="Scan job not found")
 
     if job["state"] == "Canceled":
-        raise HTTPException(status_code=503, detail=job.get("error") or "Scan failed")
+        raise HTTPException(status_code=410, detail=job.get("error") or "Scan failed")
 
     if job["state"] in ("Pending", "Processing"):
         raise HTTPException(
