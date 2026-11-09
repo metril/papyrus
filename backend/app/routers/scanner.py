@@ -137,9 +137,15 @@ async def initiate_scan(
     def set_page_count(count: int) -> None:
         job.page_count = count
 
+    def set_fed_by_feeder() -> None:
+        # Paper in the feeder took over a glass request: one PDF of every sheet.
+        job.source = "ADF"
+        job.format = "pdf"
+
     try:
         _, filepath = await scan_service.scan(
             page_count_callback=set_page_count,
+            feeder_callback=set_fed_by_feeder,
             resolution=request.resolution,
             mode=request.mode,
             fmt=request.format,
@@ -167,10 +173,10 @@ async def initiate_scan(
         })
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
-                        detail={"format": request.format, "resolution": request.resolution})
+                        detail={"format": job.format, "resolution": request.resolution})
         await db.commit()
         await dispatch_webhook(
-            db, "scan.complete", {"scan_id": job.scan_id, "format": request.format}
+            db, "scan.complete", {"scan_id": job.scan_id, "format": job.format}
         )
 
         if scanner and scanner.auto_deliver:

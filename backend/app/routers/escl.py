@@ -25,7 +25,7 @@ from app.exceptions import ScannerBusyError, ScanSourceError, user_message
 from app.models import ScanJob
 from app.routers.settings import get_setting
 from app.schemas import serialize_scan_job
-from app.services.brother_client import FEEDER_EMPTY_DETAIL, FLATBED_BLOCKED_DETAIL
+from app.services.brother_client import FEEDER_EMPTY_DETAIL
 from app.services.scan_service import (
     feeder_takes_every_sheet,
     get_default_scanner_device,
@@ -182,9 +182,11 @@ async def _adf_loaded(db) -> bool | None:
 
 
 async def _refuse_impossible_source(db, source: str) -> None:
-    """409 before a job exists when the feeder state rules the source out.
-    Anything unreadable falls through: the scan's own check still guards it."""
-    if _scan_active():
+    """409 before a job exists when a feeder request has no paper, since the
+    printer would silently scan the glass instead. Anything unreadable falls
+    through: the scan's own check still guards it. A glass request is never
+    refused; paper in the feeder takes it over."""
+    if source != "ADF" or _scan_active():
         return
     device = await _native_device(db)
     if device is None:
@@ -198,9 +200,7 @@ async def _refuse_impossible_source(db, source: str) -> None:
         return
     if reading is None:
         return
-    if source == "Flatbed" and reading.blocks_flatbed:
-        raise ScanSourceError(FLATBED_BLOCKED_DETAIL)
-    if source == "ADF" and not reading.loaded:
+    if not reading.loaded:
         raise ScanSourceError(FEEDER_EMPTY_DETAIL)
 
 
@@ -530,15 +530,28 @@ async def _run_scan(job_id: str) -> None:
         )
 
         page_count = 1
+        fed_glass = False
+        glass_request = False
         held = (
             job["source"] == "ADF"
             and job["format"] != "pdf"
             and feeder_takes_every_sheet(device)
         )
+        if job["source"] != "ADF" and job["format"] != "pdf" and is_native_device(device):
+            # Paper in the feeder takes over a glass request and delivers every
+            # sheet, which only the held-pages path can hand out as images.
+            reading = await scan_service.native_feeder_reading(device)
+            glass_request = held = reading is not None and reading.takes_over_glass
 
         def set_page_count(count: int) -> None:
             nonlocal page_count
             page_count = count
+
+        def set_fed_glass() -> None:
+            nonlocal fed_glass
+            fed_glass = True
+            if not held:
+                job["format"] = "pdf"
 
         if held:
             scan_id, filepath, page_dir, pages = await scan_service.scan_feeder_pages(
@@ -547,6 +560,8 @@ async def _run_scan(job_id: str) -> None:
                 fmt=job["format"],
                 device=device,
                 scan_dir=scan_dir,
+                glass_request=glass_request,
+                feeder_callback=set_fed_glass,
             )
             job["page_dir"] = page_dir
             job["pages"] = list(pages)
@@ -555,6 +570,7 @@ async def _run_scan(job_id: str) -> None:
         else:
             scan_id, filepath = await scan_service.scan(
                 page_count_callback=set_page_count,
+                feeder_callback=set_fed_glass,
                 resolution=res,
                 mode=job["color_mode"],
                 fmt=job["format"],
@@ -590,6 +606,9 @@ async def _run_scan(job_id: str) -> None:
                 result.page_count = page_count
                 if held:
                     result.format = "pdf"
+                if fed_glass:
+                    result.format = "pdf"
+                    result.source = "ADF"
                 result.status = "completed"
                 result.completed_at = datetime.now(timezone.utc)
                 await db.commit()
@@ -813,11 +832,12 @@ async def cancel_scan_job(job_id: str):
 
     F110: a Pending/Processing job's background task is actually cancelled
     (not just forgotten) — the backend's CancelledError handling stops the
-    scan (killing scanimage, or dropping the native connection) and
+    scan (killing scanimage; a native glass scan drops its connection) and
     `scan_service.scan` removes any partial output before the cancellation
-    propagates back here, so a client that cancels no longer
-    gets a 200 while the scan silently keeps running, holds the scanner
-    lock, and shows up in the web UI anyway.
+    propagates back here. A native feeder stream cannot be stopped, so its
+    connection is kept and read to the job end first (bounded by the idle
+    timeout) and this call returns only after that; the scanner lock is
+    released then.
     """
     _purge_stale_jobs()
     job = _scan_jobs.pop(job_id, None)

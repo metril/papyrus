@@ -3,7 +3,6 @@ import logging
 import os
 import re
 import shutil
-import tempfile
 import time
 import uuid
 from typing import Awaitable, Callable, Protocol
@@ -122,8 +121,10 @@ class ScanBackend(Protocol):
         top_mm: float | None = None,
         width_mm: float | None = None,
         height_mm: float | None = None,
-    ) -> None:
-        """Scan one page and write it as a TIFF to `tiff_file`."""
+    ) -> list[str] | None:
+        """Scan one page and write it as a TIFF to `tiff_file`. A backend whose
+        device feeds a glass request instead returns the page paths (in a
+        directory the caller owns) and leaves `tiff_file` unwritten."""
         ...
 
     async def acquire_batch(
@@ -135,8 +136,11 @@ class ScanBackend(Protocol):
         page_dir: str,
         scan_id: str,
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
-    ) -> None:
-        """Scan an ADF batch, writing page TIFFs (``*.tiff``) into `page_dir`."""
+        glass_request: bool = False,
+    ) -> bool | None:
+        """Scan an ADF batch, writing page TIFFs (``*.tiff``) into `page_dir`.
+        `glass_request` is a glass scan the device may serve from the feeder; the
+        result says whether the feeder served it (None: not reported)."""
         ...
 
     async def probe(self, device: str) -> dict:
@@ -278,6 +282,7 @@ class SaneBackend:
         page_dir: str,
         scan_id: str,
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
+        glass_request: bool = False,
     ) -> None:
         _mode, _source = _driver_options(device, mode, "ADF")
 
@@ -474,14 +479,20 @@ class BrotherNetBackend:
         top_mm: float | None = None,
         width_mm: float | None = None,
         height_mm: float | None = None,
-    ) -> None:
+    ) -> list[str] | None:
+        """Scan the glass. If the printer feeds instead (paper in the feeder), the
+        request goes out as a full-page feeder request and the page paths are
+        returned, in a ``batch_<scan_id>`` directory the caller owns; otherwise the
+        single page is at ``tiff_file`` and None is returned."""
         client = self._client(device)
         if source.lower() == "adf":
             raise ScanRequestError(FEEDER_PDF_ONLY_DETAIL)
         area = None
         if width_mm and height_mm:
             area = (left_mm or 0.0, top_mm or 0.0, width_mm, height_mm)
-        work = tempfile.mkdtemp(prefix="native_", dir=os.path.dirname(tiff_file) or None)
+        work = os.path.join(os.path.dirname(tiff_file), f"batch_{scan_id}")
+        os.makedirs(work, exist_ok=True)
+        keep = False
         try:
             pages = await client.scan(
                 mode=self._protocol_mode(mode),
@@ -491,9 +502,14 @@ class BrotherNetBackend:
                 area_mm=area,
                 progress=self._progress(scan_id, progress_callback),
             )
+            if pages[0].from_feeder:
+                keep = True
+                return [p.path for p in pages]
             os.replace(pages[0].path, tiff_file)
+            return None
         finally:
-            shutil.rmtree(work, ignore_errors=True)
+            if not keep:
+                shutil.rmtree(work, ignore_errors=True)
 
     async def acquire_batch(
         self,
@@ -504,15 +520,23 @@ class BrotherNetBackend:
         page_dir: str,
         scan_id: str,
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
-    ) -> None:
+        glass_request: bool = False,
+    ) -> bool:
+        """Scan the feeder into ``page_dir``; True if the printer fed it.
+
+        ``glass_request`` sends the request the way a full glass scan goes, so
+        paper in the feeder takes over but an emptied feeder falls back to the
+        glass instead of failing.
+        """
         client = self._client(device)
-        await client.scan(
+        pages = await client.scan(
             mode=self._protocol_mode(mode),
             dpi=resolution,
-            source="adf",
+            source="flatbed" if glass_request else "adf",
             out_dir=page_dir,
             progress=self._progress(scan_id, progress_callback),
         )
+        return pages[0].from_feeder
 
 
 _LEFTOVER_DIR_RE = re.compile(
@@ -681,6 +705,7 @@ class ScanService:
         width_mm: float | None = None,
         height_mm: float | None = None,
         page_count_callback: Callable[[int], None] | None = None,
+        feeder_callback: Callable[[], None] | None = None,
     ) -> tuple[str, str]:
         """Perform a scan.
 
@@ -704,6 +729,11 @@ class ScanService:
 
         A native Brother or brother4 feeder request delivers every sheet, so it is
         PDF-only and `page_count_callback` (if given) receives the sheet count.
+
+        On a `brothernet:` device paper in the feeder takes over a glass request
+        too: it is scanned as a full-page feeder request, every sheet is kept and
+        the result is one PDF whatever `fmt` asked for. `feeder_callback` is called
+        when that happened to a glass request.
         """
         native_feeder = feeder_takes_every_sheet(device or self._scanner_device) and (
             source.lower() == "adf"
@@ -721,23 +751,31 @@ class ScanService:
             # Scan to TIFF as intermediate format, then convert to requested output
             tiff_file = os.path.join(_scan_dir, f"{scan_id}.tiff")
 
-            if native_feeder:
-                pdf_file, count = await self._scan_feeder_pdf(
+            glass_over_feeder = False
+            if is_native_device(_device) and not native_feeder:
+                reading = await self.native_feeder_reading(_device)
+                glass_over_feeder = reading is not None and reading.takes_over_glass
+
+            if native_feeder or glass_over_feeder:
+                pdf_file, count, fed = await self._scan_feeder_pdf(
                     device=_device,
                     resolution=resolution,
                     mode=mode,
                     scan_dir=_scan_dir,
                     scan_id=scan_id,
                     progress_callback=progress_callback,
+                    glass_request=glass_over_feeder,
                 )
                 if page_count_callback is not None:
                     page_count_callback(count)
+                if fed and glass_over_feeder and feeder_callback is not None:
+                    feeder_callback()
                 return scan_id, pdf_file
 
             keep_tiff = False
             try:
                 await self._guard(_device)
-                await self._backend_for(_device).acquire_page(
+                fed_pages = await self._backend_for(_device).acquire_page(
                     device=_device,
                     resolution=resolution,
                     mode=mode,
@@ -750,6 +788,22 @@ class ScanService:
                     width_mm=width_mm,
                     height_mm=height_mm,
                 )
+
+                if fed_pages:
+                    pdf_file = os.path.join(_scan_dir, f"{scan_id}.pdf")
+                    try:
+                        await _merge_pages_to_pdf(fed_pages, pdf_file)
+                    except BaseException:
+                        if os.path.exists(pdf_file):
+                            os.unlink(pdf_file)
+                        raise
+                    finally:
+                        shutil.rmtree(os.path.dirname(fed_pages[0]), ignore_errors=True)
+                    if page_count_callback is not None:
+                        page_count_callback(len(fed_pages))
+                    if feeder_callback is not None:
+                        feeder_callback()
+                    return scan_id, pdf_file
 
                 if not os.path.exists(tiff_file):
                     raise ScanError("Scan produced no output file")
@@ -786,10 +840,11 @@ class ScanService:
         scan_dir: str,
         scan_id: str,
         progress_callback: Callable[[str, float], Awaitable[None]] | None,
-    ) -> tuple[str, int]:
+        glass_request: bool = False,
+    ) -> tuple[str, int, bool]:
         """Scan every sheet in the feeder into one PDF. Caller holds the lock.
 
-        Returns (pdf_path, page_count).
+        Returns (pdf_path, page_count, fed_by_feeder).
         """
         page_dir = os.path.join(scan_dir, f"batch_{scan_id}")
         pdf_file = os.path.join(scan_dir, f"{scan_id}.pdf")
@@ -797,9 +852,10 @@ class ScanService:
 
         success = False
         try:
-            pages = await self._acquire_feeder_tiffs(
+            pages, fed = await self._acquire_feeder_tiffs(
                 device=device, resolution=resolution, mode=mode, page_dir=page_dir,
                 scan_id=scan_id, progress_callback=progress_callback,
+                glass_request=glass_request,
             )
             await _merge_pages_to_pdf(pages, pdf_file)
 
@@ -807,7 +863,7 @@ class ScanService:
             shutil.rmtree(page_dir, ignore_errors=True)
 
             success = True
-            return pdf_file, len(pages)
+            return pdf_file, len(pages), fed
         finally:
             # F22: any non-success exit leaks page_dir and every page
             # TIFF in it (up to hundreds of MB for a large ADF batch)
@@ -821,15 +877,17 @@ class ScanService:
     async def _acquire_feeder_tiffs(
         self, *, device: str, resolution: int, mode: str, page_dir: str, scan_id: str,
         progress_callback: Callable[[str, float], Awaitable[None]] | None,
-    ) -> list[str]:
+        glass_request: bool = False,
+    ) -> tuple[list[str], bool]:
         await self._guard(device)
-        await self._backend_for(device).acquire_batch(
+        fed = await self._backend_for(device).acquire_batch(
             device=device,
             resolution=resolution,
             mode=mode,
             page_dir=page_dir,
             scan_id=scan_id,
             progress_callback=progress_callback,
+            glass_request=glass_request,
         )
 
         # scanimage returns non-zero when ADF runs out of paper, which is expected
@@ -837,7 +895,7 @@ class ScanService:
         pages = sorted(f for f in os.listdir(page_dir) if f.endswith(".tiff"))
         if not pages:
             raise ScanError("No pages scanned from ADF")
-        return [os.path.join(page_dir, p) for p in pages]
+        return [os.path.join(page_dir, p) for p in pages], bool(fed)
 
     async def scan_feeder_pages(
         self,
@@ -847,8 +905,13 @@ class ScanService:
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
         device: str | None = None,
         scan_dir: str | None = None,
+        glass_request: bool = False,
+        feeder_callback: Callable[[], None] | None = None,
     ) -> tuple[str, str, str, list[str]]:
         """Scan every feeder sheet and keep each as its own `fmt` file.
+
+        `glass_request` is for a glass request that paper in the feeder takes
+        over; `feeder_callback` is called if the feeder served it.
 
         Returns (scan_id, pdf_path, page_dir, page_files): the pages sit in
         `page_dir`, which the caller owns from here on; `pdf_path` is a merged
@@ -867,9 +930,10 @@ class ScanService:
 
             success = False
             try:
-                tiffs = await self._acquire_feeder_tiffs(
+                tiffs, fed = await self._acquire_feeder_tiffs(
                     device=_device, resolution=resolution, mode=mode, page_dir=page_dir,
                     scan_id=scan_id, progress_callback=progress_callback,
+                    glass_request=glass_request,
                 )
                 await _merge_pages_to_pdf(tiffs, pdf_file)
                 if fmt == "tiff":
@@ -885,6 +949,8 @@ class ScanService:
                         os.unlink(tiff)
                         files.append(out)
                 success = True
+                if fed and glass_request and feeder_callback is not None:
+                    feeder_callback()
                 return scan_id, pdf_file, page_dir, files
             finally:
                 if not success:
@@ -910,7 +976,7 @@ class ScanService:
 
         async with self._lock:
             scan_id = str(uuid.uuid4())
-            pdf_file, count = await self._scan_feeder_pdf(
+            pdf_file, count, _ = await self._scan_feeder_pdf(
                 device=device or self._scanner_device,
                 resolution=resolution,
                 mode=mode,

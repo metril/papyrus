@@ -3,8 +3,9 @@
 One ``scan()`` call is one connection: handshake (with bounded retries while
 the device is busy), safety checks on the feeder, then the page stream, each
 page spooled to disk and converted to a lossless TIFF. Host validation is the
-caller's job. A feeder request always pulls every sheet; hanging up does not
-stop it.
+caller's job. A feeder request always pulls every sheet and hanging up does
+not stop it (it may jam the printer), so an abandoned feeder stream is drained
+to its job-end marker before the connection is closed.
 """
 from __future__ import annotations
 
@@ -42,11 +43,9 @@ class ScannedPage:
     height: int
     dpi: int
     mode: str  # PIL mode of the TIFF
+    from_feeder: bool = False  # the printer served this from the feeder
 
 
-FLATBED_BLOCKED_DETAIL = (
-    "There is paper in the document feeder. Remove it before scanning from the glass."
-)
 FEEDER_EMPTY_DETAIL = (
     "The document feeder is empty. Load paper in the feeder, or scan from the glass."
 )
@@ -64,7 +63,8 @@ class FeederReading:
         return self.query_paper and self.lease_paper
 
     @property
-    def blocks_flatbed(self) -> bool:
+    def takes_over_glass(self) -> bool:
+        """Either signal means the printer feeds instead of scanning the glass."""
         return self.query_paper or self.lease_paper
 
 
@@ -326,7 +326,10 @@ class BrotherScanClient:
         """Scan and return one TIFF per page, written into ``out_dir``.
 
         A feeder request always delivers every sheet; the device cannot be
-        stopped after the first.
+        stopped after the first. The printer also feeds a glass request when
+        either paper signal shows paper in the feeder, so that request is sent
+        as a full-page feeder request (``area_mm`` dropped) and every page
+        comes back marked ``from_feeder``.
 
         ``source`` is ``"flatbed"`` or ``"adf"``; ``area_mm`` is
         ``(left, top, width, height)`` and flatbed only (None = whole bed).
@@ -340,13 +343,14 @@ class BrotherScanClient:
 
         created: list[str] = []
         writer = None
+        stream = _Stream()
         try:
             reader, writer, lease, paper = await self._handshake(dpi, mode)
 
-            if source == "flatbed" and (paper or lease.paper_in_feeder):
-                raise ScanSourceError(FLATBED_BLOCKED_DETAIL)
             if source == "adf" and not (paper and lease.paper_in_feeder):
                 raise ScanSourceError(FEEDER_EMPTY_DETAIL)
+            if source == "flatbed" and (paper or lease.paper_in_feeder):
+                source = "adf"
 
             if source == "adf":
                 area = bp.feeder_area(lease)
@@ -355,9 +359,15 @@ class BrotherScanClient:
             else:
                 area = bp.area_to_pixels(dpi, *area_mm, lease.width_px, lease.height_px)
 
+            stream.feeder = source == "adf"
+            stream.parser = bp.StreamParser(
+                max_page_bytes=_MAX_PAGE_BYTES,
+                max_rows=(area[3] - area[1]) + 16 if not spec.jpeg else 0,
+            )
+            stream.started = True
             await self._send(writer, bp.encode_start(lease.xdpi, lease.ydpi, mode, area))
             return await self._receive(
-                reader, writer, spec, lease, area, source, out_dir, created, progress
+                reader, writer, spec, lease, area, source, out_dir, created, progress, stream
             )
         except BaseException as exc:
             for path in created:
@@ -367,19 +377,46 @@ class BrotherScanClient:
                     pass
             if isinstance(exc, bp.BrotherProtocolError):
                 logger.warning("Brother protocol error: %s", exc.log_message)
+            if stream.should_drain(exc):
+                await self._drain_shielded(reader, stream.parser)
             raise
         finally:
             await self._close(writer)
 
-    async def _receive(self, reader, writer, spec, lease, area, source, out_dir, created, progress):
+    async def _drain_shielded(self, reader, parser: bp.StreamParser) -> None:
+        """Read an abandoned feeder stream to its end, however often the caller
+        is cancelled meanwhile; a cancel is only re-raised once the drain is done."""
+        task = asyncio.ensure_future(self._drain(reader, parser))
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+
+    async def _drain(self, reader, parser: bp.StreamParser) -> None:
+        """Discard data up to the job end. A silent, dropped or garbled stream, or
+        a device error, ends it quietly."""
+        try:
+            while not parser.finished:
+                chunk = await self._read(reader, 65536)
+                if not chunk:
+                    return
+                if any(isinstance(ev, bp.DeviceError) for ev in parser.feed(chunk)):
+                    return
+        except (ExternalServiceError, bp.BrotherProtocolError):
+            return
+
+    async def _receive(
+        self, reader, writer, spec, lease, area, source, out_dir, created, progress, stream
+    ):
         width = area[2] - area[0]
         want_height = area[3] - area[1]
         row_bytes = spec.row_bytes(width)
         flatbed = source == "flatbed"
-        parser = bp.StreamParser(
-            max_page_bytes=_MAX_PAGE_BYTES,
-            max_rows=want_height + 16 if not spec.jpeg else 0,
-        )
+        feeder = not flatbed
+        parser = stream.parser
         dpi = (lease.xdpi, lease.ydpi)
         pages: list[ScannedPage] = []
         spool_path: str | None = None
@@ -397,7 +434,12 @@ class BrotherScanClient:
                 chunk = await self._read(reader, 65536)
                 if not chunk:
                     raise ExternalServiceError("The scanner closed the connection unexpectedly.")
-                for ev in parser.feed(chunk):
+                try:
+                    events = parser.feed(chunk)
+                except bp.BrotherProtocolError:
+                    stream.garbled = True
+                    raise
+                for ev in events:
                     if isinstance(ev, bp.Frame):
                         if spool is None:
                             current = len(pages) + 1
@@ -444,7 +486,7 @@ class BrotherScanClient:
                             )
                         os.unlink(spool_path)
                         created.remove(spool_path)
-                        pages.append(ScannedPage(out, w, h, lease.xdpi, spec.pil_mode))
+                        pages.append(ScannedPage(out, w, h, lease.xdpi, spec.pil_mode, feeder))
                         await report(current, 100)
                     elif isinstance(ev, bp.DeviceError):
                         logger.warning("Brother scanner reported error status 0x%02x", ev.code)
@@ -469,6 +511,24 @@ class BrotherScanClient:
             await asyncio.wait_for(writer.drain(), 2)
         except Exception:
             pass
+
+
+class _Stream:
+    """What the drain needs to know about the page stream."""
+
+    def __init__(self) -> None:
+        self.parser = bp.StreamParser()
+        self.feeder = False
+        self.started = False  # ESC X is on its way
+        self.garbled = False
+
+    def should_drain(self, exc: BaseException) -> bool:
+        """Only a feeder stream still running and readable is worth reading out.
+        An ExternalServiceError means the stream is already over or unreadable."""
+        return (
+            self.feeder and self.started and not self.garbled
+            and not self.parser.finished and not isinstance(exc, ExternalServiceError)
+        )
 
 
 class _ReadTimeoutError(ExternalServiceError):

@@ -179,18 +179,6 @@ def refusal_script(name, adf, feeder_byte):
 
 
 @pytest.mark.parametrize(
-    "adf,feeder_byte", [(1, bp.FEEDER_LOADED), (1, bp.FEEDER_EMPTY), (2, bp.FEEDER_LOADED)]
-)
-async def test_flatbed_refused_when_feeder_has_paper(adf, feeder_byte, tmp_path):
-    name = "20-fixture-mode-01"
-    async with FakeScanner([refusal_script(name, adf, feeder_byte)]) as srv:
-        with pytest.raises(ScanSourceError) as ei:
-            await client(srv.port).scan(out_dir=str(tmp_path), **fixture_args(name))
-    assert "feeder" in ei.value.detail
-    assert srv.errors == [] and srv.trailing == [b""]  # ESC X never sent
-
-
-@pytest.mark.parametrize(
     "adf,feeder_byte", [(2, bp.FEEDER_EMPTY), (1, bp.FEEDER_EMPTY), (2, bp.FEEDER_LOADED)]
 )
 async def test_feeder_refused_when_empty(adf, feeder_byte, tmp_path):

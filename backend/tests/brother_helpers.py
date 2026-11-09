@@ -19,6 +19,22 @@ HOLD = ("HOLD", b"")  # stay silent until the client disconnects
 CLOSE = ("CLOSE", b"")  # hang up on the client
 
 
+def gate(name):
+    """Stay silent until the test calls ``FakeScanner.open(name)``."""
+    return ("GATE", name.encode())
+
+
+def preflight(lease_paper=False, query_paper=False):
+    """One read-only feeder state check (what ``feeder_reading`` sends)."""
+    return [
+        OK,
+        ("C>S", bp.encode_lease_request(300, "TEXT")),
+        ("S>C", lease_reply(adf=1 if lease_paper else 2)),
+        ("C>S", bp.CMD_FEEDER_QUERY),
+        ("S>C", bytes([bp.FEEDER_LOADED if query_paper else bp.FEEDER_EMPTY])),
+    ]
+
+
 def load(name):
     """Fixture segments as [(dir, bytes)]."""
     out = []
@@ -76,7 +92,18 @@ class FakeScanner:
         self.errors = []
         self.trailing = []
         self.accepted = 0
+        self.reached = {}
+        self._gates = {}
         self._server = None
+
+    def _event(self, table, name):
+        return table.setdefault(name, asyncio.Event())
+
+    def open(self, name):
+        self._event(self._gates, name).set()
+
+    async def wait_reached(self, name, timeout=5):
+        await asyncio.wait_for(self._event(self.reached, name).wait(), timeout)
 
     async def __aenter__(self):
         self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
@@ -113,6 +140,9 @@ class FakeScanner:
                         return
                 elif direction == "CLOSE":
                     return
+                elif direction == "GATE":
+                    self._event(self.reached, data.decode()).set()
+                    await self._event(self._gates, data.decode()).wait()
                 else:  # HOLD
                     await reader.read()
                     return

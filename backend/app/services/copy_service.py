@@ -2,7 +2,12 @@ import logging
 
 from app.exceptions import PapyrusError
 from app.services.cups_service import CupsService
-from app.services.scan_service import ScanError, feeder_takes_every_sheet, scan_service
+from app.services.scan_service import (
+    ScanError,
+    feeder_takes_every_sheet,
+    is_native_device,
+    scan_service,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +47,15 @@ class CopyService:
         native_feeder = feeder_takes_every_sheet(device) and source.lower() == "adf"
         fmt = "pdf" if native_feeder else "tiff"
         page_count = 1
+        fed_source = None
 
         def set_page_count(count: int) -> None:
             nonlocal page_count
             page_count = count
+
+        def set_fed_by_feeder() -> None:
+            nonlocal fed_source
+            fed_source = "ADF"
 
         # Step 1: Scan
         try:
@@ -53,7 +63,11 @@ class CopyService:
                 resolution=resolution,
                 mode=mode,
                 fmt=fmt,  # TIFF for best print quality
-                **({"page_count_callback": set_page_count} if native_feeder else {}),
+                **(
+                    {"page_count_callback": set_page_count, "feeder_callback": set_fed_by_feeder}
+                    if native_feeder or is_native_device(device)
+                    else {}
+                ),
                 source=source,
                 progress_callback=progress_callback,
                 device=device,
@@ -63,11 +77,16 @@ class CopyService:
             logger.warning("Copy: scan step failed: %s", e)
             raise CopyError("Scan failed while making a copy")
 
+        # Paper in the feeder takes over a glass request: the whole stack is one PDF.
+        if fed_source:
+            fmt = "pdf"
+            source = fed_source
+
         # The scan is kept in history even if printing fails below.
         if on_scanned is not None:
             await on_scanned({
                 "scan_id": scan_id, "filepath": filepath, "format": fmt,
-                "page_count": page_count,
+                "page_count": page_count, "source": source,
             })
 
         # Step 2: Print the scanned image
@@ -92,6 +111,7 @@ class CopyService:
             "filepath": filepath,
             "format": fmt,
             "page_count": page_count,
+            "source": source,
         }
 
 

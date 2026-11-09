@@ -52,7 +52,7 @@ async def create_copy(
             mode=request.mode,
             format=info["format"],
             page_count=info["page_count"],
-            source=request.source,
+            source=info["source"],
             filepath=info["filepath"],
             completed_at=datetime.now(timezone.utc),
         )

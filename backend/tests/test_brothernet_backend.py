@@ -29,6 +29,7 @@ from tests.brother_helpers import (
     lease_reply,
     load,
     page_end,
+    preflight,
     split_stream,
     with_page,
 )
@@ -102,7 +103,7 @@ async def test_flatbed_scan_modes_and_progress(name, mode, tmp_path, native):
     async def cb(scan_id, pct):
         seen.append((scan_id, pct))
 
-    async with FakeScanner([load(name)]) as srv:
+    async with FakeScanner([preflight(), load(name)]) as srv:
         native(srv)
         scan_id, path = await ScanService().scan(
             resolution=300, mode=mode, fmt="tiff", source="Flatbed", device=DEVICE,
@@ -117,7 +118,7 @@ async def test_flatbed_scan_modes_and_progress(name, mode, tmp_path, native):
 
 
 async def test_scan_converts_to_pdf(tmp_path, native):
-    async with FakeScanner([load("20-fixture-mode-01")]) as srv:
+    async with FakeScanner([preflight(), load("20-fixture-mode-01")]) as srv:
         native(srv)
         _, path = await ScanService().scan(
             resolution=300, mode="Lineart", fmt="pdf", device=DEVICE,
@@ -207,14 +208,14 @@ def test_feeder_formats_option():
 
 async def test_client_errors_reach_caller_unchanged(tmp_path, native):
     segs = load("20-fixture-mode-01")
-    refusal = [segs[0], segs[1], ("S>C", lease_reply(adf=1, h_mm=0, h_px=0)), segs[3],
-               ("S>C", bytes([bp.FEEDER_LOADED]))]
+    refusal = [segs[0], segs[1], ("S>C", lease_reply(adf=2)), segs[3],
+               ("S>C", bytes([bp.FEEDER_EMPTY]))]
     async with FakeScanner([refusal]) as srv:
         native(srv)
         with pytest.raises(ScanSourceError):
             await ScanService().scan(
-                resolution=300, mode="Lineart", source="Flatbed", device=DEVICE,
-                scan_dir=str(tmp_path), **FLATBED,
+                resolution=300, mode="Lineart", fmt="pdf", source="ADF", device=DEVICE,
+                scan_dir=str(tmp_path),
             )
     with pytest.raises(ScanRequestError):
         await ScanService().scan(
@@ -301,7 +302,7 @@ async def test_cancel_native_scan_drops_connection_and_frees_lock(tmp_path, nati
     name = "20-fixture-mode-01"
     script = load(name)[:-1] + [HOLD]
     svc = ScanService()
-    async with FakeScanner([script]) as srv:
+    async with FakeScanner([preflight(), script]) as srv:
         native(srv)
         task = asyncio.create_task(svc.scan(
             resolution=300, mode="Lineart", fmt="pdf", device=DEVICE,
@@ -313,7 +314,7 @@ async def test_cancel_native_scan_drops_connection_and_frees_lock(tmp_path, nati
         with pytest.raises(asyncio.CancelledError):
             await task
         await asyncio.sleep(0.1)
-    assert srv.errors == [] and srv.trailing == [b""]
+    assert srv.errors == [] and srv.trailing == [b"", b""]
     assert not svc.is_busy() and os.listdir(tmp_path) == []
 
 
@@ -326,7 +327,7 @@ def escl_jobs():
 
 async def test_escl_cancel_native(tmp_path, native, escl_jobs):
     script = load("20-fixture-mode-01")[:-1] + [HOLD]
-    async with FakeScanner([script]) as srv:
+    async with FakeScanner([preflight(), script]) as srv:
         native(srv)
         task = asyncio.create_task(scan_service.scan(
             resolution=300, mode="Lineart", fmt="pdf", device=DEVICE,
@@ -337,7 +338,7 @@ async def test_escl_cancel_native(tmp_path, native, escl_jobs):
         resp = await escl.cancel_scan_job("j1")
         await asyncio.sleep(0.1)
     assert resp.status_code == 200 and task.cancelled()
-    assert srv.errors == [] and srv.trailing == [b""]
+    assert srv.errors == [] and srv.trailing == [b"", b""]
     assert not scan_service.is_busy() and os.listdir(tmp_path) == []
 
 

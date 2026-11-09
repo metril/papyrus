@@ -78,6 +78,7 @@ async def test_copy_passes_device_through_to_scan_service(monkeypatch):
         "filepath": fake_scan.filepath,
         "format": "tiff",
         "page_count": 1,
+        "source": "Flatbed",
     }
     assert fake_cups.created == [(fake_scan.filepath, "Copy_scan-123", 1, False, "A4")]
     assert fake_cups.released == [42]

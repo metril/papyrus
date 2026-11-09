@@ -44,6 +44,7 @@ def tasks(monkeypatch):
 @pytest.fixture(autouse=True)
 def _reset(monkeypatch):
     escl._adf_cache.clear()
+    escl._scan_jobs.clear()
     monkeypatch.setattr(escl, "_adf_probing", False)
 
     async def allow(_host):
@@ -52,6 +53,7 @@ def _reset(monkeypatch):
     monkeypatch.setattr(ss, "assert_safe_host", allow)
     yield
     escl._adf_cache.clear()
+    escl._scan_jobs.clear()
 
 
 def read_script(lease_paper: bool, query_paper: bool):
@@ -154,18 +156,17 @@ async def test_scan_in_progress_stays_503(client, monkeypatch):
 
 
 @pytest.mark.parametrize("lease_paper,query_paper", [(True, True), (False, True), (True, False)])
-async def test_platen_with_paper_in_feeder_is_409_and_nothing_starts(
+async def test_platen_with_paper_in_feeder_is_not_refused(
     db, client, monkeypatch, tmp_path, tasks, lease_paper, query_paper
 ):
     await _enable_escl(db)
-    async with FakeScanner([read_script(lease_paper, query_paper)]) as srv:
+    async with FakeScanner([]) as srv:
         use_printer(monkeypatch, srv.port)
         fake = fake_service(monkeypatch, tmp_path)
         resp = await client.post("/eSCL/ScanJobs", content=_MINIMAL_SCAN_SETTINGS_XML)
-    assert resp.status_code == 409
-    assert escl._scan_jobs == {} and fake.calls == []
-    assert srv.errors == [] and srv.trailing == [b""] and srv.accepted == 1
-    assert await no_job_rows(db)
+        await asyncio.gather(*tasks)
+    assert resp.status_code == 201
+    assert srv.accepted == 0 and len(fake.calls) == 1
 
 
 @pytest.mark.parametrize("lease_paper,query_paper", [(False, False), (True, False), (False, True)])
