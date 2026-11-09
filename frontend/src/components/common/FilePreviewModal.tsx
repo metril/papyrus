@@ -62,6 +62,7 @@ export default function FilePreviewModal({ url, previewUrl, thumbnailUrl, filena
         return res.blob();
       })
       .then((blob) => {
+        if (controller.signal.aborted) return;
         const objUrl = URL.createObjectURL(blob);
         setBlobUrl(objUrl);
         setFetchState('ready');

@@ -137,6 +137,7 @@ See [.env.example](.env.example) for the full list.
 | `PAPYRUS_ENCRYPTION_KEY` | Fernet key for encrypting secrets at rest |
 | `PAPYRUS_SESSION_SECRET` | Session cookie encryption key |
 | `PAPYRUS_BASE_URL` | Public URL (for OIDC callbacks and webhooks) |
+| `PAPYRUS_DISABLE_MDNS` | Set to `true` to stop Avahi advertising: AirPrint (`_ipp._tcp`), eSCL (`_uscan._tcp`) and per-printer adverts. Clients must then add the printer/scanner by IP/URL; IPP printing to the hold queue on :6310 and admin printer discovery (python-zeroconf) still work. Default `false` |
 | `PAPYRUS_OIDC_ISSUER` | OIDC provider issuer URL |
 | `PAPYRUS_OIDC_CLIENT_ID` | OIDC client ID |
 | `PAPYRUS_OIDC_CLIENT_SECRET` | OIDC client secret |
@@ -158,6 +159,10 @@ After first login, configure everything else via **Settings**:
 - **Paperless-ngx**: URL and API token
 - **Retention**: Scan and print job cleanup periods
 - **Alerts**: Enable supply/error alerts, toner threshold percentage, notification email, and poll interval
+
+## Releasing
+
+Bump the version in `backend/pyproject.toml`, `frontend/package.json`, and `backend/app/main.py`, then merge to `main`. The Release workflow tags `v<version>`, builds and pushes the ghcr.io image, and creates the GitHub Release automatically.
 
 ## License
 

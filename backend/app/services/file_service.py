@@ -101,11 +101,6 @@ def get_upload_path(filename: str, upload_dir: str = "/app/data/uploads") -> str
     return os.path.join(upload_dir, unique_name)
 
 
-def get_scan_path(scan_id: str, fmt: str, scan_dir: str = "/app/data/scans") -> str:
-    """Generate the file path for a scan."""
-    return os.path.join(scan_dir, f"{scan_id}.{fmt}")
-
-
 def detect_mime_type(filename: str) -> str:
     """Detect MIME type from filename."""
     mime_type, _ = mimetypes.guess_type(filename)

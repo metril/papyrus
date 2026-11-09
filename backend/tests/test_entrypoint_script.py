@@ -62,7 +62,7 @@ def _write_shim(bindir: Path, name: str, body: str) -> None:
     shim.chmod(0o755)
 
 
-def _setup(tmp_path, *, cupsd=None, avahi=None, uvicorn=None, lpstat=None):
+def _setup(tmp_path, *, cupsd=None, avahi=None, uvicorn=None, lpstat=None, extra_env=None):
     """Create the shim bin dir + marker dir; return (env, markers)."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -86,6 +86,7 @@ def _setup(tmp_path, *, cupsd=None, avahi=None, uvicorn=None, lpstat=None):
         "PAPYRUS_INGEST_TOKEN_FILE": str(tmp_path / "run" / "ingest.token"),
         "PAPYRUS_SCAN_DIR": str(tmp_path / "scans"),
         "PAPYRUS_UPLOAD_DIR": str(tmp_path / "uploads"),
+        **(extra_env or {}),
     }
     return env, markers
 
@@ -192,3 +193,71 @@ def test_uvicorn_exit_code_is_the_container_exit_code(tmp_path):
     assert rc == 7, f"expected uvicorn's exit code 7, got {rc}\n{stderr}"
     for name in ("cupsd", "avahi"):
         assert (markers / f"{name}.termed").exists(), f"{name} was not TERMed\n{stderr}"
+
+
+# --------------------------------------------------------------------------- #
+# PAPYRUS_DISABLE_MDNS: avahi-daemon is skipped and not supervised.
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("value", ["true", "1", "TRUE"])
+def test_disable_mdns_skips_avahi_on_normal_exit(tmp_path, value):
+    env, markers = _setup(
+        tmp_path,
+        uvicorn=_EXIT_CODE_SHIM.replace("{code}", "0"),
+        extra_env={"PAPYRUS_DISABLE_MDNS": value},
+    )
+
+    rc, stderr = _run(env)
+
+    assert rc == 0, stderr
+    assert "not starting avahi-daemon" in stderr
+    assert not (markers / "avahi.started").exists()
+    assert (markers / "cupsd.started").exists()
+    assert (markers / "cupsd.termed").exists(), stderr
+
+
+def test_disable_mdns_cupsd_crash_is_fatal(tmp_path):
+    env, markers = _setup(tmp_path, cupsd=_CRASH_SHIM, extra_env={"PAPYRUS_DISABLE_MDNS": "true"})
+
+    rc, stderr = _run(env)
+
+    assert rc is not None and rc != 0, stderr
+    assert "FATAL: cupsd" in stderr
+    assert not (markers / "avahi.started").exists()
+    assert (markers / "uvicorn.termed").exists(), stderr
+
+
+def test_disable_mdns_sigterm_stops_cleanly(tmp_path):
+    env, markers = _setup(tmp_path, extra_env={"PAPYRUS_DISABLE_MDNS": "true"})
+
+    proc = subprocess.Popen(
+        ["bash", str(SCRIPT)],
+        env=env, start_new_session=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        _wait_for(markers / "uvicorn.started")
+        proc.send_signal(signal.SIGTERM)
+        _, stderr = proc.communicate(timeout=15)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.communicate()
+        raise AssertionError("entrypoint did not exit after SIGTERM")
+
+    assert proc.returncode == 0, stderr
+    for name in ("uvicorn", "cupsd"):
+        assert (markers / f"{name}.termed").exists(), f"{name} was not TERMed\n{stderr}"
+    assert not (markers / "avahi.started").exists()
+
+
+def test_disable_mdns_false_still_starts_avahi(tmp_path):
+    env, markers = _setup(
+        tmp_path,
+        uvicorn=_EXIT_CODE_SHIM.replace("{code}", "0"),
+        extra_env={"PAPYRUS_DISABLE_MDNS": "false"},
+    )
+
+    rc, stderr = _run(env)
+
+    assert rc == 0, stderr
+    assert (markers / "avahi.started").exists()
+    assert (markers / "avahi.termed").exists(), stderr

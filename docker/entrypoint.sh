@@ -13,6 +13,11 @@ set -e
 # lengthening it. uvicorn is deliberately NOT exec'd below so this shell
 # stays alive for the container's whole life to do this waiting -- exec'ing
 # it would replace this process image and silently drop the trap.
+# PAPYRUS_DISABLE_MDNS (truthy: 1/true/yes/on/t/y, case-insensitive) skips
+# avahi-daemon entirely: no AirPrint/eSCL/per-printer adverts, and nothing to
+# supervise or stop for it.
+MDNS_DISABLED=""
+case "${PAPYRUS_DISABLE_MDNS,,}" in 1|true|yes|on|t|y) MDNS_DISABLED=1;; esac
 SHUTTING_DOWN=0
 UVICORN_PID=""
 CUPS_PID=""
@@ -32,6 +37,7 @@ WAIT_RC=0
 wait_for_pid() {
     local pid="$1"
     WAIT_RC=0
+    [ -n "$pid" ] || return 0
     while true; do
         if wait "$pid" 2>/dev/null; then
             WAIT_RC=0
@@ -50,9 +56,13 @@ trap 'SHUTTING_DOWN=1; kill -TERM $UVICORN_PID $CUPS_PID $AVAHI_PID 2>/dev/null 
 # PID directly instead of losing track of it behind avahi's own fork.
 # (mkdir is best-effort: in the container /run is always root-writable; the
 # guard only matters for the unprivileged test harness.)
-mkdir -p /run/avahi-daemon 2>/dev/null || true
-avahi-daemon --no-chroot --no-drop-root &
-AVAHI_PID=$!
+if [ -z "$MDNS_DISABLED" ]; then
+    mkdir -p /run/avahi-daemon 2>/dev/null || true
+    avahi-daemon --no-chroot --no-drop-root &
+    AVAHI_PID=$!
+else
+    echo "INFO: PAPYRUS_DISABLE_MDNS set; not starting avahi-daemon (no AirPrint/eSCL/printer adverts)" >&2
+fi
 
 # Start CUPS daemon the same way -- foreground (`-f`), backgrounded by this
 # shell -- so $CUPS_PID is the real cupsd process, not an untracked daemon.
@@ -110,7 +120,8 @@ fi
 uvicorn app.main:app --host 0.0.0.0 --port 8080 &
 UVICORN_PID=$!
 
-# Supervision. cupsd and avahi-daemon are long-lived peers of uvicorn, but
+# Supervision. cupsd and avahi-daemon (optional: absent when
+# PAPYRUS_DISABLE_MDNS is set, in which case it is not supervised) are long-lived peers of uvicorn, but
 # historically only uvicorn was ever waited on: a crashed cupsd or avahi
 # left the container happily serving the web app with printing dead --
 # AirPrint clients saw "printer is offline" until someone manually bounced
@@ -127,11 +138,11 @@ while [ "$SHUTTING_DOWN" != "1" ] && [ -z "$DEAD_DAEMON" ] && [ -z "$UVICORN_RC"
         break  # exited before any wait reaped it; wait_for_pid below collects it
     elif ! kill -0 "$CUPS_PID" 2>/dev/null; then
         DEAD_DAEMON="cupsd"
-    elif ! kill -0 "$AVAHI_PID" 2>/dev/null; then
+    elif [ -n "$AVAHI_PID" ] && ! kill -0 "$AVAHI_PID" 2>/dev/null; then
         DEAD_DAEMON="avahi-daemon"
     else
         REAPED=""
-        if wait -n -p REAPED "$UVICORN_PID" "$CUPS_PID" "$AVAHI_PID" 2>/dev/null; then
+        if wait -n -p REAPED "$UVICORN_PID" "$CUPS_PID" $AVAHI_PID 2>/dev/null; then
             RC_N=0
         else
             RC_N=$?

@@ -5,6 +5,8 @@ import os
 import re
 from xml.sax.saxutils import escape
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 PPD_PATH = "/etc/cups/ppd/papyrus.ppd"
@@ -86,10 +88,14 @@ def _avahi_service_xml(display_name: str, cups_name: str) -> str:
 
 
 def _avahi_service_path(cups_name: str) -> str:
+    if not cups_name or os.path.basename(cups_name) != cups_name:
+        raise ValueError("invalid cups_name")
     return os.path.join(AVAHI_SERVICES_DIR, f"{cups_name}.service")
 
 
 async def _write_avahi_service(display_name: str, cups_name: str) -> None:
+    if settings.disable_mdns:
+        return
     try:
         os.makedirs(AVAHI_SERVICES_DIR, exist_ok=True)
         with open(_avahi_service_path(cups_name), "w") as f:
@@ -100,8 +106,8 @@ async def _write_avahi_service(display_name: str, cups_name: str) -> None:
 
 
 async def _remove_avahi_service(cups_name: str) -> None:
-    path = _avahi_service_path(cups_name)
     try:
+        path = _avahi_service_path(cups_name)
         if os.path.exists(path):
             os.remove(path)
         await _reload_avahi()
@@ -110,6 +116,8 @@ async def _remove_avahi_service(cups_name: str) -> None:
 
 
 async def _reload_avahi() -> None:
+    if settings.disable_mdns:
+        return
     await _run(["avahi-daemon", "--reload"], ignore_errors=True)
 
 
