@@ -25,6 +25,7 @@ export default function ScanForm() {
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ScanJob | null>(null);
+  const [requested, setRequested] = useState<{ format: string; source: string } | null>(null);
   const [backsOpen, setBacksOpen] = useState(false);
   // F26: the id the progress socket subscribes to. Set *before* the scan
   // request is sent (see handleScan) so the socket is already open by the
@@ -121,6 +122,7 @@ export default function ScanForm() {
     setScanning(true);
     setError(null);
     setResult(null);
+    setRequested({ format, source });
     setProgress(0);
     // Generate the id and open the progress socket on it *before* POSTing
     // (F26) — the id is sent along with the request so the backend uses it
@@ -273,6 +275,18 @@ export default function ScanForm() {
       {result && result.status === 'completed' && (
         <div className="bg-green-50 dark:bg-green-900/30 border border-green-200 dark:border-green-800 rounded-lg p-4">
           <p className="text-green-800 dark:text-green-400 text-sm font-medium">Scan completed!</p>
+          <p className="font-mono text-xs text-green-800 dark:text-green-400">
+            {result.source} · {result.format.toUpperCase()} · {result.page_count}{' '}
+            {result.page_count === 1 ? 'page' : 'pages'}
+          </p>
+          {requested && (result.source !== requested.source || result.format !== requested.format) && (
+            <p className="text-xs text-green-800 dark:text-green-400">
+              {result.source !== requested.source
+                ? 'There was paper in the feeder, so the printer scanned that instead of the glass. '
+                : ''}
+              {result.page_count === 1 ? 'The page' : 'Every sheet'} is saved as {result.format.toUpperCase()}.
+            </p>
+          )}
           <a
             href={getScanDownloadUrl(result.scan_id)}
             className="text-ink-600 dark:text-ink-400 hover:underline text-sm"
