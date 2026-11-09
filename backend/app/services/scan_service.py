@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exceptions import PapyrusError, ScannerBusyError, ScanRequestError
 from app.services import brother_protocol as bp
-from app.services.brother_client import BrotherScanClient
+from app.services.brother_client import BrotherScanClient, FeederReading
 from app.services.net_guard import UnsafeHostError, assert_safe_host
 
 logger = logging.getLogger(__name__)
@@ -448,6 +448,9 @@ class BrotherNetBackend:
         return {"available": result["available"], "busy": result["busy"],
                 "device": device, "output": ""}
 
+    async def feeder_reading(self, device: str, timeout: float) -> FeederReading | None:
+        return await self._client(device).feeder_reading(timeout)
+
     async def options(self, device: str) -> dict:
         return {
             "resolutions": list(bp.RESOLUTIONS),
@@ -595,6 +598,19 @@ class ScanService:
         _device = device if device is not None else self._scanner_device
         await self._guard(_device)
         return await self._backend_for(_device).probe(_device)
+
+    async def native_feeder_reading(
+        self, device: str, timeout: float = 3.0
+    ) -> FeederReading | None:
+        """Feeder state of a `brothernet:` device without scanning; None if it
+        isn't one, can't be read, or is busy."""
+        if not is_native_device(device):
+            return None
+        try:
+            await self._guard(device)
+            return await _brothernet_backend.feeder_reading(device, timeout)
+        except PapyrusError:
+            return None
 
     async def get_options(self, device: str | None = None) -> dict:
         """Get available scanner options for `device` (default: the configured one)."""

@@ -44,6 +44,30 @@ class ScannedPage:
     mode: str  # PIL mode of the TIFF
 
 
+FLATBED_BLOCKED_DETAIL = (
+    "There is paper in the document feeder. Remove it before scanning from the glass."
+)
+FEEDER_EMPTY_DETAIL = (
+    "The document feeder is empty. Load paper in the feeder, or scan from the glass."
+)
+
+
+@dataclass(frozen=True)
+class FeederReading:
+    """The two paper signals the scan's own source check uses."""
+
+    query_paper: bool  # ESC D reply
+    lease_paper: bool  # lease says paper in feeder
+
+    @property
+    def loaded(self) -> bool:
+        return self.query_paper and self.lease_paper
+
+    @property
+    def blocks_flatbed(self) -> bool:
+        return self.query_paper or self.lease_paper
+
+
 def _invert_table() -> bytes:
     return bytes(255 - i for i in range(256))
 
@@ -262,6 +286,31 @@ class BrotherScanClient:
         finally:
             await self._close(writer)
 
+    async def feeder_reading(self, timeout: float = 3.0) -> FeederReading | None:
+        """Read the feeder state: lease plus ``ESC D``, never ``ESC X``.
+
+        None when the scanner is busy, silent, unreachable or slower than
+        ``timeout`` overall.
+        """
+        async def read() -> FeederReading | None:
+            reader, writer = await self._open()
+            try:
+                lease = await self._read_lease(reader, writer, 300, "TEXT", timeout)
+                await self._send(writer, bp.CMD_FEEDER_QUERY)
+                reply = await self._read_exact(reader, 1, timeout)
+                if reply is None or reply[0] not in (bp.FEEDER_LOADED, bp.FEEDER_EMPTY):
+                    return None
+                return FeederReading(reply[0] == bp.FEEDER_LOADED, lease.paper_in_feeder)
+            except (_BusyError, ExternalServiceError, bp.BrotherProtocolError):
+                return None
+            finally:
+                await self._close(writer)
+
+        try:
+            return await asyncio.wait_for(read(), timeout)
+        except (asyncio.TimeoutError, ExternalServiceError):
+            return None
+
     # -- scan ---------------------------------------------------------------
 
     async def scan(
@@ -295,15 +344,9 @@ class BrotherScanClient:
             reader, writer, lease, paper = await self._handshake(dpi, mode)
 
             if source == "flatbed" and (paper or lease.paper_in_feeder):
-                raise ScanSourceError(
-                    "There is paper in the document feeder. "
-                    "Remove it before scanning from the glass."
-                )
+                raise ScanSourceError(FLATBED_BLOCKED_DETAIL)
             if source == "adf" and not (paper and lease.paper_in_feeder):
-                raise ScanSourceError(
-                    "The document feeder is empty. "
-                    "Load paper in the feeder, or scan from the glass."
-                )
+                raise ScanSourceError(FEEDER_EMPTY_DETAIL)
 
             if source == "adf":
                 area = bp.feeder_area(lease)
@@ -436,4 +479,4 @@ class _BusyError(Exception):
     """Internal: scanner busy (-NG 401 or empty lease); retry."""
 
 
-__all__ = ["BrotherScanClient", "ScannedPage"]
+__all__ = ["BrotherScanClient", "FeederReading", "ScannedPage"]
