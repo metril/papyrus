@@ -141,8 +141,39 @@ def _swap_validation_refs(node: Any) -> None:
             _swap_validation_refs(v)
 
 
+def _register_ws_schemas(comps: dict[str, Any]) -> None:
+    """Add the WebSocket message models to components (OpenAPI has no WS messages)."""
+    from app.schemas.events import WS_MESSAGE_MODELS
+
+    for models in WS_MESSAGE_MODELS.values():
+        for model in models:
+            js = model.model_json_schema(ref_template="#/components/schemas/{model}")
+            for name, sub in js.pop("$defs", {}).items():
+                comps.setdefault(name, sub)
+            comps[model.__name__] = js
+
+
+def _register_webhooks(app: FastAPI) -> None:
+    from app.schemas.events import WEBHOOK_MODELS
+
+    for event, model in WEBHOOK_MODELS.items():
+        def handler(payload: model) -> None:  # type: ignore[valid-type]
+            """Delivered as an HTTP POST; verify X-Papyrus-Signature (see docs/api/webhooks.md)."""
+
+        handler.__name__ = "webhook_" + event.replace(".", "_")
+        app.webhooks.post(
+            event,
+            summary=event,
+            description=(model.__doc__ or "")
+            + " Headers: `X-Papyrus-Event`, and `X-Papyrus-Signature` (hex HMAC-SHA256 of the "
+            "raw body) when the webhook has a secret.",
+        )(handler)
+
+
 def install_openapi(app: FastAPI) -> None:
-    """Replace FastAPI's default 422 body (HTTPValidationError) with ErrorResponse."""
+    """Replace FastAPI's default 422 body (HTTPValidationError) with ErrorResponse; publish
+    webhook and WebSocket message models."""
+    _register_webhooks(app)
 
     def custom_openapi() -> dict[str, Any]:
         if app.openapi_schema:
@@ -155,9 +186,11 @@ def install_openapi(app: FastAPI) -> None:
             tags=app.openapi_tags,
             servers=app.servers,
             contact=app.contact,
+            webhooks=app.webhooks.routes,
         )
         _swap_validation_refs(schema["paths"])
-        comps = schema.get("components", {}).get("schemas", {})
+        comps = schema.setdefault("components", {}).setdefault("schemas", {})
+        _register_ws_schemas(comps)
         for name in ("HTTPValidationError", "ValidationError"):
             comps.pop(name, None)
         app.openapi_schema = schema
