@@ -26,15 +26,18 @@ import os
 
 from cryptography.fernet import Fernet
 
-# xdist: each worker gets its own database (`<name>_gw0`, ...), created on
-# demand in `migrated_db`, so parallel workers never share schema or rows.
+# xdist: each worker of each run gets its own database
+# (`<name>_gw0_<run-uid>`), created in `migrated_db` and dropped at session end,
+# so parallel workers *and* concurrent pytest runs never share schema or rows.
 # (Only os.environ writes here: ruff's E402 allows those before imports.)
 os.environ.setdefault(
     "PAPYRUS_TEST_DB_URL",
     "postgresql+asyncpg://papyrus:papyrus@localhost:5433/papyrus_test",
 )
 os.environ["PAPYRUS_DB_URL"] = os.environ["PAPYRUS_TEST_DB_URL"] + (
-    f"_{os.environ['PYTEST_XDIST_WORKER']}" if os.environ.get("PYTEST_XDIST_WORKER") else ""
+    f"_{os.environ['PYTEST_XDIST_WORKER']}_{os.environ.get('PYTEST_XDIST_TESTRUNUID', '')[:8]}"
+    if os.environ.get("PYTEST_XDIST_WORKER")
+    else ""
 )
 os.environ.setdefault("PAPYRUS_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
@@ -87,25 +90,36 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker("integration")
 
 
-async def _ensure_worker_db() -> None:
-    """Create this xdist worker's database (via the base DB) if it's missing."""
+async def _admin_execute(sql_for_name) -> None:
+    """Run `sql_for_name(worker_db_name)` on the base DB (no-op without xdist)."""
     if not _XDIST_WORKER:
         return
     import asyncpg
     from sqlalchemy.engine import make_url
 
     base = make_url(_BASE_TEST_DB_URL)
-    name = f"{base.database}_{_XDIST_WORKER}"
+    name = make_url(os.environ["PAPYRUS_DB_URL"]).database
     conn = await asyncpg.connect(
         host=base.host, port=base.port, user=base.username,
         password=base.password, database=base.database,
     )
     try:
+        sql = sql_for_name(name)
         exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", name)
-        if not exists:
-            await conn.execute(f'CREATE DATABASE "{name}"')
+        if sql.startswith("CREATE") and not exists or sql.startswith("DROP") and exists:
+            await conn.execute(sql)
     finally:
         await conn.close()
+
+
+async def _ensure_worker_db() -> None:
+    """Create this worker's per-run database if it's missing."""
+    await _admin_execute(lambda n: f'CREATE DATABASE "{n}"')
+
+
+async def _drop_worker_db() -> None:
+    """Drop this worker's per-run database so runs don't accumulate them."""
+    await _admin_execute(lambda n: f'DROP DATABASE "{n}" WITH (FORCE)')
 
 
 async def _probe_db() -> None:
@@ -143,6 +157,7 @@ async def migrated_db():
     await engine.dispose()
     yield
     await engine.dispose()
+    await _drop_worker_db()
 
 
 def _truncate_sql() -> str:
