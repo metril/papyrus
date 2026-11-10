@@ -1549,7 +1549,7 @@ async def test_share_target_multiple_files_each_create_a_job(db, client, tmp_pat
 async def test_share_target_unauthenticated_redirects_to_login(client, tmp_path):
     resp = await client.post("/api/share-target", files=_pdf_file())
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/api/auth/login"
+    assert resp.headers["location"] == "/api/v1/auth/login"
 
 
 async def test_share_target_oversize_file_redirects_with_share_failed_count(db, client, tmp_path):
@@ -1644,7 +1644,7 @@ async def test_share_target_token_without_print_permission_redirects_to_login(db
         headers={"Authorization": f"Bearer {plaintext}"},
     )
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/api/auth/login"
+    assert resp.headers["location"] == "/api/v1/auth/login"
     assert list(tmp_path.iterdir()) == []
 
 

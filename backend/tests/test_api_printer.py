@@ -53,7 +53,7 @@ async def test_printer_status_queries_the_release_queue(db, user_client, monkeyp
     await _seed_default_printer(db, cups_name="brother")
     monkeypatch.setattr(printer_router, "CupsService", _FakeCupsService)
 
-    resp = await user_client.get("/api/printer/status")
+    resp = await user_client.get("/api/v1/printers/default/status")
     assert resp.status_code == 200
     assert _FakeCupsService.last_printer_name == "brother_release"
 
@@ -62,19 +62,19 @@ async def test_printer_settings_queries_the_release_queue(db, user_client, monke
     await _seed_default_printer(db, cups_name="brother")
     monkeypatch.setattr(printer_router, "CupsService", _FakeCupsService)
 
-    resp = await user_client.get("/api/printer/settings")
+    resp = await user_client.get("/api/v1/printers/default/settings")
     assert resp.status_code == 200
     assert _FakeCupsService.last_printer_name == "brother_release"
 
 
 async def test_printer_status_no_default_printer_is_503(db, user_client):
-    resp = await user_client.get("/api/printer/status")
+    resp = await user_client.get("/api/v1/printers/default/status")
     assert resp.status_code == 503
     assert resp.json()["detail"] == "No default printer configured"
 
 
 async def test_printer_settings_no_default_printer_is_503(db, user_client):
-    resp = await user_client.get("/api/printer/settings")
+    resp = await user_client.get("/api/v1/printers/default/settings")
     assert resp.status_code == 503
     assert resp.json()["detail"] == "No default printer configured"
 
@@ -87,13 +87,13 @@ async def test_paper_returns_detected_media(db, user_client, monkeypatch):
         return "Letter"
 
     monkeypatch.setattr(printer_router, "get_loaded_paper", fake)
-    resp = await user_client.get("/api/printer/paper")
+    resp = await user_client.get("/api/v1/printers/default/paper")
     assert resp.status_code == 200
     assert resp.json() == {"media": "Letter"}
 
 
 async def test_paper_without_default_printer_is_null(db, user_client):
-    resp = await user_client.get("/api/printer/paper")
+    resp = await user_client.get("/api/v1/printers/default/paper")
     assert resp.status_code == 200
     assert resp.json() == {"media": None}
 
@@ -101,5 +101,5 @@ async def test_paper_without_default_printer_is_null(db, user_client):
 async def test_paper_with_garbage_printer_uri_is_null(db, user_client):
     db.add(Printer(display_name="B", cups_name="b", uri="ipp://[::1", is_default=True))
     await db.commit()
-    resp = await user_client.get("/api/printer/paper")
+    resp = await user_client.get("/api/v1/printers/default/paper")
     assert resp.status_code == 200 and resp.json() == {"media": None}

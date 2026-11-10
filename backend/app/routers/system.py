@@ -12,6 +12,8 @@ from app.services.scan_service import get_default_scanner, is_native_device, sca
 from app.services.ws_manager import ws_manager
 
 router = APIRouter()
+# WebSocket channels are mounted separately at /api/v1/ws.
+ws_router = APIRouter()
 
 _start_time = time.monotonic()
 
@@ -168,7 +170,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.websocket("/ws/jobs")
+@ws_router.websocket("/jobs")
 async def jobs_ws(websocket: WebSocket):
     """WebSocket for real-time print job status updates.
 
@@ -198,7 +200,7 @@ async def jobs_ws(websocket: WebSocket):
         ws_manager.disconnect("jobs", websocket)
 
 
-@router.websocket("/ws/scans")
+@ws_router.websocket("/scans")
 async def scans_ws(websocket: WebSocket):
     """WebSocket for real-time scan list updates. See jobs_ws's F48 note
     (permission "scan" here, and the same short-lived auth session)."""
@@ -215,7 +217,7 @@ async def scans_ws(websocket: WebSocket):
         ws_manager.disconnect("scans", websocket)
 
 
-@router.websocket("/ws/printers")
+@ws_router.websocket("/printers")
 async def printers_ws(websocket: WebSocket):
     """WebSocket for real-time printer status updates. See jobs_ws's F48
     note (permission "print" here, and the same short-lived auth session)."""

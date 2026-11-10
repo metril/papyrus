@@ -81,7 +81,7 @@ async def list_providers(
     }
 
 
-@router.delete("/disconnect/{provider_id}", status_code=204)
+@router.delete("/providers/{provider_id}", status_code=204)
 async def disconnect_provider(
     provider_id: int,
     user: User = Depends(require_permission("files")),
@@ -117,6 +117,9 @@ async def authorize_provider(
     request.session["cloud_oauth_provider"] = provider
 
     base_url = settings.base_url
+    # Externally registered at the provider (Google/Dropbox/Microsoft consoles):
+    # keep generating the legacy /api/cloud/callback URL (a permanent alias in
+    # legacy_alias.py) so admins never have to re-register it.
     redirect_uri = f"{base_url}/api/cloud/callback/{provider}"
 
     if provider == "gdrive":
@@ -181,6 +184,9 @@ async def oauth_callback(
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
     base_url = settings.base_url
+    # Externally registered at the provider (Google/Dropbox/Microsoft consoles):
+    # keep generating the legacy /api/cloud/callback URL (a permanent alias in
+    # legacy_alias.py) so admins never have to re-register it.
     redirect_uri = f"{base_url}/api/cloud/callback/{provider}"
 
     client = get_http_client()

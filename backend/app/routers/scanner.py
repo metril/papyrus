@@ -59,7 +59,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/status")
+@router.get("/scanners/default/status")
 async def get_scanner_status(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -76,7 +76,7 @@ async def get_scanner_status(
     return await scan_service.check_device(device=device)
 
 
-@router.get("/options")
+@router.get("/scanners/default/options")
 async def get_scanner_options(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -86,7 +86,7 @@ async def get_scanner_options(
     return await scan_service.get_options(scanner.device if scanner else None)
 
 
-@router.post("/scan", response_model=ScanResponse, status_code=201)
+@router.post("/scans", response_model=ScanResponse, status_code=201)
 async def initiate_scan(
     request: ScanRequest,
     user: User = Depends(require_permission("scan")),
@@ -208,7 +208,7 @@ async def initiate_scan(
     return job
 
 
-@router.post("/scan/batch", response_model=ScanResponse, status_code=201)
+@router.post("/scans/batch", response_model=ScanResponse, status_code=201)
 async def initiate_batch_scan(
     request: ScanBatchRequest,
     user: User = Depends(require_permission("scan")),
@@ -910,7 +910,7 @@ def _collate_pdfs_sync(page_specs: list[tuple[str, int]], out_path: str) -> None
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
-@router.post("/collate", response_model=ScanResponse, status_code=201)
+@router.post("/scans/collate", response_model=ScanResponse, status_code=201)
 async def collate_scans(
     body: CollateRequest,
     user: User = Depends(require_permission("scan")),
@@ -1014,7 +1014,7 @@ async def delete_scan(
 # --- Scan Profiles ---
 
 
-@router.get("/profiles", response_model=list[ScanProfileResponse])
+@router.get("/scan-profiles", response_model=list[ScanProfileResponse])
 async def list_profiles(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
@@ -1026,7 +1026,7 @@ async def list_profiles(
     return result.scalars().all()
 
 
-@router.post("/profiles", response_model=ScanProfileResponse, status_code=201)
+@router.post("/scan-profiles", response_model=ScanProfileResponse, status_code=201)
 async def create_profile(
     data: ScanProfileCreate,
     user: User = Depends(get_current_user),
@@ -1048,7 +1048,7 @@ async def create_profile(
     return profile
 
 
-@router.put("/profiles/{profile_id}", response_model=ScanProfileResponse)
+@router.put("/scan-profiles/{profile_id}", response_model=ScanProfileResponse)
 async def update_profile(
     profile_id: int,
     data: ScanProfileCreate,
@@ -1074,7 +1074,7 @@ async def update_profile(
     return profile
 
 
-@router.delete("/profiles/{profile_id}", status_code=204)
+@router.delete("/scan-profiles/{profile_id}", status_code=204)
 async def delete_profile(
     profile_id: int,
     user: User = Depends(get_current_user),
@@ -1093,7 +1093,7 @@ async def delete_profile(
 
 
 # WebSocket endpoint for scan progress
-@router.websocket("/ws/scan/{scan_id}")
+@router.websocket("/ws/scans/{scan_id}")
 async def scan_progress_ws(websocket: WebSocket, scan_id: str):
     """WebSocket for real-time scan progress updates.
 

@@ -275,12 +275,12 @@ async def share_target(
     """
     user = await _user_from_request_or_none(request, db)
     if user is None:
-        return RedirectResponse("/api/auth/login", status_code=303)
+        return RedirectResponse("/api/v1/auth/login", status_code=303)
     # Scope-limited API tokens need the "print" permission here, matching
     # /upload. Session users pass (token_permissions is None = full access).
     token_permissions = getattr(request.state, "token_permissions", None)
     if token_permissions is not None and "print" not in token_permissions:
-        return RedirectResponse("/api/auth/login", status_code=303)
+        return RedirectResponse("/api/v1/auth/login", status_code=303)
 
     form = await request.form()
     failed = 0

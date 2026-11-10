@@ -3,7 +3,7 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import FileResponse
@@ -11,6 +11,8 @@ from starlette.responses import FileResponse
 from app.api_docs import TAGS_METADATA, generate_unique_id
 from app.config import settings, validate_runtime_secrets
 from app.exceptions import register_exception_handlers
+from app.legacy_alias import LegacyAliasMiddleware
+from app.legacy_alias import route_exists as _route_exists
 from app.logging_config import setup_logging
 from app.middleware import RequestIDMiddleware
 from app.routers import (
@@ -482,25 +484,32 @@ if settings.cors_origins_list:
 # Request-ID middleware, added last so it runs outermost (Starlette runs
 # middleware in reverse-add order) — every request/response, including
 # session/CORS handling, gets a request ID.
+# Legacy /api/* -> /api/v1/* rewrite; added before RequestID so it sits inside it.
+app.add_middleware(LegacyAliasMiddleware, route_exists=lambda scope: _route_exists(app, scope))
 app.add_middleware(RequestIDMiddleware)
 
 # API routes
-app.include_router(system.router, prefix="/api/system", tags=["system"])
-app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-app.include_router(printer.router, prefix="/api/printer", tags=["printer"])
-app.include_router(jobs.router, prefix="/api/jobs", tags=["jobs"])
-app.include_router(jobs.share_target_router, prefix="/api", tags=["jobs"])
-app.include_router(scanner.router, prefix="/api/scanner", tags=["scanner"])
-app.include_router(copy.router, prefix="/api/copy", tags=["copy"])
-app.include_router(smb.router, prefix="/api/smb", tags=["smb"])
-app.include_router(email.router, prefix="/api/email", tags=["email"])
-app.include_router(cloud.router, prefix="/api/cloud", tags=["cloud"])
-app.include_router(settings_router.router, prefix="/api/settings", tags=["settings"])
-app.include_router(printers.router, prefix="/api/printers", tags=["printers"])
-app.include_router(scanners.router, prefix="/api/scanners", tags=["scanners"])
-app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
-app.include_router(webdav.router, prefix="/api/webdav", tags=["webdav"])
-app.include_router(webhooks.router, prefix="/api/webhooks", tags=["webhooks"])
+V1 = "/api/v1"
+app.include_router(system.router, prefix=f"{V1}/system", tags=["system"])
+app.include_router(system.ws_router, prefix=f"{V1}/ws", tags=["system"])
+app.include_router(auth.router, prefix=f"{V1}/auth", tags=["auth"])
+app.include_router(printer.router, prefix=f"{V1}/printers/default", tags=["printer"])
+app.include_router(jobs.router, prefix=f"{V1}/jobs", tags=["jobs"])
+app.include_router(jobs.share_target_router, prefix=f"{V1}/jobs", tags=["jobs"])
+# scanner.router carries absolute sub-paths (/scans, /scan-profiles,
+# /scanners/default/*, /ws/scans/{id}); the literal /scanners/default routes
+# are included before scanners.router's /{scanner_id} routes.
+app.include_router(scanner.router, prefix=V1, tags=["scanner"])
+app.include_router(copy.router, prefix=f"{V1}/copy", tags=["copy"])
+app.include_router(smb.router, prefix=f"{V1}/smb", tags=["smb"])
+app.include_router(email.router, prefix=f"{V1}/email", tags=["email"])
+app.include_router(cloud.router, prefix=f"{V1}/cloud", tags=["cloud"])
+app.include_router(settings_router.router, prefix=f"{V1}/settings", tags=["settings"])
+app.include_router(printers.router, prefix=f"{V1}/printers", tags=["printers"])
+app.include_router(scanners.router, prefix=f"{V1}/scanners", tags=["scanners"])
+app.include_router(admin.router, prefix=f"{V1}/admin", tags=["admin"])
+app.include_router(webdav.router, prefix=f"{V1}/webdav", tags=["webdav"])
+app.include_router(webhooks.router, prefix=f"{V1}/webhooks", tags=["webhooks"])
 
 # eSCL scanner protocol (no /api prefix — clients expect /eSCL/ at root)
 app.include_router(escl.router, tags=["escl"])
@@ -543,6 +552,9 @@ static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 if os.path.isdir(static_dir):
     @app.get("/{path:path}")
     async def spa_fallback(path: str):
+        if path == "api" or path.startswith("api/"):
+            # Never serve index.html for an unknown API path.
+            raise HTTPException(status_code=404, detail="Not found")
         resolved = resolve_static_file(static_dir, path)
         if resolved:
             return FileResponse(resolved)

@@ -173,6 +173,8 @@ async def oidc_login(request: Request, db: AsyncSession = Depends(get_db)):
     if not ensure_oidc_registered(issuer, client_id, client_secret, scopes):
         raise HTTPException(status_code=503, detail="OIDC not configured")
 
+    # Registered with the OIDC provider: keep the legacy URL (permanent alias in
+    # legacy_alias.py) so the registration never needs changing.
     redirect_uri = f"{settings.base_url}/api/auth/callback"
     return await oauth.papyrus.authorize_redirect(request, redirect_uri)
 

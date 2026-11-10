@@ -38,20 +38,20 @@ from app.main import app
 from app.models import APIToken, User
 
 WS_ROUTES = [
-    "/api/system/ws/jobs",
-    "/api/system/ws/scans",
-    "/api/system/ws/printers",
-    "/api/scanner/ws/scan/probe-scan-id",
+    "/api/v1/ws/jobs",
+    "/api/v1/ws/scans",
+    "/api/v1/ws/printers",
+    "/api/v1/ws/scans/probe-scan-id",
 ]
 
 # Each route's required permission -- mirrors the HTTP routes serving the
 # same data (jobs.py/printers.py use require_permission("print"),
 # scanner.py uses require_permission("scan")).
 ROUTE_PERMISSIONS = {
-    "/api/system/ws/jobs": "print",
-    "/api/system/ws/scans": "scan",
-    "/api/system/ws/printers": "print",
-    "/api/scanner/ws/scan/probe-scan-id": "scan",
+    "/api/v1/ws/jobs": "print",
+    "/api/v1/ws/scans": "scan",
+    "/api/v1/ws/printers": "print",
+    "/api/v1/ws/scans/probe-scan-id": "scan",
 }
 
 
@@ -298,7 +298,7 @@ def test_route_rejects_mismatched_origin_with_1008(ws_token):
     client = TestClient(app)
     with pytest.raises(WebSocketDisconnect) as exc_info:
         with client.websocket_connect(
-            "/api/system/ws/jobs",
+            "/api/v1/ws/jobs",
             headers={
                 "Authorization": f"Bearer {ws_token}",
                 "origin": "http://evil.example",
@@ -312,7 +312,7 @@ def test_route_rejects_mismatched_origin_with_1008(ws_token):
 def test_route_accepts_matching_origin(ws_token):
     client = TestClient(app)
     with client.websocket_connect(
-        "/api/system/ws/jobs",
+        "/api/v1/ws/jobs",
         headers={
             "Authorization": f"Bearer {ws_token}",
             "origin": "http://testserver",
@@ -325,7 +325,7 @@ def test_route_accepts_matching_origin(ws_token):
 # --- Integration tests: per-route permission gating ---------------------
 
 
-@pytest.mark.parametrize("path", ["/api/system/ws/jobs", "/api/system/ws/printers"])
+@pytest.mark.parametrize("path", ["/api/v1/ws/jobs", "/api/system/ws/printers"])
 def test_scan_only_token_rejected_on_print_gated_routes(path, scan_only_token):
     client = TestClient(app)
     with pytest.raises(WebSocketDisconnect) as exc_info:
@@ -338,7 +338,7 @@ def test_scan_only_token_rejected_on_print_gated_routes(path, scan_only_token):
 
 
 @pytest.mark.parametrize(
-    "path", ["/api/system/ws/scans", "/api/scanner/ws/scan/probe-scan-id"]
+    "path", ["/api/v1/ws/scans", "/api/v1/ws/scans/probe-scan-id"]
 )
 def test_scan_only_token_accepted_on_scan_gated_routes(path, scan_only_token):
     client = TestClient(app)
@@ -350,7 +350,7 @@ def test_scan_only_token_accepted_on_scan_gated_routes(path, scan_only_token):
 
 
 @pytest.mark.parametrize(
-    "path", ["/api/system/ws/scans", "/api/scanner/ws/scan/probe-scan-id"]
+    "path", ["/api/v1/ws/scans", "/api/v1/ws/scans/probe-scan-id"]
 )
 def test_print_only_token_rejected_on_scan_gated_routes(path, print_only_token):
     client = TestClient(app)
@@ -363,7 +363,7 @@ def test_print_only_token_rejected_on_scan_gated_routes(path, print_only_token):
     asyncio.run(engine.dispose())
 
 
-@pytest.mark.parametrize("path", ["/api/system/ws/jobs", "/api/system/ws/printers"])
+@pytest.mark.parametrize("path", ["/api/v1/ws/jobs", "/api/system/ws/printers"])
 def test_print_only_token_accepted_on_print_gated_routes(path, print_only_token):
     client = TestClient(app)
     with client.websocket_connect(
