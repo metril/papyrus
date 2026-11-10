@@ -106,3 +106,41 @@ async def test_check_alerts_commits_before_probes(monkeypatch):
     monkeypatch.setattr(alert_service, "_cups_reachable", reachable)
     await alert_service.check_alerts(db)
     assert seen["txn"] is False
+
+
+async def test_copy_holds_no_transaction_during_scan_or_print(
+    user_client, db, monkeypatch, tmp_path
+):
+    from app.routers import copy as copy_router
+    from app.services import copy_service as cs
+
+    f = tmp_path / "scan.pdf"
+    f.write_bytes(b"%PDF-1.4")
+    seen: dict[str, int] = {}
+
+    async def fake_scan(**kw):
+        seen["scan"] = await _idle_in_txn()
+        return "sid-1", str(f)
+
+    class Cups:
+        def __init__(self, **kw):
+            pass
+
+        async def create_held_job(self, **kw):
+            seen["print"] = await _idle_in_txn()
+            raise RuntimeError("stop here")
+
+    async def queue(_db):
+        return "q"
+
+    async def device(_db):
+        return "test:dev"
+
+    monkeypatch.setattr(cs.scan_service, "scan", fake_scan)
+    monkeypatch.setattr(copy_router, "CupsService", Cups)
+    monkeypatch.setattr(copy_router, "get_default_release_queue_name", queue)
+    monkeypatch.setattr(copy_router, "get_default_scanner_device", device)
+    await db.commit()  # end the fixture's own read transaction (seeded user)
+    resp = await user_client.post("/api/v1/copy", json={})
+    assert resp.status_code == 502, resp.text
+    assert seen == {"scan": 0, "print": 0}

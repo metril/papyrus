@@ -53,6 +53,9 @@ async def create_copy(
     # scan_service singleton's default, which is no longer kept in sync.
     scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
     cups = CupsService(printer_name=queue)
+    # End the read transaction: the scan below can run for minutes and must
+    # not hold an idle-in-transaction session (and its locks) meanwhile.
+    await db.commit()
 
     async def record_scan(info: dict) -> None:
         scan_job = ScanJob(
@@ -70,6 +73,7 @@ async def create_copy(
         db.add(scan_job)
         await db.commit()
         await db.refresh(scan_job)
+        await db.commit()  # refresh reopened a transaction; printing comes next
         await ws_manager.broadcast("scans", {
             "type": "scan_completed",
             "data": serialize_scan_job(scan_job),
