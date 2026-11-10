@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """Admin endpoints: audit log, usage stats, backup/restore, retention, user management."""
 
 import uuid as uuid_mod
@@ -5,23 +6,40 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
 from sqlalchemy import Date, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import AUTH_ERRORS, NOT_FOUND, ErrorResponse, file_response, std_responses
 from app.auth.dependencies import require_admin
 from app.database import get_db
 from app.models import AppConfig, AuditEntry, PrintJob, ScanJob, User
-from app.schemas import AuditEntryResponse, Page
+from app.schemas import (
+    AdminUserResponse,
+    AuditEntryResponse,
+    BackupResponse,
+    Page,
+    RestoreResult,
+    RetentionResult,
+    UsageStats,
+    UserRoleResult,
+    UserRoleUpdate,
+)
 from app.services import settings_cache
 
 router = APIRouter()
+
+_BAD = {400: {"model": ErrorResponse, "description": "The request is not acceptable in the current state."}}
 
 
 # --- Audit Log ---
 
 
-@router.get("/audit", response_model=Page[AuditEntryResponse])
+@router.get(
+    "/audit",
+    summary="List audit log entries",
+    response_model=Page[AuditEntryResponse],
+    responses=std_responses(AUTH_ERRORS),
+)
 async def get_audit_log(
     action: str | None = None,
     entity_type: str | None = None,
@@ -30,7 +48,11 @@ async def get_audit_log(
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> Page[AuditEntryResponse]:
-    """Get paginated audit log with optional filters."""
+    """Return the audit log, newest first (admin only).
+
+    Filter by exact `action` and/or `entity_type`; paginate with `limit`
+    (1-200) and `offset`.
+    """
     query = select(AuditEntry)
 
     if action:
@@ -163,12 +185,22 @@ def _ranked_per_user(
     return head
 
 
-@router.get("/stats")
+@router.get(
+    "/stats",
+    summary="Get usage statistics",
+    response_model=UsageStats,
+    responses=std_responses(AUTH_ERRORS),
+)
 async def get_usage_stats(
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """Get usage statistics for the dashboard."""
+    """Usage statistics for the dashboard (admin only).
+
+    Per-status job counts, a zero-filled 30-day UTC trend and per-user totals
+    (top 10 plus an `Other` row; unauthenticated network jobs count as
+    `Network`).
+    """
     # Counts by status — one GROUP BY query per table instead of one COUNT
     # query per status.
     print_status_rows = await db.execute(
@@ -241,12 +273,22 @@ async def get_usage_stats(
 # --- Backup / Restore ---
 
 
-@router.get("/backup")
+@router.get(
+    "/backup",
+    summary="Export settings backup",
+    response_model=BackupResponse,
+    responses=file_response(["application/json"], "JSON backup of every stored setting.")
+    | std_responses(AUTH_ERRORS),
+)
 async def export_settings(
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Export all app settings as JSON for backup."""
+    """Export all stored settings as a JSON backup (admin only).
+
+    Returns every AppConfig row. Encrypted values remain encrypted, so the
+    backup is only restorable on an instance with the same encryption key.
+    """
     result = await db.execute(select(AppConfig))
     configs = result.scalars().all()
 
@@ -260,15 +302,22 @@ async def export_settings(
     }
 
 
-@router.post("/restore")
+@router.post(
+    "/restore",
+    summary="Restore settings from backup",
+    response_model=RestoreResult,
+    responses=std_responses(AUTH_ERRORS, _BAD),
+)
 async def restore_settings(
     body: dict,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Restore app settings from a backup JSON.
+    """Restore settings from a backup produced by the backup endpoint (admin only).
 
-    Body: {"settings": {"key": "value", ...}}
+    Body: `{"settings": {"key": "value", ...}}`. Existing keys are overwritten,
+    unknown keys are created and non-string entries are skipped. Invalidates
+    the whole settings cache. 400 when `settings` is missing or not an object.
     """
     incoming = body.get("settings")
     if not isinstance(incoming, dict):
@@ -297,12 +346,21 @@ async def restore_settings(
 # --- Retention ---
 
 
-@router.post("/retention")
+@router.post(
+    "/retention",
+    summary="Run retention cleanup now",
+    response_model=RetentionResult,
+    responses=std_responses(AUTH_ERRORS),
+)
 async def trigger_retention(
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Manually trigger retention cleanup."""
+    """Run the scan, print and audit-log retention policies immediately (admin only).
+
+    Uses the configured retention days and permanently deletes expired rows
+    and their files.
+    """
     from app.routers.settings import get_setting, safe_int_setting
     from app.services.retention_service import run_retention
 
@@ -319,16 +377,17 @@ async def trigger_retention(
 # --- User Management ---
 
 
-class UserRoleUpdate(BaseModel):
-    role: str = Field(pattern=r"^(user|admin)$")
-
-
-@router.get("/users")
+@router.get(
+    "/users",
+    summary="List users",
+    response_model=list[AdminUserResponse],
+    responses=std_responses(AUTH_ERRORS),
+)
 async def list_users(
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    """List all users."""
+    """List all users, newest first (admin only)."""
     result = await db.execute(select(User).order_by(User.created_at.desc()))
     return [
         {
@@ -343,14 +402,19 @@ async def list_users(
     ]
 
 
-@router.patch("/users/{user_id}")
+@router.patch(
+    "/users/{user_id}",
+    summary="Change a user's role",
+    response_model=UserRoleResult,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, _BAD),
+)
 async def update_user_role(
     user_id: uuid_mod.UUID,
     body: UserRoleUpdate,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Update a user's role."""
+    """Set a user's role to `user` or `admin` (admin only). 400 when targeting yourself."""
     target = await db.get(User, user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
@@ -361,13 +425,18 @@ async def update_user_role(
     return {"id": str(target.id), "role": target.role}
 
 
-@router.delete("/users/{user_id}", status_code=204)
+@router.delete(
+    "/users/{user_id}",
+    summary="Delete a user",
+    status_code=204,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, _BAD),
+)
 async def delete_user(
     user_id: uuid_mod.UUID,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Delete a user."""
+    """Delete a user and cascade their cloud/SMB connections (admin only). 400 when targeting yourself."""
     target = await db.get(User, user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")

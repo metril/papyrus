@@ -5,6 +5,7 @@ import time
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import SERVER, std_responses
 from app.auth.ws import authenticate_websocket, has_ws_permission
 from app.database import async_session, get_db
 from app.schemas import HealthResponse
@@ -129,9 +130,19 @@ async def _probe_subsystems() -> tuple[bool, bool]:
         return cups_ok, scanner_ok
 
 
-@router.get("/health", response_model=HealthResponse)
+@router.get(
+    "/health",
+    summary="Health check",
+    response_model=HealthResponse,
+    responses=std_responses(SERVER),
+)
 async def health_check(db: AsyncSession = Depends(get_db)):
-    """Detailed health check with subsystem status."""
+    """Liveness/readiness probe with subsystem status.
+
+    Public: no authentication. Reports CUPS, scanner, database and disk state
+    plus uptime. `status` is `degraded` when CUPS or the database is down.
+    The CUPS and scanner probes are cached for about 15 seconds.
+    """
     db_ok = False
     disk_free_mb = 0
 

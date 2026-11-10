@@ -1,12 +1,14 @@
+# ruff: noqa: E501
 import os
 import tempfile
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
 
+from app.api_docs import AUTH_ERRORS, NOT_FOUND, SERVER, file_response, std_responses
 from app.auth.dependencies import require_admin, require_permission
 from app.database import get_db
 from app.models import SMBShare, User
@@ -17,23 +19,34 @@ from app.services.smb_service import smb_service
 router = APIRouter()
 
 
-@router.get("/shares", response_model=list[SMBShareResponse])
+@router.get(
+    "/shares",
+    summary="List SMB shares",
+    response_model=list[SMBShareResponse],
+    responses=std_responses(AUTH_ERRORS),
+)
 async def list_shares(
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """List configured SMB shares."""
+    """List configured SMB shares, by name (permission `files`). Passwords are never returned."""
     result = await db.execute(select(SMBShare).order_by(SMBShare.name))
     return result.scalars().all()
 
 
-@router.post("/shares", response_model=SMBShareResponse, status_code=201)
+@router.post(
+    "/shares",
+    summary="Add an SMB share",
+    response_model=SMBShareResponse,
+    status_code=201,
+    responses=std_responses(AUTH_ERRORS),
+)
 async def add_share(
     data: SMBShareCreate,
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Add a new SMB share configuration."""
+    """Add an SMB share (admin only). The password is encrypted at rest."""
     password_encrypted = None
     if data.password:
         password_encrypted = encrypt_value(data.password)
@@ -53,13 +66,18 @@ async def add_share(
     return share
 
 
-@router.delete("/shares/{share_id}", status_code=204)
+@router.delete(
+    "/shares/{share_id}",
+    summary="Remove an SMB share",
+    status_code=204,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND),
+)
 async def remove_share(
     share_id: int,
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Remove an SMB share configuration."""
+    """Remove an SMB share configuration (admin only)."""
     result = await db.execute(select(SMBShare).where(SMBShare.id == share_id))
     share = result.scalar_one_or_none()
     if share is None:
@@ -68,14 +86,19 @@ async def remove_share(
     await db.commit()
 
 
-@router.get("/browse/{share_id}", response_model=list[SMBFileEntry])
+@router.get(
+    "/browse/{share_id}",
+    summary="Browse an SMB share",
+    response_model=list[SMBFileEntry],
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, SERVER),
+)
 async def browse_share(
     share_id: int,
     path: str = Query(default="/"),
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Browse files on an SMB share."""
+    """List files and folders at `path` on an SMB share (permission `files`)."""
     result = await db.execute(select(SMBShare).where(SMBShare.id == share_id))
     share = result.scalar_one_or_none()
     if share is None:
@@ -91,14 +114,20 @@ async def browse_share(
     )
 
 
-@router.get("/download/{share_id}")
+@router.get(
+    "/download/{share_id}",
+    summary="Download a file from an SMB share",
+    response_class=Response,
+    responses=file_response(["application/octet-stream"], "The file contents as an attachment.")
+    | std_responses(AUTH_ERRORS, NOT_FOUND, SERVER),
+)
 async def download_from_share(
     share_id: int,
     path: str = Query(...),
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Download a file from an SMB share (for printing or local use)."""
+    """Download the file at `path` from an SMB share (permission `files`). Staged in a temp file that is removed after the response is sent."""
     result = await db.execute(select(SMBShare).where(SMBShare.id == share_id))
     share = result.scalar_one_or_none()
     if share is None:
