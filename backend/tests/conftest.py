@@ -10,7 +10,9 @@ from unittest.mock import MagicMock
 try:
     import cups  # noqa: F401
 except ImportError:
-    sys.modules["cups"] = MagicMock()
+    _cups_stub = MagicMock()
+    _cups_stub.Connection = MagicMock()  # explicit, so monkeypatch undo never deletes it
+    sys.modules["cups"] = _cups_stub
 
 # --- Test environment wiring (MUST run before any `app.*` import) ----------
 #
@@ -24,9 +26,15 @@ import os
 
 from cryptography.fernet import Fernet
 
-os.environ["PAPYRUS_DB_URL"] = os.environ.get(
+# xdist: each worker gets its own database (`<name>_gw0`, ...), created on
+# demand in `migrated_db`, so parallel workers never share schema or rows.
+# (Only os.environ writes here: ruff's E402 allows those before imports.)
+os.environ.setdefault(
     "PAPYRUS_TEST_DB_URL",
     "postgresql+asyncpg://papyrus:papyrus@localhost:5433/papyrus_test",
+)
+os.environ["PAPYRUS_DB_URL"] = os.environ["PAPYRUS_TEST_DB_URL"] + (
+    f"_{os.environ['PYTEST_XDIST_WORKER']}" if os.environ.get("PYTEST_XDIST_WORKER") else ""
 )
 os.environ.setdefault("PAPYRUS_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
@@ -49,6 +57,9 @@ from app.routers import auth as auth_router
 from app.routers import email as email_router
 from app.routers import jobs as jobs_router
 from app.services import settings_cache
+
+_BASE_TEST_DB_URL = os.environ["PAPYRUS_TEST_DB_URL"]
+_XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER", "")
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 ALEMBIC_DIR = BACKEND_DIR / "alembic"
@@ -76,7 +87,29 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker("integration")
 
 
+async def _ensure_worker_db() -> None:
+    """Create this xdist worker's database (via the base DB) if it's missing."""
+    if not _XDIST_WORKER:
+        return
+    import asyncpg
+    from sqlalchemy.engine import make_url
+
+    base = make_url(_BASE_TEST_DB_URL)
+    name = f"{base.database}_{_XDIST_WORKER}"
+    conn = await asyncpg.connect(
+        host=base.host, port=base.port, user=base.username,
+        password=base.password, database=base.database,
+    )
+    try:
+        exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", name)
+        if not exists:
+            await conn.execute(f'CREATE DATABASE "{name}"')
+    finally:
+        await conn.close()
+
+
 async def _probe_db() -> None:
+    await _ensure_worker_db()
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
 

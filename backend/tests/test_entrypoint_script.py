@@ -43,9 +43,15 @@ CHILD=$!
 wait "$CHILD"
 """
 
+# Crashes only once uvicorn is up (bounded ~10s), so the "daemon dies while
+# the app runs" scenario is deterministic even on a loaded (xdist) machine.
 _CRASH_SHIM = """#!/bin/bash
 touch "{marker_dir}/{name}.started"
-/bin/sleep 0.3
+for _ in $(seq 200); do
+  [ -e "{marker_dir}/uvicorn.started" ] && break
+  /bin/sleep 0.05
+done
+/bin/sleep 0.1
 exit 1
 """
 
