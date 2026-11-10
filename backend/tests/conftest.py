@@ -182,6 +182,14 @@ async def db(migrated_db):
     finally:
         await session.close()
         async with engine.begin() as conn:
+            # A fire-and-forget task from the test (webhook, post-scan action…)
+            # can still hold a session idle-in-transaction; TRUNCATE would wait
+            # on its lock forever. This DB is private to this worker and run,
+            # so end every other session on it first.
+            await conn.execute(text(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
+                " WHERE datname = current_database() AND pid <> pg_backend_pid()"
+            ))
             await conn.execute(text(_truncate_sql()))
         settings_cache.invalidate_all()
         await engine.dispose()
