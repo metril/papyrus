@@ -147,3 +147,24 @@ async def test_ingest_exempt_only_from_real_loopback_peer(db):
         h = {"X-Forwarded-For": "127.0.0.1"}
         await c.post(path, headers=h)
         assert (await c.post(path, headers=h)).status_code == 429
+
+
+async def test_proxy_on_private_peer_buckets_per_forwarded_client(db):
+    # Traefik on a docker bridge: private peer, real client in rightmost XFF.
+    _enable(ip_rpm=1)
+    async with _client("172.18.0.2") as c:
+        def me(xff):
+            return c.get("/api/v1/auth/me", headers={"X-Forwarded-For": xff})
+
+        assert (await me("198.51.100.1")).status_code == 401
+        assert (await me("198.51.100.2")).status_code == 401
+        r = await me("spoof, 198.51.100.1")
+        assert r.status_code == 429
+
+
+async def test_public_peer_cannot_pick_its_bucket_via_xff(db):
+    _enable(ip_rpm=1)
+    async with _client("8.8.4.4") as c:
+        await c.get("/api/v1/auth/me", headers={"X-Forwarded-For": "198.51.100.3"})
+        r = await c.get("/api/v1/auth/me", headers={"X-Forwarded-For": "198.51.100.4"})
+        assert r.status_code == 429

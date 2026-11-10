@@ -12,6 +12,7 @@ import time
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.auth.tokens import hash_token
+from app.routers.escl import _is_lan_address
 from app.services import settings_cache
 from app.services.rate_limit import RateLimiter, retry_after_seconds
 
@@ -34,6 +35,25 @@ def _exempt(path: str) -> bool:
 
 def _is_ingest(path: str) -> bool:
     return path in ("/api/v1/jobs/internal/ingest", "/api/jobs/internal/ingest")
+
+
+def _bucket_ip(scope: Scope, peer: str) -> str:
+    """Client IP for the per-IP bucket.
+
+    uvicorn only rewrites the peer from X-Forwarded-For when the proxy is on
+    127.0.0.1. A reverse proxy on a docker bridge (a private peer) would
+    otherwise put every user behind it into one shared bucket, so, exactly as
+    the eSCL LAN check does, a private/loopback peer's *rightmost* XFF entry
+    (the one that trusted hop appended) is used instead. A public peer is
+    never trusted to supply XFF.
+    """
+    if not _is_lan_address(peer):
+        return peer
+    for name, value in scope.get("headers") or []:
+        if name == b"x-forwarded-for":
+            rightmost = value.decode("latin-1").rsplit(",", 1)[-1].strip()
+            return rightmost or peer
+    return peer
 
 
 async def _int_setting(key: str, default: int) -> int:
@@ -94,10 +114,9 @@ class RateLimitMiddleware:
             return
 
         client = scope.get("client")
-        # Same source as the login throttle: request.client.host (uvicorn has
-        # already applied trusted-proxy X-Forwarded-For handling).
-        ip = client[0] if client else "unknown"
-        if _is_ingest(scope["path"]) and ip in _LOOPBACK:
+        peer = client[0] if client else "unknown"
+        # The ingest exemption trusts only the real TCP peer, never XFF.
+        if _is_ingest(scope["path"]) and peer in _LOOPBACK:
             await self.app(scope, receive, send)
             return
 
@@ -105,6 +124,7 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
+        ip = _bucket_ip(scope, peer)
         wait = limiter.check(f"ip:{ip}", await _int_setting("rate_limit_ip_rpm", DEFAULT_IP_RPM))
         if not wait:
             auth = ""
