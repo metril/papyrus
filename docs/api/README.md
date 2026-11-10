@@ -66,7 +66,16 @@ Query with `limit` (1-200, default 50) and `offset` (>= 0). `total` ignores limi
 
 ## Rate limits
 
-Reserved. Rate-limited responses will be `429` with a `Retry-After` header (seconds) and the usual
-`ErrorResponse` body; the OpenAPI `RATE_LIMITED` response documents this shape. Enforcement
-arrives in a later phase. Today only login attempts and release-PIN guesses are throttled
-(in-memory lockout).
+Every `/api` request counts against a per-client-IP bucket (default 300 requests/minute). A request
+with a valid API token also counts against a per-token bucket (default 600/minute); invalid bearer
+values only count against the IP. Exempt: `/health`, `/eSCL`, the web app's static files,
+WebSockets and the CUPS ingest call from the local host. Over the limit the API answers `429` with a
+`Retry-After` header (seconds) and an `ErrorResponse` body (`code: "rate_limited"`); see the
+`RATE_LIMITED` response in the OpenAPI schema.
+
+Admins configure this under Settings > API (`rate_limit_enabled`, `rate_limit_token_rpm`,
+`rate_limit_ip_rpm`); there are no environment variables. Login attempts and release-PIN guesses
+additionally use an in-memory lockout.
+
+`/docs`, `/redoc` and `/openapi.json` require a signed-in session or Bearer token unless the admin
+enables `public_api_docs` (Settings > API).

@@ -3,18 +3,23 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse
 
 from app.api_docs import TAGS_METADATA, generate_unique_id, install_openapi
+from app.auth.dependencies import get_current_user
 from app.config import settings, validate_runtime_secrets
+from app.database import get_db
 from app.exceptions import register_exception_handlers
 from app.legacy_alias import LegacyAliasMiddleware
 from app.legacy_alias import route_exists as _route_exists
 from app.logging_config import setup_logging
 from app.middleware import RequestIDMiddleware
+from app.rate_limit_middleware import RateLimitMiddleware
 from app.routers import (
     admin,
     auth,
@@ -448,8 +453,39 @@ app = FastAPI(
     contact={"name": "Papyrus", "url": "https://github.com/metril/papyrus"},
     servers=[{"url": "/", "description": "This server"}],
     generate_unique_id_function=generate_unique_id,
+    # Served by the gated routes below instead of FastAPI's public defaults.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
 install_openapi(app)
+
+
+async def _docs_gate(request: Request, db: AsyncSession = Depends(get_db)) -> None:
+    """/docs, /redoc and /openapi.json need a logged-in user (session cookie or
+    Bearer) unless the `public_api_docs` setting is on."""
+    from app.routers.settings import get_setting
+
+    value = await get_setting(db, "public_api_docs")
+    if value is not None and value.strip().lower() in ("true", "1", "yes"):
+        return
+    await get_current_user(request, db)
+
+
+@app.get("/openapi.json", include_in_schema=False, dependencies=[Depends(_docs_gate)])
+async def _openapi_json() -> JSONResponse:
+    return JSONResponse(app.openapi())
+
+
+@app.get("/docs", include_in_schema=False, dependencies=[Depends(_docs_gate)])
+async def _swagger_ui() -> HTMLResponse:
+    return get_swagger_ui_html(openapi_url="/openapi.json", title=f"{app.title} - API docs")
+
+
+@app.get("/redoc", include_in_schema=False, dependencies=[Depends(_docs_gate)])
+async def _redoc() -> HTMLResponse:
+    return get_redoc_html(openapi_url="/openapi.json", title=f"{app.title} - API docs")
+
 
 # Global exception handlers: domain PapyrusError -> its status_code + curated
 # detail, cups.IPPError -> 503, and a catch-all that logs the traceback and
@@ -485,6 +521,8 @@ if settings.cors_origins_list:
 # Request-ID middleware, added last so it runs outermost (Starlette runs
 # middleware in reverse-add order) — every request/response, including
 # session/CORS handling, gets a request ID.
+# Rate limiting sits inside the alias rewrite and RequestID (sees v1 paths + request id).
+app.add_middleware(RateLimitMiddleware)
 # Legacy /api/* -> /api/v1/* rewrite; added before RequestID so it sits inside it.
 app.add_middleware(LegacyAliasMiddleware, route_exists=lambda scope: _route_exists(app, scope))
 app.add_middleware(RequestIDMiddleware)

@@ -212,6 +212,20 @@ def _reset_process_local_throttles():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _disable_rate_limit():
+    """Rate limiting is off by default in tests (cache override, not env);
+    rate-limit tests re-enable it explicitly."""
+    from app import rate_limit_middleware as rlm
+
+    rlm.limiter.clear()
+    rlm._valid_tokens.clear()
+    settings_cache.put("rate_limit_enabled", "false")
+    yield
+    rlm.limiter.clear()
+    rlm._valid_tokens.clear()
+
+
 @pytest_asyncio.fixture(loop_scope="function")
 async def client(db):
     """httpx AsyncClient bound to the ASGI app. Lifespan is intentionally NOT
