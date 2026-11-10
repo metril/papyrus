@@ -296,6 +296,7 @@ async def _dispatch(
         **cond["data"],
     }
     await dispatch_webhook(db, cond["event"], data)
+    await db.commit()  # release the subscriber query's transaction before email I/O
 
     # Recovery notifications are webhook-only to avoid a second round of mail.
     if resolved or not alert_email:
@@ -336,10 +337,14 @@ async def check_alerts(db: AsyncSession) -> None:
     # identically for every printer, each independently folded into the same
     # offline fallback -- without this check that fires a false "offline"
     # onset per printer instead of carrying prior state forward untouched.
+    prev_state = await _load_alert_state(db)
+    # Every read is done: end the transaction so none stays open (idle in
+    # transaction) across the slow CUPS/IPP probes, webhooks and email below.
+    await db.commit()
+
     if printers and not await _cups_reachable():
         return
 
-    prev_state = await _load_alert_state(db)
     # Seeded with every live printer's *persisted* state up front -- not
     # built up empty as the loop goes. F128's per-printer save writes
     # `new_state` in full each time; if it started empty, an interrupted

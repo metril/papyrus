@@ -6,13 +6,15 @@ the token's hash. Garbage bearers only hit the IP bucket, so rotating fake
 tokens evades nothing. Limits come from UI-managed settings via
 ``settings_cache`` (30s TTL) -- no env vars.
 """
+import asyncio
+import ipaddress
 import json
 import time
+from functools import lru_cache
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.auth.tokens import hash_token
-from app.routers.escl import _is_lan_address
 from app.services import settings_cache
 from app.services.rate_limit import RateLimiter, retry_after_seconds
 
@@ -21,6 +23,7 @@ DEFAULT_IP_RPM = 300
 _VALID_TOKEN_TTL = 30.0
 _VALID_TOKEN_MAX = 5000
 _LOOPBACK = ("127.0.0.1", "::1")
+DEFAULT_TRUSTED_PROXIES = "127.0.0.1/32,::1/128,172.16.0.0/12"
 
 limiter = RateLimiter()
 # token hash -> expiry (monotonic) for hashes recently confirmed valid.
@@ -37,17 +40,39 @@ def _is_ingest(path: str) -> bool:
     return path in ("/api/v1/jobs/internal/ingest", "/api/jobs/internal/ingest")
 
 
-def _bucket_ip(scope: Scope, peer: str) -> str:
+@lru_cache(maxsize=16)
+def parse_trusted_proxies(value: str) -> tuple:
+    """Parse a comma-separated IP/CIDR list; invalid entries are skipped."""
+    nets = []
+    for part in value.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            continue
+    return tuple(nets)
+
+
+def _is_trusted_proxy(peer: str, trusted: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    return any(addr in net for net in parse_trusted_proxies(trusted) if net.version == addr.version)
+
+
+def _bucket_ip(scope: Scope, peer: str, trusted: str = DEFAULT_TRUSTED_PROXIES) -> str:
     """Client IP for the per-IP bucket.
 
-    uvicorn only rewrites the peer from X-Forwarded-For when the proxy is on
-    127.0.0.1. A reverse proxy on a docker bridge (a private peer) would
-    otherwise put every user behind it into one shared bucket, so, exactly as
-    the eSCL LAN check does, a private/loopback peer's *rightmost* XFF entry
-    (the one that trusted hop appended) is used instead. A public peer is
-    never trusted to supply XFF.
+    X-Forwarded-For is honoured only when the TCP peer is one of the
+    configured ``trusted_proxies`` (so a LAN client cannot rotate a forged
+    header to dodge its bucket); then the *rightmost* entry, the one the
+    trusted hop appended, is the client. Any other peer is bucketed by its
+    own address.
     """
-    if not _is_lan_address(peer):
+    if not _is_trusted_proxy(peer, trusted):
         return peer
     for name, value in scope.get("headers") or []:
         if name == b"x-forwarded-for":
@@ -56,14 +81,39 @@ def _bucket_ip(scope: Scope, peer: str) -> str:
     return peer
 
 
-async def _int_setting(key: str, default: int) -> int:
+async def _shielded(coro):
+    """Run ``coro`` to completion even if the request is cancelled.
+
+    A client disconnect cancels the request task; letting that interrupt a
+    session mid-query or mid-close can leak an un-rolled-back connection.
+    The inner task finishes (and closes its session) on its own.
+    """
+    task = asyncio.ensure_future(coro)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # Retrieve the inner result/exception so it isn't reported as unretrieved.
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        raise
+
+
+async def _load_setting(key: str):
+    from app.database import async_session
+    from app.routers.settings import get_setting
+
+    async with async_session() as db:
+        return await get_setting(db, key)
+
+
+async def _raw_setting(key: str):
     hit, val = settings_cache.get(key)
     if not hit:
-        from app.database import async_session
-        from app.routers.settings import get_setting
+        val = await _shielded(_load_setting(key))
+    return val
 
-        async with async_session() as db:
-            val = await get_setting(db, key)
+
+async def _int_setting(key: str, default: int) -> int:
+    val = await _raw_setting(key)
     try:
         n = int(val) if val is not None and str(val).strip() != "" else default
     except (TypeError, ValueError):
@@ -72,16 +122,23 @@ async def _int_setting(key: str, default: int) -> int:
 
 
 async def _bool_setting(key: str, default: bool) -> bool:
-    hit, val = settings_cache.get(key)
-    if not hit:
-        from app.database import async_session
-        from app.routers.settings import get_setting
-
-        async with async_session() as db:
-            val = await get_setting(db, key)
+    val = await _raw_setting(key)
     if val is None:
         return default
     return str(val).strip().lower() in ("true", "1", "yes")
+
+
+async def _trusted_proxies() -> str:
+    val = await _raw_setting("trusted_proxies")
+    return DEFAULT_TRUSTED_PROXIES if val is None else str(val)
+
+
+async def _check_token(plaintext: str) -> bool:
+    from app.auth.tokens import validate_token
+    from app.database import async_session
+
+    async with async_session() as db:
+        return await validate_token(db, plaintext) is not None
 
 
 async def _is_valid_token(token_hash: str, plaintext: str) -> bool:
@@ -89,12 +146,10 @@ async def _is_valid_token(token_hash: str, plaintext: str) -> bool:
     exp = _valid_tokens.get(token_hash)
     if exp is not None and exp > now:
         return True
-    from app.auth.tokens import validate_token
-    from app.database import async_session
-
     try:
-        async with async_session() as db:
-            ok = await validate_token(db, plaintext) is not None
+        ok = await _shielded(_check_token(plaintext))
+    except asyncio.CancelledError:
+        raise
     except Exception:
         return False
     if ok:
@@ -124,7 +179,7 @@ class RateLimitMiddleware:
             await self.app(scope, receive, send)
             return
 
-        ip = _bucket_ip(scope, peer)
+        ip = _bucket_ip(scope, peer, await _trusted_proxies())
         wait = limiter.check(f"ip:{ip}", await _int_setting("rate_limit_ip_rpm", DEFAULT_IP_RPM))
         if not wait:
             auth = ""

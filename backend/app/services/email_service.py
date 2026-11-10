@@ -160,6 +160,7 @@ class EmailService:
         the poller or suppresses the (already-dispatched) webhook.
         """
         config = self._get_config(await self._load_db_config(db))
+        await db.commit()  # don't hold a transaction open across the SMTP exchange
 
         if not config["host"]:
             raise EmailError("SMTP not configured")

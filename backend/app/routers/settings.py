@@ -78,6 +78,8 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "rate_limit_token_rpm": (int, False),
     "rate_limit_ip_rpm": (int, False),
     "public_api_docs": (bool, False),
+    # Comma-separated IPs/CIDRs whose X-Forwarded-For the rate limiter trusts.
+    "trusted_proxies": (str, False),
     # OIDC (configured via Settings UI)
     "oidc_enabled": (bool, False),
     "oidc_issuer": (str, False),
@@ -119,6 +121,7 @@ DEFAULTS: dict[str, str] = {
     "rate_limit_token_rpm": "600",
     "rate_limit_ip_rpm": "300",
     "public_api_docs": "false",
+    "trusted_proxies": "127.0.0.1/32,::1/128,172.16.0.0/12",
     "local_auth_enabled": "true",
     "oidc_enabled": "false",
     "oidc_scopes": "openid email profile",
@@ -164,6 +167,20 @@ def _coerce_for_storage(key: str, value: Any, type_: type) -> str:
         if key in _POSITIVE_INT_KEYS and number < 1:
             raise HTTPException(status_code=400, detail=f"Setting {key} must be at least 1")
         return str(number)
+    if key == "trusted_proxies":
+        import ipaddress
+
+        parts = [p.strip() for p in str(value).split(",") if p.strip()]
+        for part in parts:
+            try:
+                ipaddress.ip_network(part, strict=False)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Setting {key} must be comma-separated IP addresses or CIDR ranges "
+                    f"(invalid: {part[:64]})",
+                )
+        return ",".join(parts)
     return str(value)
 
 

@@ -213,7 +213,8 @@ class LegacyAliasMiddleware:
                 if sunset:
                     headers.append((b"deprecation", b"true"))
                     headers.append((b"sunset", sunset.encode()))
-                headers.append((b"link", f'<{new}>; rel="successor-version"'.encode()))
+                safe_new = quote(new, safe="/")  # no CR/LF/control chars in a header
+                headers.append((b"link", f'<{safe_new}>; rel="successor-version"'.encode()))
             await send(message)
 
         await self.app(scope, receive, send_wrapper)
