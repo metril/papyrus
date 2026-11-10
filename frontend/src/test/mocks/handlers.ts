@@ -32,7 +32,7 @@ export function makeDashboardStats(overrides: Partial<DashboardStats> = {}): Das
 
 export const handlers: RequestHandler[] = [
   http.get('/api/jobs', () => {
-    return HttpResponse.json({ jobs: [], total: 0 });
+    return HttpResponse.json({ items: [], total: 0, limit: 50, offset: 0 });
   }),
   http.get('/api/admin/stats', () => {
     return HttpResponse.json(makeDashboardStats());

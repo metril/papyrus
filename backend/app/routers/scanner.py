@@ -26,8 +26,8 @@ from app.schemas import (
     BulkDeleteScansRequest,
     CollateRequest,
     EmailSendRequest,
+    Page,
     ScanBatchRequest,
-    ScanList,
     ScanProfileCreate,
     ScanProfileResponse,
     ScanRequest,
@@ -311,7 +311,7 @@ async def initiate_batch_scan(
     return job
 
 
-@router.get("/scans", response_model=ScanList)
+@router.get("/scans", response_model=Page[ScanResponse])
 async def list_scans(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -326,7 +326,7 @@ async def list_scans(
         select(ScanJob).order_by(ScanJob.created_at.desc()).limit(limit).offset(offset)
     )
     scans = result.scalars().all()
-    return ScanList(scans=scans, total=total)
+    return Page[ScanResponse](items=scans, total=total, limit=limit, offset=offset)
 
 
 @router.get("/scans/{scan_id}/download")

@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import FileResponse
 
-from app.api_docs import TAGS_METADATA, generate_unique_id
+from app.api_docs import TAGS_METADATA, generate_unique_id, install_openapi
 from app.config import settings, validate_runtime_secrets
 from app.exceptions import register_exception_handlers
 from app.legacy_alias import LegacyAliasMiddleware
@@ -449,6 +449,7 @@ app = FastAPI(
     servers=[{"url": "/", "description": "This server"}],
     generate_unique_id_function=generate_unique_id,
 )
+install_openapi(app)
 
 # Global exception handlers: domain PapyrusError -> its status_code + curated
 # detail, cups.IPPError -> 503, and a catch-all that logs the traceback and

@@ -16,6 +16,6 @@ describe('useJobs', () => {
     const { result } = renderHook(() => useJobs(), { wrapper: makeWrapper() });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toEqual({ jobs: [], total: 0 });
+    expect(result.current.data).toEqual({ items: [], total: 0, limit: 50, offset: 0 });
   });
 });

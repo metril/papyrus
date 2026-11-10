@@ -60,7 +60,7 @@ const heldJob: PrintJob = {
 describe('JobQueue', () => {
   it('renders job rows from the jobs query', async () => {
     server.use(
-      http.get('/api/jobs', () => HttpResponse.json({ jobs: [heldJob], total: 1 })),
+      http.get('/api/jobs', () => HttpResponse.json({ items: [heldJob], total: 1, limit: 50, offset: 0 })),
       http.get('/api/printers', () => HttpResponse.json([])),
     );
 
@@ -82,7 +82,7 @@ describe('JobQueue', () => {
     server.use(
       http.get('/api/jobs', () => {
         jobsGetCount += 1;
-        return HttpResponse.json({ jobs: [heldJob], total: 1 });
+        return HttpResponse.json({ items: [heldJob], total: 1, limit: 50, offset: 0 });
       }),
       http.get('/api/printers', () => HttpResponse.json([])),
       http.post('/api/jobs/1/release', () => {
@@ -120,7 +120,7 @@ describe('PIN release dialog (F148)', () => {
 
   beforeEach(() => {
     server.use(
-      http.get('/api/jobs', () => HttpResponse.json({ jobs: [pinJob], total: 1 })),
+      http.get('/api/jobs', () => HttpResponse.json({ items: [pinJob], total: 1, limit: 50, offset: 0 })),
       http.get('/api/printers', () => HttpResponse.json([])),
     );
   });

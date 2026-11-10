@@ -1,4 +1,5 @@
 import api from './client';
+import type { Page } from '../types';
 
 export async function getBackup(): Promise<Record<string, unknown>> {
   const { data } = await api.get('/admin/backup');
@@ -62,7 +63,7 @@ export interface AuditLogParams {
 
 export async function getAuditLog(
   params: AuditLogParams,
-): Promise<{ entries: AuditEntry[]; total: number }> {
+): Promise<Page<AuditEntry>> {
   const { limit, offset, action } = params;
   const queryParams: Record<string, string | number> = { limit, offset };
   if (action) queryParams.action = action;

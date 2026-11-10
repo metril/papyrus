@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.dependencies import require_admin
 from app.database import get_db
 from app.models import AppConfig, AuditEntry, PrintJob, ScanJob, User
+from app.schemas import AuditEntryResponse, Page
 from app.services import settings_cache
 
 router = APIRouter()
@@ -20,7 +21,7 @@ router = APIRouter()
 # --- Audit Log ---
 
 
-@router.get("/audit")
+@router.get("/audit", response_model=Page[AuditEntryResponse])
 async def get_audit_log(
     action: str | None = None,
     entity_type: str | None = None,
@@ -28,7 +29,7 @@ async def get_audit_log(
     offset: int = Query(default=0, ge=0),
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
-) -> dict[str, Any]:
+) -> Page[AuditEntryResponse]:
     """Get paginated audit log with optional filters."""
     query = select(AuditEntry)
 
@@ -44,23 +45,25 @@ async def get_audit_log(
     result = await db.execute(query)
     entries = result.scalars().all()
 
-    return {
-        "entries": [
-            {
-                "id": e.id,
-                "action": e.action,
-                "entity_type": e.entity_type,
-                "entity_id": e.entity_id,
-                "user_id": str(e.user_id) if e.user_id else None,
-                "source": e.source,
-                "ip_address": e.ip_address,
-                "detail": e.detail,
-                "created_at": e.created_at.isoformat() if e.created_at else None,
-            }
+    return Page[AuditEntryResponse](
+        items=[
+            AuditEntryResponse(
+                id=e.id,
+                action=e.action,
+                entity_type=e.entity_type,
+                entity_id=e.entity_id,
+                user_id=str(e.user_id) if e.user_id else None,
+                source=e.source,
+                ip_address=e.ip_address,
+                detail=e.detail,
+                created_at=e.created_at.isoformat() if e.created_at else None,
+            )
             for e in entries
         ],
-        "total": total,
-    }
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 # --- Usage Stats ---

@@ -31,7 +31,7 @@ from app.models import Printer, PrintJob, User
 from app.schemas import (
     BulkDeleteJobsRequest,
     BulkDeleteResponse,
-    PrintJobList,
+    Page,
     PrintJobResponse,
     serialize_print_job,
 )
@@ -509,7 +509,7 @@ async def ingest_network_job(
     return job
 
 
-@router.get("", response_model=PrintJobList)
+@router.get("", response_model=Page[PrintJobResponse])
 async def list_jobs(
     status: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
@@ -531,7 +531,7 @@ async def list_jobs(
     result = await db.execute(query.limit(limit).offset(offset))
     jobs = result.scalars().all()
 
-    return PrintJobList(jobs=jobs, total=total)
+    return Page[PrintJobResponse](items=jobs, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{job_id}", response_model=PrintJobResponse)

@@ -37,7 +37,7 @@ describe('AuditPage', () => {
         expect(url.searchParams.get('limit')).toBe('50');
         expect(url.searchParams.get('offset')).toBe('0');
         return HttpResponse.json({
-          entries: [entry({ id: 1, action: 'print.release', entity_id: '7' })],
+          items: [entry({ id: 1, action: 'print.release', entity_id: '7' })],
           total: 1,
         });
       }),
@@ -66,13 +66,13 @@ describe('AuditPage', () => {
         const offset = Number(url.searchParams.get('offset'));
         if (offset === 0) {
           return HttpResponse.json({
-            entries: [entry({ id: 1, action: 'print.release', entity_id: '101' })],
+            items: [entry({ id: 1, action: 'print.release', entity_id: '101' })],
             total: 60,
           });
         }
         await page2Gate;
         return HttpResponse.json({
-          entries: [entry({ id: 2, action: 'scan.complete', entity_id: '202' })],
+          items: [entry({ id: 2, action: 'scan.complete', entity_id: '202' })],
           total: 60,
         });
       }),

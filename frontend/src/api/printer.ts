@@ -1,5 +1,5 @@
 import api from './client';
-import type { PrinterStatus, PrintJob } from '../types';
+import type { Page, PrinterStatus, PrintJob } from '../types';
 
 export async function getPrinterStatus(): Promise<PrinterStatus> {
   const { data } = await api.get('/printer/status');
@@ -58,7 +58,7 @@ export interface ListJobsParams {
   offset?: number;
 }
 
-export async function listJobs(params: ListJobsParams = {}): Promise<{ jobs: PrintJob[]; total: number }> {
+export async function listJobs(params: ListJobsParams = {}): Promise<Page<PrintJob>> {
   const { data } = await api.get('/jobs', { params });
   return data;
 }

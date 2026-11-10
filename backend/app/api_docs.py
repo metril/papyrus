@@ -1,8 +1,23 @@
 # ruff: noqa: E501
 """Shared OpenAPI documentation helpers: tag metadata, error models, reusable
-``responses=`` constants and the operationId generator."""
+``responses=`` constants and the operationId generator.
+
+Router idiom (use these, don't hand-roll response dicts)::
+
+    @router.get("/x", summary="...", responses=std_responses(AUTH_ERRORS, NOT_FOUND))
+    @router.get("/f", summary="...", response_class=Response,
+                responses=file_response(["application/pdf"], "The scan file.")
+                | std_responses(AUTH_ERRORS, NOT_FOUND))
+
+``std_responses`` merges the constant groups (AUTH_ERRORS, NOT_FOUND, CONFLICT,
+VALIDATION, RATE_LIMITED, SERVER); ``file_response`` documents a binary 200.
+422 always renders as ``ErrorResponse`` (see ``install_openapi``). Paginated
+lists return ``schemas.Page[T]`` with ``limit`` (1-200) / ``offset`` params.
+"""
 from typing import Any
 
+from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, Field
 
@@ -65,3 +80,61 @@ SERVER: dict[int | str, dict[str, Any]] = {500: _err("Unexpected server error.")
 def generate_unique_id(route: APIRoute) -> str:
     """operationId = ``{first tag}_{handler name}`` (handler name alone if untagged)."""
     return f"{route.tags[0]}_{route.name}" if route.tags else route.name
+
+
+def std_responses(*groups: dict[int | str, dict[str, Any]]) -> dict[int | str, dict[str, Any]]:
+    """Merge response-constant groups into one ``responses=`` dict."""
+    merged: dict[int | str, dict[str, Any]] = {}
+    for g in groups:
+        merged.update(g)
+    return merged
+
+
+def file_response(media_types: list[str], description: str) -> dict[int | str, dict[str, Any]]:
+    """Document a binary 200 response with the given media types."""
+    return {
+        200: {
+            "description": description,
+            "content": {m: {"schema": {"type": "string", "format": "binary"}} for m in media_types},
+        }
+    }
+
+
+_VALIDATION_REF = "#/components/schemas/HTTPValidationError"
+_ERROR_REF = {"$ref": "#/components/schemas/ErrorResponse"}
+
+
+def _swap_validation_refs(node: Any) -> None:
+    if isinstance(node, dict):
+        if node.get("$ref") == _VALIDATION_REF:
+            node["$ref"] = _ERROR_REF["$ref"]
+        for v in node.values():
+            _swap_validation_refs(v)
+    elif isinstance(node, list):
+        for v in node:
+            _swap_validation_refs(v)
+
+
+def install_openapi(app: FastAPI) -> None:
+    """Replace FastAPI's default 422 body (HTTPValidationError) with ErrorResponse."""
+
+    def custom_openapi() -> dict[str, Any]:
+        if app.openapi_schema:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+            tags=app.openapi_tags,
+            servers=app.servers,
+            contact=app.contact,
+        )
+        _swap_validation_refs(schema["paths"])
+        comps = schema.get("components", {}).get("schemas", {})
+        for name in ("HTTPValidationError", "ValidationError"):
+            comps.pop(name, None)
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = custom_openapi  # type: ignore[method-assign]

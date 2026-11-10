@@ -1,5 +1,5 @@
 import api from './client';
-import type { ScanJob, ScanRequest } from '../types';
+import type { Page, ScanJob, ScanRequest } from '../types';
 
 export async function getScannerStatus(): Promise<Record<string, unknown>> {
   const { data } = await api.get('/scanner/status');
@@ -54,7 +54,7 @@ export interface ListScansParams {
   offset?: number;
 }
 
-export async function listScans(params: ListScansParams = {}): Promise<{ scans: ScanJob[]; total: number }> {
+export async function listScans(params: ListScansParams = {}): Promise<Page<ScanJob>> {
   const { data } = await api.get('/scanner/scans', { params });
   return data;
 }

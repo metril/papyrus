@@ -71,8 +71,8 @@ const scan: ScanJob = {
 describe('HistoryPage', () => {
   it('renders a unified list from the jobs and scans queries', async () => {
     server.use(
-      http.get('/api/jobs', () => HttpResponse.json({ jobs: [job], total: 1 })),
-      http.get('/api/scanner/scans', () => HttpResponse.json({ scans: [scan], total: 1 })),
+      http.get('/api/jobs', () => HttpResponse.json({ items: [job], total: 1, limit: 50, offset: 0 })),
+      http.get('/api/scanner/scans', () => HttpResponse.json({ items: [scan], total: 1, limit: 50, offset: 0 })),
     );
 
     const { container } = render(<HistoryPage />, { wrapper: makeWrapper() });
@@ -96,13 +96,13 @@ describe('HistoryPage', () => {
       http.get('/api/jobs', () => {
         jobsGetCount += 1;
         return HttpResponse.json(
-          jobsGetCount === 1 ? { jobs: [job], total: 1 } : { jobs: [], total: 0 },
+          jobsGetCount === 1 ? { items: [job], total: 1, limit: 50, offset: 0 } : { items: [], total: 0, limit: 50, offset: 0 },
         );
       }),
       http.get('/api/scanner/scans', () => {
         scansGetCount += 1;
         return HttpResponse.json(
-          scansGetCount === 1 ? { scans: [scan], total: 1 } : { scans: [], total: 0 },
+          scansGetCount === 1 ? { items: [scan], total: 1, limit: 50, offset: 0 } : { items: [], total: 0, limit: 50, offset: 0 },
         );
       }),
       http.post('/api/jobs/bulk-delete', async ({ request }) => {
@@ -141,9 +141,9 @@ describe('HistoryPage', () => {
     let jobDeleted = false;
     server.use(
       http.get('/api/jobs', () =>
-        HttpResponse.json(jobDeleted ? { jobs: [], total: 0 } : { jobs: [job], total: 1 }),
+        HttpResponse.json(jobDeleted ? { items: [], total: 0, limit: 50, offset: 0 } : { items: [job], total: 1, limit: 50, offset: 0 }),
       ),
-      http.get('/api/scanner/scans', () => HttpResponse.json({ scans: [scan], total: 1 })),
+      http.get('/api/scanner/scans', () => HttpResponse.json({ items: [scan], total: 1, limit: 50, offset: 0 })),
       http.delete('/api/jobs/1', () => {
         jobDeleted = true;
         return HttpResponse.json({});
@@ -181,10 +181,10 @@ describe('HistoryPage', () => {
         const offset = new URL(request.url).searchParams.get('offset') ?? '0';
         jobsCalls.push(offset);
         return HttpResponse.json(
-          offset === '0' ? { jobs: [page0Job], total: 2 } : { jobs: [page1Job], total: 2 },
+          offset === '0' ? { items: [page0Job], total: 2, limit: 50, offset: 0 } : { items: [page1Job], total: 2, limit: 50, offset: 0 },
         );
       }),
-      http.get('/api/scanner/scans', () => HttpResponse.json({ scans: [], total: 0 })),
+      http.get('/api/scanner/scans', () => HttpResponse.json({ items: [], total: 0, limit: 50, offset: 0 })),
     );
 
     const user = userEvent.setup();
@@ -206,8 +206,8 @@ describe('HistoryPage', () => {
 
   it('does not re-render every row when only one row\'s selection changes (F: useQueries combine)', async () => {
     server.use(
-      http.get('/api/jobs', () => HttpResponse.json({ jobs: [job], total: 1 })),
-      http.get('/api/scanner/scans', () => HttpResponse.json({ scans: [scan], total: 1 })),
+      http.get('/api/jobs', () => HttpResponse.json({ items: [job], total: 1, limit: 50, offset: 0 })),
+      http.get('/api/scanner/scans', () => HttpResponse.json({ items: [scan], total: 1, limit: 50, offset: 0 })),
     );
 
     const user = userEvent.setup();

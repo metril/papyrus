@@ -42,7 +42,7 @@ export default function JobQueue() {
   const queryClient = useQueryClient();
   const jobsQuery = useJobs();
   const printersQuery = usePrinters();
-  const jobs = (jobsQuery.data?.jobs ?? []).filter((j) => QUEUE_STATUSES.has(j.status));
+  const jobs = (jobsQuery.data?.items ?? []).filter((j) => QUEUE_STATUSES.has(j.status));
   const printers = printersQuery.data ?? [];
   // Destructured because `useToast()` returns a fresh object each render while
   // `show` itself is a stable zustand action — depending on `show` keeps the

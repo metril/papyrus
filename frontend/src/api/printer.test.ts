@@ -3,6 +3,6 @@ import { listJobs } from './printer';
 
 describe('listJobs', () => {
   it('resolves the msw-mocked /api/jobs response', async () => {
-    await expect(listJobs()).resolves.toEqual({ jobs: [], total: 0 });
+    await expect(listJobs()).resolves.toEqual({ items: [], total: 0, limit: 50, offset: 0 });
   });
 });

@@ -1519,7 +1519,7 @@ async def test_share_target_authenticated_creates_held_job_and_redirects(db, cli
 
     list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
     assert list_resp.status_code == 200
-    jobs = list_resp.json()["jobs"]
+    jobs = list_resp.json()["items"]
     assert len(jobs) == 1
     assert jobs[0]["status"] == "held"
     assert jobs[0]["filename"] == "test.pdf"
@@ -1541,7 +1541,7 @@ async def test_share_target_multiple_files_each_create_a_job(db, client, tmp_pat
     assert resp.headers["location"] == "/print"
 
     list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
-    jobs = list_resp.json()["jobs"]
+    jobs = list_resp.json()["items"]
     assert len(jobs) == 2
     assert {j["filename"] for j in jobs} == {"a.pdf", "b.pdf"}
 
@@ -1571,7 +1571,7 @@ async def test_share_target_oversize_file_redirects_with_share_failed_count(db, 
     assert resp.headers["location"] == "/print?share_failed=1"
 
     list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
-    assert list_resp.json()["jobs"] == []
+    assert list_resp.json()["items"] == []
 
 
 async def test_share_target_mixed_valid_and_invalid_files_creates_the_valid_one(
@@ -1594,7 +1594,7 @@ async def test_share_target_mixed_valid_and_invalid_files_creates_the_valid_one(
     assert resp.headers["location"] == "/print?share_failed=1"
 
     list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
-    jobs = list_resp.json()["jobs"]
+    jobs = list_resp.json()["items"]
     assert [j["filename"] for j in jobs] == ["good.pdf"]
 
 
@@ -1614,7 +1614,7 @@ async def test_share_target_skips_auto_pin_under_require_release_pin(db, client,
     assert resp.status_code == 303
 
     list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
-    jobs = list_resp.json()["jobs"]
+    jobs = list_resp.json()["items"]
     assert len(jobs) == 1
     assert jobs[0]["status"] == "held"
     assert jobs[0]["has_pin"] is False

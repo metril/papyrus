@@ -40,7 +40,7 @@ describe('ScanList', () => {
 
   it('toasts and keeps the row when a delete fails, instead of failing silently (F87)', async () => {
     server.use(
-      http.get('/api/scanner/scans', () => HttpResponse.json({ scans: [scan], total: 1 })),
+      http.get('/api/scanner/scans', () => HttpResponse.json({ items: [scan], total: 1, limit: 50, offset: 0 })),
       http.delete('/api/scanner/scans/scan-abc', () =>
         HttpResponse.json({ detail: 'File missing on disk' }, { status: 500 }),
       ),
@@ -67,7 +67,7 @@ describe('ScanList', () => {
     server.use(
       http.get('/api/scanner/scans', () => {
         scansGetCount += 1;
-        return HttpResponse.json({ scans: [scan], total: 1 });
+        return HttpResponse.json({ items: [scan], total: 1, limit: 50, offset: 0 });
       }),
       http.delete('/api/scanner/scans/scan-abc', () => {
         deleteCalled = true;

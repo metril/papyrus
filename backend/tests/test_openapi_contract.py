@@ -47,7 +47,7 @@ def _problems(op: dict) -> list[str]:
     if not ok:
         problems.append("no typed success response")
     if not any(
-        code[0] in "45" and "ErrorResponse" in str(resp.get("content", {}))
+        code[0] in "45" and code != "422" and "ErrorResponse" in str(resp.get("content", {}))
         for code, resp in responses.items()
     ):
         problems.append("no ErrorResponse error response")
@@ -75,3 +75,10 @@ def test_contract_ratchet():
     fixed = sorted(allow - noncompliant)
     assert not new, f"Operations violate the API contract: {new}"
     assert not fixed, f"Now compliant - remove from openapi_allowlist.txt: {fixed}"
+
+
+def test_no_default_validation_schemas():
+    schemas = app.openapi()["components"]["schemas"]
+    assert "HTTPValidationError" not in schemas
+    assert "ValidationError" not in schemas
+    assert "HTTPValidationError" not in str(app.openapi()["paths"])
