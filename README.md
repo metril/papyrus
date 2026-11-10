@@ -118,9 +118,21 @@ Backend tests are split into two tiers:
 
 Frontend unit tests use vitest + Testing Library (`cd frontend && npm test`).
 
+### API
+
+The REST API lives under **`/api/v1`**. Legacy `/api/*` paths still work as deprecated aliases (`Deprecation`/`Sunset` headers plus a successor `Link`); externally registered URLs (ingest, share-target, OIDC and cloud callbacks, email receive) are permanent aliases.
+
+- **Interactive docs**: `/docs` (Swagger UI) and `/redoc`, schema at `/openapi.json`; authenticated users only unless the `public_api_docs` setting is on. A committed copy is `backend/openapi.json`.
+- **Auth**: session cookie (OIDC/local login) or `Authorization: Bearer <token>` with an admin-generated API token (Settings -> API Tokens); the token's permissions limit what it may call.
+- **Errors**: every error is `{detail, code, request_id, errors}`.
+- **Rate limiting**: per-IP and per-token requests per minute (`rate_limit_*` settings, `trusted_proxies` for forwarded client IPs); exceeding it returns 429 with `Retry-After`.
+- **Guides**: [overview](docs/api/README.md), [webhooks](docs/api/webhooks.md), [WebSockets](docs/api/websockets.md), [eSCL](docs/api/escl.md).
+
+Regenerate after API changes: `cd backend && python -m app.openapi_export`, then `cd frontend && npm run gen:api`.
+
 ### Continuous Integration
 
-`.github/workflows/ci.yml` runs on every push/PR: the backend job (`ruff check` + `pytest`) brings up a `postgres:16-alpine` service container so both tiers of tests run, then fails the job if the JUnit report shows any skipped test — a broken service container can't silently reduce the suite to unit-only. The frontend job runs `eslint` + `npm test` (vitest/Testing Library) + `npm run build`.
+`.github/workflows/ci.yml` runs on every push/PR: four backend shards (`ruff check`, OpenAPI export check, sharded `pytest`; a `backend` check aggregates them) each bring up a `postgres:16-alpine` service container so both tiers of tests run, then fails the job if the JUnit report shows any skipped test — a broken service container can't silently reduce the suite to unit-only. The frontend job runs `eslint` + the generated-types drift check + `npm test` (vitest/Testing Library) + `npm run build`.
 
 ## Configuration
 
@@ -149,7 +161,7 @@ See [.env.example](.env.example) for the full list.
 ### Settings UI
 
 After first login, configure everything else via **Settings**:
-- **Printers**: Add/manage CUPS printers — discover via mDNS pick-list (`GET /api/printers/discover`), probe an IP with IPP enrichment (`GET /api/printers/probe`), refresh a configured printer's device info (`POST /api/printers/{id}/refresh-info`), or print a test page (`POST /api/printers/{id}/test-page`)
+- **Printers**: Add/manage CUPS printers — discover via mDNS pick-list (`GET /api/v1/printers/discover`), probe an IP with IPP enrichment (`GET /api/v1/printers/probe`), refresh a configured printer's device info (`POST /api/v1/printers/{id}/refresh-info`), or print a test page (`POST /api/v1/printers/{id}/test-page`)
 - **Scanners**: Add a Brother scanner with the native driver (typed IP or mDNS discovery, no registration step) or register it through brscan4, probe by IP, or discover via mDNS
 - **OIDC**: Admin group mapping, groups claim name, scopes
 - **Email**: SMTP, webhook secret
