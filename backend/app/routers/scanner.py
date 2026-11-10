@@ -182,6 +182,7 @@ async def initiate_scan(
     db.add(job)
     await db.commit()
     await db.refresh(job)
+    await db.commit()  # refresh autobegins; end it before the long scan
 
     async def progress_callback(_scan_id: str, percent: float):
         await ws_manager.broadcast(f"scan:{job.scan_id}", {
@@ -233,6 +234,7 @@ async def initiate_scan(
         await dispatch_webhook(
             db, "scan.complete", {"scan_id": job.scan_id, "format": job.format}
         )
+        await db.commit()  # dispatch_webhook's query must not span delivery I/O
 
         if scanner and scanner.auto_deliver:
             await run_post_scan_actions(
@@ -307,6 +309,7 @@ async def initiate_batch_scan(
     db.add(job)
     await db.commit()
     await db.refresh(job)
+    await db.commit()  # refresh autobegins; end it before the long scan
 
     async def progress_callback(_scan_id: str, percent: float):
         await ws_manager.broadcast(f"scan:{job.scan_id}", {
@@ -347,6 +350,7 @@ async def initiate_batch_scan(
             db, "scan.complete",
             {"scan_id": job.scan_id, "format": request.format, "pages": page_count},
         )
+        await db.commit()  # dispatch_webhook's query must not span delivery I/O
 
         if scanner and scanner.auto_deliver:
             await run_post_scan_actions(
@@ -892,6 +896,7 @@ async def scan_backs(
         scanner = await db.get(Scanner, scanner_id) if scanner_id else None
         if scanner is None:
             scanner = await get_default_scanner(db)
+        await db.commit()
         if scanner and scanner.auto_deliver:
             await run_post_scan_actions(
                 merged_row, scanner, db, default_filename_template=filename_template

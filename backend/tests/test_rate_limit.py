@@ -168,3 +168,52 @@ async def test_public_peer_cannot_pick_its_bucket_via_xff(db):
         await c.get("/api/v1/auth/me", headers={"X-Forwarded-For": "198.51.100.3"})
         r = await c.get("/api/v1/auth/me", headers={"X-Forwarded-For": "198.51.100.4"})
         assert r.status_code == 429
+
+
+async def test_lan_peer_cannot_rotate_xff_to_dodge_bucket(db):
+    _enable(ip_rpm=1)
+    async with _client("192.168.1.50") as c:
+        def me(xff):
+            return c.get("/api/v1/auth/me", headers={"X-Forwarded-For": xff})
+
+        assert (await me("198.51.100.1")).status_code == 401
+        assert (await me("198.51.100.2")).status_code == 429
+
+
+async def test_trusted_proxy_setting_controls_xff_trust(db):
+    _enable(ip_rpm=1)
+    settings_cache.put("trusted_proxies", "192.168.1.0/24")
+    async with _client("192.168.1.50") as c:
+        def me(xff):
+            return c.get("/api/v1/auth/me", headers={"X-Forwarded-For": xff})
+
+        assert (await me("198.51.100.1")).status_code == 401
+        assert (await me("198.51.100.2")).status_code == 401
+        assert (await me("198.51.100.1")).status_code == 429
+
+
+async def test_trusted_proxies_validated_on_save(admin_client):
+    bad = await admin_client.put("/api/v1/settings", json={"trusted_proxies": "10.0.0.0/99"})
+    assert bad.status_code == 400
+    ok = await admin_client.put("/api/v1/settings", json={"trusted_proxies": "10.0.0.1, ::1/128"})
+    assert ok.status_code == 200
+
+
+async def test_cancelled_lookup_still_closes_session(monkeypatch):
+    import asyncio
+
+    from app import rate_limit_middleware as rlm
+
+    done = asyncio.Event()
+
+    async def slow(key):
+        await asyncio.sleep(0.05)
+        done.set()
+
+    monkeypatch.setattr(rlm, "_load_setting", slow)
+    task = asyncio.create_task(rlm._raw_setting("nope_key"))
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await asyncio.wait_for(done.wait(), 1)

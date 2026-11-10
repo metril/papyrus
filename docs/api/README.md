@@ -74,7 +74,10 @@ WebSockets and the CUPS ingest call from the local host. Over the limit the API 
 `RATE_LIMITED` response in the OpenAPI schema.
 
 Admins configure this under Settings > API (`rate_limit_enabled`, `rate_limit_token_rpm`,
-`rate_limit_ip_rpm`); there are no environment variables. Login attempts and release-PIN guesses
+`rate_limit_ip_rpm`, `trusted_proxies`); there are no environment variables. `X-Forwarded-For`
+(rightmost entry) is honoured only when the TCP peer is in `trusted_proxies` (comma-separated
+IPs/CIDRs, default `127.0.0.1/32,::1/128,172.16.0.0/12`, i.e. loopback and docker bridges); any other
+client, including LAN hosts, is bucketed by its own address. Set it to your reverse proxy's address. Login attempts and release-PIN guesses
 additionally use an in-memory lockout.
 
 `/docs`, `/redoc` and `/openapi.json` require a signed-in session or Bearer token unless the admin

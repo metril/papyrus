@@ -49,7 +49,7 @@ describe('ApiCard', () => {
     expect(screen.queryByDisplayValue('700')).not.toBeInTheDocument();
   });
 
-  it('saves exactly the four API keys', async () => {
+  it('saves exactly the five API keys', async () => {
     let putBody: Record<string, string> | null = null;
     server.use(
       http.put('/api/v1/settings', async ({ request }) => {
@@ -60,7 +60,7 @@ describe('ApiCard', () => {
     const user = userEvent.setup();
     render(
       <Harness
-        initial={{ rate_limit_enabled: true, rate_limit_token_rpm: 600, rate_limit_ip_rpm: 300, public_api_docs: true }}
+        initial={{ rate_limit_enabled: true, rate_limit_token_rpm: 600, rate_limit_ip_rpm: 300, trusted_proxies: '127.0.0.1/32,::1/128', public_api_docs: true }}
       />
     );
     await user.click(screen.getByText('API'));
@@ -70,6 +70,7 @@ describe('ApiCard', () => {
       rate_limit_enabled: 'true',
       rate_limit_token_rpm: '600',
       rate_limit_ip_rpm: '300',
+      trusted_proxies: '127.0.0.1/32,::1/128',
       public_api_docs: 'true',
     });
   });

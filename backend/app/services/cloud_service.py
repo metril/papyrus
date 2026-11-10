@@ -493,18 +493,21 @@ class CloudService:
             if provider.provider == "gdrive":
                 client_id = await get_setting(db, "gdrive_client_id")
                 client_secret = await get_setting(db, "gdrive_client_secret")
+                await db.commit()
                 new_token, expiry = await self.refresh_gdrive_token(
                     provider.refresh_token_encrypted, client_id, client_secret
                 )
             elif provider.provider == "dropbox":
                 app_key = await get_setting(db, "dropbox_app_key")
                 app_secret = await get_setting(db, "dropbox_app_secret")
+                await db.commit()
                 new_token, expiry = await self.refresh_dropbox_token(
                     provider.refresh_token_encrypted, app_key, app_secret
                 )
             elif provider.provider == "onedrive":
                 client_id = await get_setting(db, "onedrive_client_id")
                 client_secret = await get_setting(db, "onedrive_client_secret")
+                await db.commit()
                 new_token, expiry = await self.refresh_onedrive_token(
                     provider.refresh_token_encrypted, client_id, client_secret
                 )

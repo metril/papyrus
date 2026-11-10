@@ -134,3 +134,9 @@ def test_websocket_via_old_path_and_v1():
         with pytest.raises(WebSocketDisconnect):  # closed 1008: unauthenticated
             with c.websocket_connect(path) as ws:
                 ws.receive_text()
+
+
+async def test_control_chars_in_path_do_not_500(client):
+    r = await client.get("/api/jobs/%0d%0aX:y")
+    assert r.status_code < 500
+    assert "\r" not in r.headers.get("link", "") and "\n" not in r.headers.get("link", "")

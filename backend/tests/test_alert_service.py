@@ -382,16 +382,24 @@ async def test_ipp_marker_fills_a_missing_level_cups_reported_as_unknown(harness
 # F128 — alert_state is durable after each printer's transitions, not only
 # once at the very end of the sweep.
 # --------------------------------------------------------------------------- #
-async def test_state_saved_after_each_printer_not_only_at_sweep_end(harness):
+async def test_state_saved_after_each_printer_not_only_at_sweep_end(harness, monkeypatch):
     harness.status_by_queue["brother_release"] = _status(markers=[{"name": "Black", "level": 5}])
     harness.status_by_queue["epson_release"] = _status(markers=[{"name": "Cyan", "level": 5}])
     printers = [_printer(pid=1, cups_name="brother"), _printer(pid=2, cups_name="epson")]
     db = _FakeDB(printers)
+    saves = []
+    orig = alert_service._save_alert_state
+
+    async def counting(d, state):
+        saves.append(1)
+        await orig(d, state)
+
+    monkeypatch.setattr(alert_service, "_save_alert_state", counting)
 
     await alert_service.check_alerts(db)
 
     # One persist per printer (2), not a single persist at the very end.
-    assert db.commits == len(printers)
+    assert len(saves) == len(printers)
 
 
 async def test_printer1_state_survives_a_crash_dispatching_printer2(harness, monkeypatch):

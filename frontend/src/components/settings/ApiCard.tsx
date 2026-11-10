@@ -35,6 +35,16 @@ export default function ApiCard({ appSettings, set, save }: SettingsSectionProps
               onChange={set('rate_limit_ip_rpm')}
               type="number"
             />
+            <SettingField
+              label="Trusted proxies"
+              value={appSettings['trusted_proxies'] ?? '127.0.0.1/32,::1/128,172.16.0.0/12'}
+              onChange={set('trusted_proxies')}
+            />
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Comma-separated IPs or CIDR ranges of your reverse proxy. Only requests arriving from these
+              addresses may identify the real client through X-Forwarded-For; every other client is limited
+              by its own address.
+            </p>
             <p className="text-xs text-gray-500 dark:text-gray-400">
               Requests over the limit get a 429 response with a Retry-After header. Health checks, scanner
               discovery and local print ingest are never limited.
@@ -55,7 +65,13 @@ export default function ApiCard({ appSettings, set, save }: SettingsSectionProps
         <div className="flex justify-end">
           <SaveButton
             section="api"
-            keys={['rate_limit_enabled', 'rate_limit_token_rpm', 'rate_limit_ip_rpm', 'public_api_docs']}
+            keys={[
+              'rate_limit_enabled',
+              'rate_limit_token_rpm',
+              'rate_limit_ip_rpm',
+              'trusted_proxies',
+              'public_api_docs',
+            ]}
             save={save}
           />
         </div>
