@@ -513,7 +513,7 @@ app.include_router(webdav.router, prefix=f"{V1}/webdav", tags=["webdav"])
 app.include_router(webhooks.router, prefix=f"{V1}/webhooks", tags=["webhooks"])
 
 # eSCL scanner protocol (no /api prefix — clients expect /eSCL/ at root)
-app.include_router(escl.router, tags=["escl"])
+app.include_router(escl.router, tags=["escl"], include_in_schema=False)
 
 
 def resolve_static_file(static_dir: str, path: str) -> str | None:

@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 import os
 import tempfile
 
@@ -127,7 +126,8 @@ async def download_from_share(
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Download the file at `path` from an SMB share (permission `files`). Staged in a temp file that is removed after the response is sent."""
+    """Download the file at `path` from an SMB share (permission `files`). Staged in a temp file
+    that is removed after the response is sent."""
     result = await db.execute(select(SMBShare).where(SMBShare.id == share_id))
     share = result.scalar_one_or_none()
     if share is None:

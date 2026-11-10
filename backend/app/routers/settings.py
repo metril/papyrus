@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 import logging
 from typing import Any
 
@@ -6,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api_docs import AUTH_ERRORS, ErrorResponse, std_responses
+from app.api_docs import AUTH_ERRORS, error_group, std_responses
 from app.auth.dependencies import require_admin
 from app.config import settings
 from app.database import get_db
@@ -21,9 +20,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-_BAD_SETTING: dict[int | str, dict[str, Any]] = {
-    400: {"model": ErrorResponse, "description": "Unknown setting key, or a value that does not match the setting's type."}
-}
+_BAD_SETTING = error_group(400, "Unknown setting key, or a value that does not match the setting's "
+    "type.")
 
 # Maps setting key → (python_type, is_encrypted)
 # Encrypted values are stored in AppConfig as "{key}_encrypted"

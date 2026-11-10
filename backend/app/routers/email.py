@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 import logging
 import secrets
 import time
@@ -9,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api_docs import AUTH_ERRORS, RATE_LIMITED, ErrorResponse, std_responses
+from app.api_docs import AUTH_ERRORS, RATE_LIMITED, error_group, std_responses
 from app.auth.dependencies import get_current_user, require_admin
 from app.database import get_db
 from app.models import AppConfig, User
@@ -39,9 +38,9 @@ router = APIRouter()
 _webhook_requests: dict[str, list[float]] = defaultdict(list)
 _BUCKET_IDLE_SECONDS = 3600.0
 
-_FORBIDDEN_TOKEN = {403: {"model": ErrorResponse, "description": "Invalid webhook token."}}
-_NOT_CONFIGURED = {503: {"model": ErrorResponse, "description": "The email webhook has no secret configured."}}
-_SMTP_FAILED = {502: {"model": ErrorResponse, "description": "The SMTP server could not be reached or rejected the login."}}
+_FORBIDDEN_TOKEN = error_group(403, "Invalid webhook token.")
+_NOT_CONFIGURED = error_group(503, "The email webhook has no secret configured.")
+_SMTP_FAILED = error_group(502, "The SMTP server could not be reached or rejected the login.")
 
 
 async def _get_smtp_config(db: AsyncSession) -> dict:
@@ -63,7 +62,8 @@ async def get_email_config(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Report whether SMTP is configured, with host and From address (any signed-in user). No secrets are returned."""
+    """Report whether SMTP is configured, with host and From address (any signed-in user). No
+    secrets are returned."""
     db_config = await _get_smtp_config(db)
     return EmailConfigStatus(
         configured=email_service.is_configured(db_config),
@@ -83,7 +83,8 @@ async def update_email_config(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Replace the SMTP host, port, credentials and From address (admin only). The password is encrypted at rest and the settings cache is invalidated."""
+    """Replace the SMTP host, port, credentials and From address (admin only). The password is
+    encrypted at rest and the settings cache is invalidated."""
     config_items = {
         "smtp_host": data.smtp_host,
         "smtp_port": str(data.smtp_port),
@@ -116,7 +117,8 @@ async def test_email(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Open an SMTP connection with the stored configuration (admin only). 502 when it fails; no mail is sent."""
+    """Open an SMTP connection with the stored configuration (admin only). 502 when it fails; no
+    mail is sent."""
     db_config = await _get_smtp_config(db)
     success = await email_service.test_connection(db_config)
     if not success:
@@ -186,7 +188,12 @@ def _check_rate_limit(key: str, max_requests: int = 10) -> bool:
     summary="Receive email attachments for printing",
     response_model=EmailReceiveResponse,
     status_code=201,
-    responses=std_responses(_FORBIDDEN_TOKEN, RATE_LIMITED, _NOT_CONFIGURED, {413: {"model": ErrorResponse, "description": "An attachment exceeds the maximum upload size."}}),
+    responses=std_responses(
+        _FORBIDDEN_TOKEN,
+        RATE_LIMITED,
+        _NOT_CONFIGURED,
+        error_group(413, "An attachment exceeds the maximum upload size."),
+    ),
 )
 async def receive_email(
     files: list[UploadFile] = File(...),
@@ -265,7 +272,8 @@ async def get_webhook_info(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return the inbound email webhook URL and whether a secret exists (admin only). The secret is not returned."""
+    """Return the inbound email webhook URL and whether a secret exists (admin only). The secret
+    is not returned."""
     from app.routers.settings import get_setting
     webhook_secret = await get_setting(db, "email_webhook_secret")
     has_secret = bool(webhook_secret)
@@ -286,7 +294,8 @@ async def generate_webhook_secret(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate and store a new email webhook secret, replacing any previous one (admin only). The plaintext is returned only in this response."""
+    """Generate and store a new email webhook secret, replacing any previous one (admin only). The
+    plaintext is returned only in this response."""
     new_secret = secrets.token_urlsafe(32)
 
     result = await db.execute(

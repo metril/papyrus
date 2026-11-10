@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 import asyncio
 import os
 import shutil
@@ -7,11 +6,10 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api_docs import AUTH_ERRORS, CONFLICT, VALIDATION, std_responses
+from app.api_docs import AUTH_ERRORS, BAD_GATEWAY, CONFLICT, UNAVAILABLE, VALIDATION, std_responses
 from app.auth.dependencies import require_permission
 from app.database import get_db
 from app.models import PrintJob, ScanJob, User
-from app.routers.jobs import BAD_GATEWAY, UNAVAILABLE
 from app.schemas import CopyRequest, CopyResponse, serialize_print_job, serialize_scan_job
 from app.services.copy_service import copy_service
 from app.services.cups_service import CupsService, get_default_release_queue_name

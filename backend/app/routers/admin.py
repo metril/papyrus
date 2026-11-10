@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 """Admin endpoints: audit log, usage stats, backup/restore, retention, user management."""
 
 import uuid as uuid_mod
@@ -9,7 +8,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import Date, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api_docs import AUTH_ERRORS, NOT_FOUND, ErrorResponse, file_response, std_responses
+from app.api_docs import (
+    AUTH_ERRORS,
+    NOT_FOUND,
+    error_group,
+    file_response,
+    std_responses,
+)
 from app.auth.dependencies import require_admin
 from app.database import get_db
 from app.models import AppConfig, AuditEntry, PrintJob, ScanJob, User
@@ -28,7 +33,7 @@ from app.services import settings_cache
 
 router = APIRouter()
 
-_BAD = {400: {"model": ErrorResponse, "description": "The request is not acceptable in the current state."}}
+_BAD = error_group(400, "The request is not acceptable in the current state.")
 
 
 # --- Audit Log ---
@@ -436,7 +441,8 @@ async def delete_user(
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Delete a user and cascade their cloud/SMB connections (admin only). 400 when targeting yourself."""
+    """Delete a user and cascade their cloud/SMB connections (admin only). 400 when targeting
+    yourself."""
     target = await db.get(User, user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")

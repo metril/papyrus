@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 import asyncio
 import ipaddress
 import logging
@@ -14,7 +13,7 @@ from app.api_docs import (
     CONFLICT,
     NOT_FOUND,
     VALIDATION,
-    ErrorResponse,
+    error_group,
     std_responses,
 )
 from app.auth.dependencies import get_current_user, require_admin
@@ -40,13 +39,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _err(code: int, description: str) -> dict:
-    return {code: {"model": ErrorResponse, "description": description}}
-
-
 ADMIN = AUTH_ERRORS
-BAD_REQUEST = _err(400, "Invalid input, e.g. an IP address that cannot be probed.")
-SCANNER_BUSY = _err(503, "The scanner or its tooling timed out or is busy.")
+BAD_REQUEST = error_group(400, "Invalid input, e.g. an IP address that cannot be probed.")
+SCANNER_BUSY = error_group(503, "The scanner or its tooling timed out or is busy.")
 
 AIRSCAN_PAPYRUS_CONF = "/etc/sane.d/airscan.d/papyrus.conf"
 DEFAULT_WSD_PATH = "/WebServices/ScannerService"
@@ -307,9 +302,12 @@ async def probe_scanner_ip(
     ip: str,
     _user: User = Depends(require_admin),
 ):
-    """Probe a scanner at an IP using airscan-discover (WSD and eSCL), falling back to manual eSCL and WSD checks.
+    """Probe a scanner at an IP using airscan-discover (WSD and eSCL), falling back to manual eSCL
+    and WSD checks.
 
-    Admin only. Rejects loopback, link-local, multicast and unspecified addresses (400). Side effect: writes the discovered device into the airscan config. A failed probe still returns 200 with `reachable: false` and an `error`.
+    Admin only. Rejects loopback, link-local, multicast and unspecified addresses (400). Side
+    effect: writes the discovered device into the airscan config. A failed probe still returns 200
+    with `reachable: false` and an `error`.
     """
     _validate_probe_ip(ip)
 
@@ -452,7 +450,8 @@ async def scanner_diagnostics(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ):
-    """Return config files, `scanimage -L`, `airscan-discover` output and native scanner reachability for troubleshooting.
+    """Return config files, `scanimage -L`, `airscan-discover` output and native scanner
+    reachability for troubleshooting.
 
     Admin only. Read-only; probe failures are reported inside the fields rather than as errors.
     """
@@ -564,7 +563,8 @@ async def register_brscan4(
 ):
     """Register a Brother scanner with brsaneconfig4 and return its SANE device string.
 
-    Admin only. Returns 422 when the brscan4 driver is not installed (ARM images); a driver failure comes back as 200 with `device: null` and an `error`.
+    Admin only. Returns 422 when the brscan4 driver is not installed (ARM images); a driver failure
+    comes back as 200 with `device: null` and an `error`.
     """
     if not re.match(r"^[\d.]+$", body.ip):
         raise HTTPException(status_code=400, detail="Invalid IP address")
@@ -629,7 +629,8 @@ async def test_scanner(
 ):
     """Test a saved scanner: eSCL HTTP check plus SANE (or native) connectivity check.
 
-    Admin only. Native `brothernet:` devices only get a lease probe and also report `native` and `busy`; busy counts as reachable.
+    Admin only. Native `brothernet:` devices only get a lease probe and also report `native` and
+    `busy`; busy counts as reachable.
     """
     import re
     import xml.etree.ElementTree as ET
@@ -801,7 +802,8 @@ async def add_scanner(
 ):
     """Add a scanner. The first scanner added becomes the default.
 
-    Admin only. Secret values in `post_scan_config` are encrypted at rest; airscan devices get their config entry written immediately. 409 when the name exists.
+    Admin only. Secret values in `post_scan_config` are encrypted at rest; airscan devices get their
+    config entry written immediately. 409 when the name exists.
     """
     existing = await db.execute(select(Scanner).where(Scanner.name == body.name))
     if existing.scalar_one_or_none():
@@ -929,7 +931,8 @@ async def set_default_scanner(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ):
-    """Make a scanner the default used by scans, clearing the flag elsewhere in the same transaction.
+    """Make a scanner the default used by scans, clearing the flag elsewhere in the same
+    transaction.
 
     Admin only.
     """

@@ -1,9 +1,8 @@
-# ruff: noqa: E501
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api_docs import AUTH_ERRORS, NOT_FOUND, ErrorResponse, std_responses
+from app.api_docs import AUTH_ERRORS, NOT_FOUND, error_group, std_responses
 from app.auth.dependencies import require_admin
 from app.database import get_db
 from app.models import User, Webhook
@@ -13,7 +12,7 @@ from app.services.webhook_service import WEBHOOK_EVENTS
 
 router = APIRouter()
 
-_BAD_EVENTS = {400: {"model": ErrorResponse, "description": "One or more event names are not valid."}}
+_BAD_EVENTS = error_group(400, "One or more event names are not valid.")
 
 
 @router.get(
@@ -37,7 +36,8 @@ async def list_webhooks(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ):
-    """List configured outgoing webhooks, newest first (admin only). Signing secrets are never returned."""
+    """List configured outgoing webhooks, newest first (admin only). Signing secrets are never
+    returned."""
     result = await db.execute(select(Webhook).order_by(Webhook.created_at.desc()))
     return result.scalars().all()
 

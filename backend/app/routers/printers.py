@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 import asyncio
 import ipaddress
 import logging
@@ -10,12 +9,20 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api_docs import AUTH_ERRORS, CONFLICT, NOT_FOUND, VALIDATION, ErrorResponse, std_responses
+from app.api_docs import (
+    AUTH_ERRORS,
+    BAD_GATEWAY,
+    BAD_REQUEST,
+    CONFLICT,
+    NOT_FOUND,
+    VALIDATION,
+    error_group,
+    std_responses,
+)
 from app.auth.dependencies import get_current_user, require_admin
 from app.database import get_db
 from app.exceptions import ExternalServiceError, PapyrusError
 from app.models import Printer, User
-from app.routers.jobs import BAD_GATEWAY, BAD_REQUEST
 from app.schemas import (
     DiscoverPrintersResponse,
     PrinterCreate,
@@ -522,7 +529,9 @@ async def set_default_printer(
     status_code=200,
     response_model=PrinterInfo,
     summary="Resume a stopped printer queue",
-    responses=std_responses(AUTH_ERRORS, NOT_FOUND, {500: {"model": ErrorResponse, "description": "Re-enabling the queue failed."}}),
+    responses=std_responses(
+        AUTH_ERRORS, NOT_FOUND, error_group(500, "Re-enabling the queue failed.")
+    ),
 )
 async def resume_printer(
     printer_id: int,

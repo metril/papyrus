@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 import asyncio
 import logging
 import os
@@ -25,10 +24,14 @@ from starlette.responses import FileResponse
 
 from app.api_docs import (
     AUTH_ERRORS,
+    BAD_GATEWAY,
+    BAD_REQUEST,
     CONFLICT,
     NOT_FOUND,
     RATE_LIMITED,
     SERVER,
+    TOO_LARGE,
+    UNAVAILABLE,
     VALIDATION,
     ErrorResponse,
     file_response,
@@ -44,6 +47,7 @@ from app.schemas import (
     BulkDeleteResponse,
     Page,
     PrinterAssign,
+    PrintJobCreatedResponse,
     PrintJobResponse,
     ReleaseRequest,
     ReprintRequest,
@@ -72,12 +76,6 @@ from app.services.ws_manager import ws_manager
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-# Local error-response groups (400 / 413 / 502 / 503 are not shared constants).
-BAD_REQUEST: dict[int | str, dict] = {400: {"model": ErrorResponse, "description": "Invalid request or job state."}}
-TOO_LARGE: dict[int | str, dict] = {413: {"model": ErrorResponse, "description": "Upload exceeds max_upload_size_mb."}}
-BAD_GATEWAY: dict[int | str, dict] = {502: {"model": ErrorResponse, "description": "CUPS or a conversion service failed."}}
-UNAVAILABLE: dict[int | str, dict] = {503: {"model": ErrorResponse, "description": "No default printer or CUPS unavailable."}}
 
 # Mounted separately at /api (not /api/jobs) in main.py — the PWA share-target
 # manifest action is a fixed, well-known path the browser navigates to
@@ -237,10 +235,12 @@ async def _create_print_job_from_upload(
 
 @router.post(
     "/upload",
-    response_model=PrintJobResponse,
+    response_model=PrintJobCreatedResponse,
     status_code=201,
     summary="Upload a file and create a print job",
-    responses=std_responses(AUTH_ERRORS, BAD_REQUEST, TOO_LARGE, VALIDATION, BAD_GATEWAY, UNAVAILABLE),
+    responses=std_responses(
+        AUTH_ERRORS, BAD_REQUEST, TOO_LARGE, VALIDATION, BAD_GATEWAY, UNAVAILABLE
+    ),
 )
 async def upload_and_create_job(
     file: UploadFile = File(...),
@@ -300,7 +300,8 @@ async def _user_from_request_or_none(request: Request, db: AsyncSession) -> User
     status_code=303,
     summary="PWA share-target",
     response_class=RedirectResponse,
-    responses=std_responses(SERVER) | {303: {"description": "Redirect to /print (or /print?share_failed=N), or to the login page when unauthenticated."}},
+    responses=std_responses(SERVER) | {303: {"description": "Redirect to /print (or "
+        "/print?share_failed=N), or to the login page when unauthenticated."}},
 )
 async def share_target(
     request: Request,
@@ -442,8 +443,10 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
     summary="Ingest a network print job (internal)",
     responses=std_responses(BAD_REQUEST, TOO_LARGE, VALIDATION)
     | {
-        200: {"model": PrintJobResponse, "description": "Duplicate ingest_key: the existing job is returned."},
-        403: {"model": ErrorResponse, "description": "Not called from localhost or bad ingest token."},
+        200: {"model": PrintJobResponse, "description": "Duplicate ingest_key: the existing job is "
+            "returned."},
+        403: {"model": ErrorResponse, "description": "Not called from localhost or bad ingest "
+            "token."},
     },
 )
 async def ingest_network_job(
@@ -689,7 +692,8 @@ def _require_file_access(job: PrintJob, user: User, pin: str | None) -> None:
     "/{job_id}/download",
     response_class=Response,
     summary="Download a job's file",
-    responses=file_response(["application/octet-stream"], "The original uploaded file (its own MIME type).")
+    responses=file_response(["application/octet-stream"], "The original uploaded file (its own "
+        "MIME type).")
     | std_responses(AUTH_ERRORS, NOT_FOUND),
 )
 async def download_job_file(
@@ -760,7 +764,8 @@ async def _ensure_preview_pdf(job: PrintJob) -> str:
     "/{job_id}/preview",
     response_class=Response,
     summary="Preview a job's file",
-    responses=file_response(["application/pdf", "image/*"], "The file, or a PDF conversion for office documents.")
+    responses=file_response(["application/pdf", "image/*"], "The file, or a PDF conversion for "
+        "office documents.")
     | std_responses(AUTH_ERRORS, NOT_FOUND, BAD_GATEWAY),
 )
 async def preview_job_file(
@@ -887,7 +892,16 @@ async def assign_printer(
     "/{job_id}/release",
     response_model=PrintJobResponse,
     summary="Release a held job",
-    responses=std_responses(AUTH_ERRORS, BAD_REQUEST, NOT_FOUND, CONFLICT, RATE_LIMITED, BAD_GATEWAY, UNAVAILABLE, VALIDATION),
+    responses=std_responses(
+        AUTH_ERRORS,
+        BAD_REQUEST,
+        NOT_FOUND,
+        CONFLICT,
+        RATE_LIMITED,
+        BAD_GATEWAY,
+        UNAVAILABLE,
+        VALIDATION,
+    ),
 )
 async def release_job(
     job_id: int,

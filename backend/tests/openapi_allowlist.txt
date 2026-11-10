@@ -1,5 +1,0 @@
-escl_cancel_scan_job
-escl_create_scan_job
-escl_get_next_document
-escl_scanner_capabilities
-escl_scanner_status

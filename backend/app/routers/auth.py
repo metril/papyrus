@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -11,7 +10,14 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api_docs import AUTH_ERRORS, NOT_FOUND, RATE_LIMITED, SERVER, ErrorResponse, std_responses
+from app.api_docs import (
+    AUTH_ERRORS,
+    NOT_FOUND,
+    RATE_LIMITED,
+    SERVER,
+    error_group,
+    std_responses,
+)
 from app.auth.dependencies import get_current_user, require_admin
 from app.auth.oidc import ensure_oidc_registered, oauth
 from app.auth.tokens import generate_token
@@ -35,8 +41,8 @@ router = APIRouter()
 
 _ph = PasswordHasher()
 
-_UNAUTH = {401: {"model": ErrorResponse, "description": "Not authenticated or invalid credentials."}}
-_UNAVAILABLE = {503: {"model": ErrorResponse, "description": "OIDC is not enabled or not configured."}}
+_UNAUTH = error_group(401, "Not authenticated or invalid credentials.")
+_UNAVAILABLE = error_group(503, "OIDC is not enabled or not configured.")
 _REDIRECT_HDR = {"Location": {"description": "Target URL.", "schema": {"type": "string"}}}
 
 # Caps local-login guesses at 5 failures / 5 minutes per (ip, username) pair
@@ -95,7 +101,7 @@ async def get_providers(db: AsyncSession = Depends(get_db)) -> dict:
     "/local-login",
     summary="Log in with username and password",
     response_model=LoginResponse,
-    responses=std_responses(_UNAUTH, RATE_LIMITED, {403: {"model": ErrorResponse, "description": "Local login is disabled."}}),
+    responses=std_responses(_UNAUTH, RATE_LIMITED, error_group(403, "Local login is disabled.")),
 )
 async def local_login(
     body: LocalLoginRequest,
@@ -166,7 +172,8 @@ async def local_login(
     response_class=RedirectResponse,
     status_code=302,
     responses=std_responses(
-        {302: {"description": "Redirect to the OIDC provider (or to / after an automatic dev-mode login).", "headers": _REDIRECT_HDR}},
+        {302: {"description": "Redirect to the OIDC provider (or to / after an automatic dev-mode "
+            "login).", "headers": _REDIRECT_HDR}},
         _UNAVAILABLE,
     ),
 )
@@ -317,7 +324,8 @@ async def list_tokens(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all API tokens, newest first (admin only). Token values are never returned after creation."""
+    """List all API tokens, newest first (admin only). Token values are never returned after
+    creation."""
     result = await db.execute(select(APIToken).order_by(APIToken.created_at.desc()))
     return result.scalars().all()
 

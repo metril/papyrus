@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 """WebDAV/Nextcloud API endpoints."""
 
 from urllib.parse import urlparse
@@ -7,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api_docs import AUTH_ERRORS, NOT_FOUND, SERVER, ErrorResponse, std_responses
+from app.api_docs import AUTH_ERRORS, NOT_FOUND, SERVER, error_group, std_responses
 from app.auth.dependencies import require_permission
 from app.database import get_db
 from app.models import CloudProvider, User
@@ -24,7 +23,8 @@ from app.services.webdav_service import WebDAVConnectError, webdav_service
 
 router = APIRouter()
 
-_BAD = {400: {"model": ErrorResponse, "description": "Missing or invalid fields, or the server could not be reached or authenticated."}}
+_BAD = error_group(400, "Missing or invalid fields, or the server could not be reached or "
+    "authenticated.")
 
 _CONNECT_ERROR_DETAIL = {
     WebDAVConnectError.AUTH: "Authentication failed — check the username and password",
@@ -123,7 +123,8 @@ async def list_webdav_files(
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """List files and folders at `path` on one of the caller's WebDAV connections (permission `files`). Folders come first."""
+    """List files and folders at `path` on one of the caller's WebDAV connections (permission
+    `files`). Folders come first."""
     result = await db.execute(
         select(CloudProvider).where(
             CloudProvider.id == provider_id,

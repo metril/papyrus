@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 import asyncio
 import logging
 import os
@@ -12,9 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_docs import (
     AUTH_ERRORS,
+    BAD_GATEWAY,
     NOT_FOUND,
     VALIDATION,
-    ErrorResponse,
+    error_group,
     file_response,
     std_responses,
 )
@@ -77,14 +77,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _err(code: int, description: str) -> dict:
-    return {code: {"model": ErrorResponse, "description": description}}
-
-
-BAD_REQUEST = _err(400, "The scan is not available (not completed) or the request does not fit it.")
-SOURCE_CONFLICT = _err(409, "Wrong paper source state, e.g. an empty feeder or a back-side page-count mismatch.")
-SCANNER_BUSY = _err(503, "The scanner is busy or unreachable.")
-BAD_GATEWAY = _err(502, "The external service (SMTP, cloud, SMB, Paperless-ngx) failed.")
+BAD_REQUEST = error_group(400, "The scan is not available (not completed) or the request does not "
+    "fit it.")
+SOURCE_CONFLICT = error_group(409, "Wrong paper source state, e.g. an empty feeder or a back-side "
+    "page-count mismatch.")
+SCANNER_BUSY = error_group(503, "The scanner is busy or unreachable.")
 
 
 @router.get(
@@ -100,7 +97,8 @@ async def get_scanner_status(
 ):
     """Report whether the default scanner is reachable.
 
-    Any authenticated user. Uses the default scanner's device (or the configured fallback). Native `brothernet:` devices report `busy: true` while a scan is running and still count as available.
+    Any authenticated user. Uses the default scanner's device (or the configured fallback). Native
+    `brothernet:` devices report `busy: true` while a scan is running and still count as available.
     """
     scanner = await get_default_scanner(db)
     device = scanner.device if scanner else await get_default_scanner_device(db)
@@ -119,7 +117,8 @@ async def get_scanner_options(
 ):
     """List the resolutions, colour modes, formats and sources the default scanner supports.
 
-    Any authenticated user. `feeder_formats` lists the formats usable with the feeder (PDF only on Brother devices, whose feeder always scans the whole stack).
+    Any authenticated user. `feeder_formats` lists the formats usable with the feeder (PDF only on
+    Brother devices, whose feeder always scans the whole stack).
     """
     scanner = await get_default_scanner(db)
     return await scan_service.get_options(scanner.device if scanner else None)
@@ -139,9 +138,15 @@ async def initiate_scan(
 ):
     """Scan one page (or the whole stack) and store the result.
 
-    Requires the `scan` permission. Runs synchronously: progress is broadcast on `/ws/scans/{scan_id}` and the finished row on the `scans` channel (`scan_completed`); fires the `scan.complete` webhook and post-scan actions. Pass `scan_id` to subscribe to progress before posting.
+    Requires the `scan` permission. Runs synchronously: progress is broadcast on
+    `/ws/scans/{scan_id}` and the finished row on the `scans` channel (`scan_completed`); fires the
+    `scan.complete` webhook and post-scan actions. Pass `scan_id` to subscribe to progress before
+    posting.
 
-    Feeder/glass: on Brother devices paper loaded in the feeder takes over a glass request, so the scan can come back as a multi-page PDF with `source=ADF`; check the returned `format`, `source` and `page_count`. An explicit feeder request with an empty feeder returns 409. Feeder scans on those devices are PDF-only (422 otherwise).
+    Feeder/glass: on Brother devices paper loaded in the feeder takes over a glass request, so the
+    scan can come back as a multi-page PDF with `source=ADF`; check the returned `format`, `source`
+    and `page_count`. An explicit feeder request with an empty feeder returns 409. Feeder scans on
+    those devices are PDF-only (422 otherwise).
     """
     from app.routers.settings import get_setting
     scanner = await get_default_scanner(db)
@@ -272,7 +277,9 @@ async def initiate_batch_scan(
 ):
     """Scan every sheet in the feeder into one multi-page document.
 
-    Requires the `scan` permission. Same progress WebSocket, `scan_completed` broadcast, `scan.complete` webhook and post-scan actions as `POST /scans`. Returns 409 when the feeder is empty and 503 while the scanner is busy.
+    Requires the `scan` permission. Same progress WebSocket, `scan_completed` broadcast,
+    `scan.complete` webhook and post-scan actions as `POST /scans`. Returns 409 when the feeder is
+    empty and 503 while the scanner is busy.
     """
     from app.routers.settings import get_setting
     scanner = await get_default_scanner(db)
@@ -400,7 +407,10 @@ async def list_scans(
     "/scans/{scan_id}/download",
     summary="Download a scan file",
     response_class=Response,
-    responses=file_response(["application/pdf", "image/png", "image/jpeg", "image/tiff"], "The scan file, served inline.")
+    responses=file_response(
+        ["application/pdf", "image/png", "image/jpeg", "image/tiff"],
+        "The scan file, served inline.",
+    )
     | std_responses(AUTH_ERRORS, NOT_FOUND, BAD_REQUEST),
 )
 async def download_scan(
@@ -410,7 +420,8 @@ async def download_scan(
 ):
     """Download the file of a completed scan, served inline.
 
-    Requires the `scan` permission. 400 when the scan is not completed; 404 when unknown or the file is gone.
+    Requires the `scan` permission. 400 when the scan is not completed; 404 when unknown or the file
+    is gone.
     """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
@@ -443,7 +454,8 @@ async def get_scan_thumbnail(
 ):
     """Return a small cached JPEG preview (about 320px) of a completed scan.
 
-    Requires the `scan` permission. Generated on first request and cached; much cheaper than the full file in list views.
+    Requires the `scan` permission. Generated on first request and cached; much cheaper than the
+    full file in list views.
     """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
@@ -519,9 +531,11 @@ async def upload_scan_to_cloud(
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a completed scan to one of the caller's connected cloud providers (Google Drive, Dropbox or OneDrive).
+    """Upload a completed scan to one of the caller's connected cloud providers (Google Drive,
+    Dropbox or OneDrive).
 
-    Requires the `scan` permission. The response carries `file_id` (Drive, OneDrive) or `path` (Dropbox).
+    Requires the `scan` permission. The response carries `file_id` (Drive, OneDrive) or `path`
+    (Dropbox).
     """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
@@ -666,9 +680,11 @@ async def enhance_scan(
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Apply brightness, contrast, rotation, crop and deskew to a completed image scan, rewriting the file in place.
+    """Apply brightness, contrast, rotation, crop and deskew to a completed image scan, rewriting
+    the file in place.
 
-    Requires the `scan` permission. Image scans only (png/jpeg/tiff); PDFs return 400. Invalidates the cached thumbnail.
+    Requires the `scan` permission. Image scans only (png/jpeg/tiff); PDFs return 400. Invalidates
+    the cached thumbnail.
     """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
@@ -709,7 +725,9 @@ _BACKS_KEPT_MESSAGE = (
     "/scans/{scan_id}/backs",
     summary="Scan the back sides of a feeder PDF",
     response_model=BacksResponse,
-    responses=std_responses(AUTH_ERRORS, NOT_FOUND, BAD_REQUEST, VALIDATION, SOURCE_CONFLICT, SCANNER_BUSY),
+    responses=std_responses(
+        AUTH_ERRORS, NOT_FOUND, BAD_REQUEST, VALIDATION, SOURCE_CONFLICT, SCANNER_BUSY
+    ),
 )
 async def scan_backs(
     scan_id: str,
@@ -717,9 +735,14 @@ async def scan_backs(
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Scan the other side of a feeder PDF: the user flips the stack, the feeder scans the backs, and fronts and backs are interleaved into a NEW scan.
+    """Scan the other side of a feeder PDF: the user flips the stack, the feeder scans the backs,
+    and fronts and backs are interleaved into a NEW scan.
 
-    Requires the `scan` permission; owner or admin only (others get 404). The fronts and the backs both stay in history. The fronts row is marked `duplex_merged` so neither merges again. Broadcasts `scan_completed` per row and fires audit/webhook/post-scan actions for the merged row. 400 when the scan is not an eligible completed feeder PDF; 409 when page counts mismatch (only the backs row is added) or the feeder is empty.
+    Requires the `scan` permission; owner or admin only (others get 404). The fronts and the backs
+    both stay in history. The fronts row is marked `duplex_merged` so neither merges again.
+    Broadcasts `scan_completed` per row and fires audit/webhook/post-scan actions for the merged
+    row. 400 when the scan is not an eligible completed feeder PDF; 409 when page counts mismatch
+    (only the backs row is added) or the feeder is empty.
     """
     from app.routers.settings import get_setting
 
@@ -950,7 +973,8 @@ async def bulk_delete_scans(
 ):
     """Delete scans and their files by scan id; unknown ids are ignored.
 
-    Requires the `scan` permission. Broadcasts `scan_deleted` per id (and `scan_completed` for fronts freed from a duplex merge).
+    Requires the `scan` permission. Broadcasts `scan_deleted` per id (and `scan_completed` for
+    fronts freed from a duplex merge).
     """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id.in_(body.scan_ids)))
     jobs = result.scalars().all()
@@ -1118,7 +1142,8 @@ async def delete_scan(
 ):
     """Delete a scan row and its file.
 
-    Requires the `scan` permission. Fires the `scan.delete` webhook and broadcasts `scan_deleted` on the `scans` channel.
+    Requires the `scan` permission. Fires the `scan.delete` webhook and broadcasts `scan_deleted` on
+    the `scans` channel.
     """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()

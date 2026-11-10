@@ -59,6 +59,7 @@ from app.schemas.jobs import (  # noqa: F401
     PrinterSettings,
     PrinterStatus,
     PrinterUpdate,
+    PrintJobCreatedResponse,
     PrintJobResponse,
     PrintJobUpload,
     ReleaseRequest,

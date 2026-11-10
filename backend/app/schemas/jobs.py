@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 import uuid
 from datetime import datetime
 
@@ -22,7 +21,9 @@ class PrintJobResponse(BaseModel):
         default=None, description="Owner; null for network (CUPS) jobs.",
         examples=["3f1c2b4e-8a57-4c1d-9e0b-6a2f5d7c1b90"],
     )
-    cups_job_id: int | None = Field(description="CUPS job id once queued, else null.", examples=[17])
+    cups_job_id: int | None = Field(
+        description="CUPS job id once queued, else null.", examples=[17]
+    )
     title: str = Field(description="Document title.", examples=["Quarterly report"])
     filename: str = Field(description="Stored file name.", examples=["report.pdf"])
     file_size: int = Field(description="File size in bytes.", examples=[184320])
@@ -34,9 +35,13 @@ class PrintJobResponse(BaseModel):
     copies: int = Field(description="Number of copies.", examples=[1])
     duplex: bool = Field(description="Two-sided printing.")
     media: str = Field(description="Paper size.", examples=["A4"])
-    source_type: str = Field(description="Origin of the job (upload, email, network, ...).", examples=["upload"])
-    printer_id: int | None = Field(default=None, description="Assigned printer; null means the default.", examples=[1])
-    has_pin: bool = Field(default=False, description="True when a release PIN is set (the PIN itself is never returned).")
+    source_type: str = Field(
+        description="Origin of the job (upload, email, network, ...).", examples=["upload"]
+    )
+    printer_id: int | None = Field(default=None, description="Assigned printer; null means the "
+        "default.", examples=[1])
+    has_pin: bool = Field(default=False, description="True when a release PIN is set (the PIN "
+        "itself is never returned).")
     error_message: str | None = Field(description="Failure reason, if any.", examples=[None])
     created_at: datetime = Field(description="Creation time (UTC).")
     updated_at: datetime = Field(description="Last update time (UTC).")
@@ -56,6 +61,16 @@ class PrintJobResponse(BaseModel):
         return obj
 
 
+class PrintJobCreatedResponse(PrintJobResponse):
+    """Response of ``POST /upload``: the job plus its release PIN when one was set."""
+
+    release_pin: str | None = Field(
+        default=None,
+        description="Release PIN (supplied or generated). Shown once in this response only.",
+        examples=["4821"],
+    )
+
+
 def serialize_print_job(job) -> dict:
     """Serialize a PrintJob ORM object into the exact JSON shape returned by the
     print-job list/detail endpoints (``PrintJobResponse``).
@@ -71,9 +86,21 @@ def serialize_print_job(job) -> dict:
 class CopyRequest(BaseModel):
     """Scan-then-print request."""
 
-    resolution: int = Field(default=300, ge=75, le=600, description="Scan resolution in dpi.", examples=[300])
-    mode: str = Field(default="Color", pattern="^(Color|Gray|Lineart)$", description="Scan colour mode.", examples=["Color"])
-    source: str = Field(default="Flatbed", pattern="^(Flatbed|ADF)$", description="Scan source.", examples=["Flatbed"])
+    resolution: int = Field(
+        default=300, ge=75, le=600, description="Scan resolution in dpi.", examples=[300]
+    )
+    mode: str = Field(
+        default="Color",
+        pattern="^(Color|Gray|Lineart)$",
+        description="Scan colour mode.",
+        examples=["Color"],
+    )
+    source: str = Field(
+        default="Flatbed",
+        pattern="^(Flatbed|ADF)$",
+        description="Scan source.",
+        examples=["Flatbed"],
+    )
     copies: int = Field(default=1, ge=1, le=99, description="Copies to print.", examples=[1])
     duplex: bool = Field(default=False, description="Print on both sides.")
     media: str = Field(default="A4", description="Paper size.", examples=["A4"])
@@ -98,11 +125,15 @@ class MarkerLevel(BaseModel):
 class PrinterStatus(BaseModel):
     """Live CUPS status of a printer queue."""
 
-    state: int = Field(description="IPP printer-state: 3=idle, 4=printing, 5=stopped.", examples=[3])
+    state: int = Field(
+        description="IPP printer-state: 3=idle, 4=printing, 5=stopped.", examples=[3]
+    )
     state_message: str = Field(description="Human-readable state message.", examples=[""])
     accepting_jobs: bool = Field(description="Whether the queue accepts jobs.")
     markers: list[MarkerLevel] = Field(default=[], description="Consumable levels.")
-    state_reasons: list[str] = Field(default=[], description="IPP printer-state-reasons.", examples=[["none"]])
+    state_reasons: list[str] = Field(
+        default=[], description="IPP printer-state-reasons.", examples=[["none"]]
+    )
 
 
 class PrinterSettings(BaseModel):
@@ -114,24 +145,39 @@ class PrinterSettings(BaseModel):
 
 
 class PrinterOptions(BaseModel):
-    """Capabilities reported by the printer. All fields are absent (empty object) if CUPS cannot be queried."""
+    """Capabilities reported by the printer. All fields are absent (empty object) if CUPS cannot
+    be queried."""
 
-    media_supported: list[str] = Field(default=[], description="Supported paper sizes.", examples=[["iso_a4_210x297mm"]])
-    media_default: str = Field(default="A4", description="Default paper size.", examples=["iso_a4_210x297mm"])
-    sides_supported: list[str] = Field(default=[], description="Supported duplex modes.", examples=[["one-sided", "two-sided-long-edge"]])
-    color_supported: bool = Field(default=False, description="Whether colour printing is supported.")
+    media_supported: list[str] = Field(
+        default=[], description="Supported paper sizes.", examples=[["iso_a4_210x297mm"]]
+    )
+    media_default: str = Field(
+        default="A4", description="Default paper size.", examples=["iso_a4_210x297mm"]
+    )
+    sides_supported: list[str] = Field(
+        default=[],
+        description="Supported duplex modes.",
+        examples=[["one-sided", "two-sided-long-edge"]],
+    )
+    color_supported: bool = Field(
+        default=False, description="Whether colour printing is supported."
+    )
 
 
 class LoadedPaper(BaseModel):
     """Paper loaded in the default printer."""
 
-    media: str | None = Field(description="A4, Letter or Legal; null when unknown.", examples=["A4"])
+    media: str | None = Field(
+        description="A4, Letter or Legal; null when unknown.", examples=["A4"]
+    )
 
 
 class BulkDeleteJobsRequest(BaseModel):
     """Job ids to delete."""
 
-    ids: list[int] = Field(min_length=1, max_length=100, description="Job ids (1-100).", examples=[[1, 2, 3]])
+    ids: list[int] = Field(
+        min_length=1, max_length=100, description="Job ids (1-100).", examples=[[1, 2, 3]]
+    )
 
 
 class PrinterAssign(BaseModel):
@@ -143,23 +189,36 @@ class PrinterAssign(BaseModel):
 class ReleaseRequest(BaseModel):
     """Optional release PIN."""
 
-    pin: str | None = Field(default=None, description="Release PIN, required if the job has one.", examples=["1234"])
+    pin: str | None = Field(
+        default=None, description="Release PIN, required if the job has one.", examples=["1234"]
+    )
 
 
 class ReprintRequest(BaseModel):
     """Optional PIN for reprinting a PIN-protected job."""
 
-    pin: str | None = Field(default=None, description="PIN of the original job, if it has one.", examples=["1234"])
+    pin: str | None = Field(
+        default=None, description="PIN of the original job, if it has one.", examples=["1234"]
+    )
 
 
 class PrinterCreate(BaseModel):
     """New printer / network hold queue."""
 
-    display_name: str = Field(description="Name shown in the UI (also seeds the CUPS queue name).", examples=["Office Brother"])
-    uri: str = Field(default="", description="Device URI, e.g. ipp://host/ipp.", examples=["ipp://192.168.1.50:631/ipp/print"])
+    display_name: str = Field(
+        description="Name shown in the UI (also seeds the CUPS queue name).",
+        examples=["Office Brother"],
+    )
+    uri: str = Field(
+        default="",
+        description="Device URI, e.g. ipp://host/ipp.",
+        examples=["ipp://192.168.1.50:631/ipp/print"],
+    )
     description: str | None = Field(default=None, description="Free-text description.")
-    is_network_queue: bool = Field(default=False, description="Create a hold-only queue for network clients instead of a physical printer.")
-    auto_release: bool = Field(default=False, description="Print network jobs immediately instead of holding them.")
+    is_network_queue: bool = Field(default=False, description="Create a hold-only queue for "
+        "network clients instead of a physical printer.")
+    auto_release: bool = Field(default=False, description="Print network jobs immediately instead "
+        "of holding them.")
 
 
 class PrinterUpdate(BaseModel):
@@ -179,25 +238,36 @@ class PrinterInfo(BaseModel):
     cups_name: str = Field(description="CUPS queue name.", examples=["Office_Brother"])
     uri: str = Field(description="Device URI.", examples=["ipp://192.168.1.50:631/ipp/print"])
     description: str | None = Field(description="Description.")
-    make_and_model: str | None = Field(description="Make and model from IPP probing.", examples=["Brother DCP-L2540DW"])
+    make_and_model: str | None = Field(
+        description="Make and model from IPP probing.", examples=["Brother DCP-L2540DW"]
+    )
     location: str | None = Field(description="Location from IPP probing.", examples=["Office"])
     is_default: bool = Field(description="Whether this is the default printer.")
     is_network_queue: bool = Field(description="True for a hold-only network queue.")
     auto_release: bool = Field(description="Network jobs print without being held.")
     created_at: datetime = Field(description="Creation time (UTC).")
-    cups_status: PrinterStatus = Field(description="Live CUPS status (stopped/Unavailable when CUPS cannot be reached).")
+    cups_status: PrinterStatus = Field(description="Live CUPS status (stopped/Unavailable when "
+        "CUPS cannot be reached).")
 
 
 class DiscoveredPrinter(BaseModel):
     """A printer found via mDNS."""
 
     name: str = Field(description="mDNS service name.", examples=["Brother DCP-L2540DW series"])
-    make_model: str | None = Field(default=None, description="Make and model.", examples=["Brother DCP-L2540DW series"])
+    make_model: str | None = Field(
+        default=None, description="Make and model.", examples=["Brother DCP-L2540DW series"]
+    )
     location: str | None = Field(default=None, description="Advertised location.")
     uuid: str | None = Field(default=None, description="Device UUID.")
     protocols: list[str] = Field(description="Protocols seen.", examples=[["ipp", "ipps"]])
-    uri: str | None = Field(default=None, description="Preferred device URI.", examples=["ipp://192.168.1.50:631/ipp/print"])
-    ip: str | None = Field(default=None, description="Device IP address.", examples=["192.168.1.50"])
+    uri: str | None = Field(
+        default=None,
+        description="Preferred device URI.",
+        examples=["ipp://192.168.1.50:631/ipp/print"],
+    )
+    ip: str | None = Field(
+        default=None, description="Device IP address.", examples=["192.168.1.50"]
+    )
     port: int | None = Field(default=None, description="Service port.", examples=[631])
     already_configured: bool = Field(description="Already added as a printer.")
 
@@ -212,7 +282,9 @@ class PrinterProbeResponse(BaseModel):
     """Reachability and IPP details for an IP address."""
 
     reachable: bool = Field(description="TCP 631 or 80 answered.")
-    uri: str = Field(description="Suggested device URI.", examples=["ipp://192.168.1.50:631/ipp/print"])
+    uri: str = Field(
+        description="Suggested device URI.", examples=["ipp://192.168.1.50:631/ipp/print"]
+    )
     make_model: str | None = Field(description="Make and model, if IPP answered.")
     location: str | None = Field(description="Location, if IPP answered.")
     state: int | None = Field(description="IPP printer state, if IPP answered.")

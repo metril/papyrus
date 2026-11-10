@@ -123,7 +123,7 @@ async def test_upload_creates_held_job_with_file_on_disk(db, user_client, tmp_pa
     body = resp.json()
     assert body["status"] == "held"
     assert body["filename"] == "test.pdf"
-    assert "release_pin" not in body
+    assert body.get("release_pin") is None
 
     on_disk = list(tmp_path.iterdir())
     assert len(on_disk) == 1
@@ -222,6 +222,13 @@ async def test_upload_with_required_pin_setting_returns_generated_pin(db, user_c
     assert len(body["release_pin"]) == 4
     assert body["release_pin"].isdigit()
     assert body["has_pin"] is True
+
+
+def test_upload_response_model_documents_release_pin():
+    from app.main import app
+
+    schema = app.openapi()["components"]["schemas"]["PrintJobCreatedResponse"]
+    assert "release_pin" in schema["properties"]
 
 
 # --------------------------------------------------------------------------- #

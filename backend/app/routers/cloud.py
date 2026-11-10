@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 import mimetypes
 import os
 import secrets
@@ -10,7 +9,13 @@ from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api_docs import AUTH_ERRORS, NOT_FOUND, ErrorResponse, file_response, std_responses
+from app.api_docs import (
+    AUTH_ERRORS,
+    NOT_FOUND,
+    error_group,
+    file_response,
+    std_responses,
+)
 from app.auth.dependencies import require_permission
 from app.config import settings
 from app.database import get_db
@@ -23,8 +28,9 @@ from app.services.http_client import get_http_client
 
 router = APIRouter()
 
-_BAD = {400: {"model": ErrorResponse, "description": "Unknown or unconfigured provider, invalid OAuth state, or a missing required parameter."}}
-_UPSTREAM = {502: {"model": ErrorResponse, "description": "The cloud provider failed or the connection needs reconnecting."}}
+_BAD = error_group(400, "Unknown or unconfigured provider, invalid OAuth state, or a missing "
+    "required parameter.")
+_UPSTREAM = error_group(502, "The cloud provider failed or the connection needs reconnecting.")
 _LOC = {"Location": {"description": "Target URL.", "schema": {"type": "string"}}}
 
 # F119: a bounded timeout on the token-exchange requests -- these three
@@ -55,7 +61,10 @@ def _content_disposition_for(content_type: str) -> str:
 
 GDRIVE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GDRIVE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GDRIVE_SCOPES = "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file"
+GDRIVE_SCOPES = (
+    "https://www.googleapis.com/auth/drive.readonly "
+    "https://www.googleapis.com/auth/drive.file"
+)
 
 DROPBOX_AUTH_URL = "https://www.dropbox.com/oauth2/authorize"
 DROPBOX_TOKEN_URL = "https://api.dropboxapi.com/oauth2/token"
@@ -103,7 +112,8 @@ async def disconnect_provider(
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete one of the caller's stored provider connections and its tokens (permission `files`)."""
+    """Delete one of the caller's stored provider connections and its tokens (permission
+    `files`)."""
     result = await db.execute(
         select(CloudProvider).where(
             CloudProvider.id == provider_id,
@@ -137,7 +147,8 @@ async def authorize_provider(
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Redirect the browser to the OAuth consent screen for `gdrive`, `dropbox` or `onedrive` (permission `files`).
+    """Redirect the browser to the OAuth consent screen for `gdrive`, `dropbox` or `onedrive`
+    (permission `files`).
 
     Stores a CSRF state in the session. 400 when the provider is unknown or
     its client credentials are not configured in Settings.
@@ -205,7 +216,8 @@ async def authorize_provider(
     response_class=RedirectResponse,
     status_code=303,
     responses=std_responses(
-        {303: {"description": "Connected; redirect to /settings?cloud=connected.", "headers": _LOC}},
+        {303: {"description": "Connected; redirect to /settings?cloud=connected.", "headers":
+        _LOC}},
         AUTH_ERRORS,
         _BAD,
         _UPSTREAM,
@@ -219,7 +231,8 @@ async def oauth_callback(
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Complete the OAuth flow (redirect target registered at the provider; browser use only, permission `files`).
+    """Complete the OAuth flow (redirect target registered at the provider; browser use only,
+    permission `files`).
 
     Verifies the session state, exchanges the code, stores the tokens
     encrypted (creating or refreshing the caller's connection) and redirects
@@ -400,7 +413,8 @@ def _cleanup_temp_file(path: str):
     "/download/{provider_id}",
     summary="Download a cloud file",
     response_class=Response,
-    responses=file_response(["application/octet-stream", "application/pdf"], "The file; types on a safe list are served inline, everything else as an attachment.")
+    responses=file_response(["application/octet-stream", "application/pdf"], "The file; types on a "
+        "safe list are served inline, everything else as an attachment.")
     | std_responses(AUTH_ERRORS, NOT_FOUND, _BAD, _UPSTREAM),
 )
 async def download_file(

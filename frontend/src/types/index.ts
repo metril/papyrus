@@ -37,7 +37,7 @@ export interface PrintJob {
   source_type: 'upload' | 'smb' | 'cloud' | 'email' | 'network' | 'test_page';
   printer_id: number | null;
   has_pin: boolean;
-  release_pin?: string;
+  release_pin?: string | null;
   error_message: string | null;
   created_at: string;
   updated_at: string;
