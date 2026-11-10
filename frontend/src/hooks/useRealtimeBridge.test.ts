@@ -361,14 +361,14 @@ describe('useRealtimeBridge (F144: first-connect invalidation)', () => {
 
   it('invalidates once when cached data predates the socket opening (missed-event race)', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    // Simulates GET /api/jobs resolving before the socket opens: a
+    // Simulates GET /api/v1/jobs resolving before the socket opens: a
     // job_created broadcast in between would have reached no listener.
     qc.setQueryData(queryKeys.jobs.list(), { items: [], total: 0, limit: 50, offset: 0 }, { updatedAt: Date.now() - 10_000 });
 
     renderHook(() => useRealtimeBridge(), { wrapper: makeWrapper(qc) });
     expect(qc.getQueryState(queryKeys.jobs.list())?.isInvalidated).toBe(false);
 
-    act(() => socketFor('/api/system/ws/jobs').simulateOpen());
+    act(() => socketFor('/api/v1/ws/jobs').simulateOpen());
 
     expect(qc.getQueryState(queryKeys.jobs.list())?.isInvalidated).toBe(true);
   });
@@ -379,7 +379,7 @@ describe('useRealtimeBridge (F144: first-connect invalidation)', () => {
     qc.setQueryData(queryKeys.jobs.list(), { items: [], total: 0, limit: 50, offset: 0 }, { updatedAt: Date.now() + 10_000 });
 
     renderHook(() => useRealtimeBridge(), { wrapper: makeWrapper(qc) });
-    act(() => socketFor('/api/system/ws/jobs').simulateOpen());
+    act(() => socketFor('/api/v1/ws/jobs').simulateOpen());
 
     expect(qc.getQueryState(queryKeys.jobs.list())?.isInvalidated).toBe(false);
   });
@@ -388,7 +388,7 @@ describe('useRealtimeBridge (F144: first-connect invalidation)', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
     renderHook(() => useRealtimeBridge(), { wrapper: makeWrapper(qc) });
-    act(() => socketFor('/api/system/ws/jobs').simulateOpen());
+    act(() => socketFor('/api/v1/ws/jobs').simulateOpen());
 
     expect(qc.getQueryCache().find({ queryKey: queryKeys.jobs.list() })).toBeUndefined();
   });
@@ -402,7 +402,7 @@ describe('useRealtimeBridge (F144: first-connect invalidation)', () => {
     qc.setQueryData(queryKeys.jobs.list(), { items: [], total: 0, limit: 50, offset: 0 }, { updatedAt: Date.now() + 10_000 });
 
     renderHook(() => useRealtimeBridge(), { wrapper: makeWrapper(qc) });
-    const first = socketFor('/api/system/ws/jobs');
+    const first = socketFor('/api/v1/ws/jobs');
     act(() => first.simulateOpen());
     expect(qc.getQueryState(queryKeys.jobs.list())?.isInvalidated).toBe(false);
 

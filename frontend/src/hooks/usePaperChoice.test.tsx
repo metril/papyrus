@@ -14,7 +14,7 @@ function wrapper({ children }: { children: ReactNode }) {
 const ALLOWED = ['A4', 'Letter'];
 
 function paper(media: string | null) {
-  server.use(http.get('/api/printer/paper', () => HttpResponse.json({ media })));
+  server.use(http.get('/api/v1/printers/default/paper', () => HttpResponse.json({ media })));
 }
 
 describe('usePaperChoice', () => {
@@ -40,7 +40,7 @@ describe('usePaperChoice', () => {
   });
 
   it('falls back to A4 when the request fails', async () => {
-    server.use(http.get('/api/printer/paper', () => new HttpResponse(null, { status: 500 })));
+    server.use(http.get('/api/v1/printers/default/paper', () => new HttpResponse(null, { status: 500 })));
     const { result } = renderHook(() => usePaperChoice(ALLOWED), { wrapper });
     await new Promise((r) => setTimeout(r, 50));
     expect(result.current[0]).toBe('A4');
@@ -48,7 +48,7 @@ describe('usePaperChoice', () => {
 
   it('does not overwrite an explicit choice when the query resolves', async () => {
     server.use(
-      http.get('/api/printer/paper', async () => {
+      http.get('/api/v1/printers/default/paper', async () => {
         await delay(30);
         return HttpResponse.json({ media: 'Letter' });
       }),

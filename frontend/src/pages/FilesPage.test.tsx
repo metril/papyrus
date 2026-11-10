@@ -19,12 +19,12 @@ function makeWrapper() {
 describe('NetworkBrowser (via FilesPage)', () => {
   it('renders shares, then a share listing from msw when one is opened', async () => {
     server.use(
-      http.get('/api/smb/shares', () =>
+      http.get('/api/v1/smb/shares', () =>
         HttpResponse.json([
           { id: 1, name: 'Office Share', server: 'nas', share_name: 'docs', username: null, domain: '', created_at: '2026-01-01T00:00:00Z' },
         ]),
       ),
-      http.get('/api/smb/browse/1', ({ request }) => {
+      http.get('/api/v1/smb/browse/1', ({ request }) => {
         const url = new URL(request.url);
         expect(url.searchParams.get('path')).toBe('/');
         return HttpResponse.json([
@@ -50,19 +50,19 @@ describe('NetworkBrowser (via FilesPage)', () => {
 // provider" — surfaced as "Failed to browse cloud storage" for a provider
 // that's actually reachable. It should route to /webdav/{id}/files instead.
 describe('CloudBrowser webdav dispatch (via FilesPage)', () => {
-  it('browses a webdav provider via /api/webdav/{id}/files, not /api/cloud/files/{id}, and labels it correctly', async () => {
+  it('browses a webdav provider via /api/v1/webdav/{id}/files, not /api/v1/cloud/files/{id}, and labels it correctly', async () => {
     let cloudFilesHit = false;
     server.use(
-      http.get('/api/cloud/providers', () =>
+      http.get('/api/v1/cloud/providers', () =>
         HttpResponse.json({
           providers: [{ id: 3, provider: 'webdav', connected_at: '2026-01-03T00:00:00Z' }],
         }),
       ),
-      http.get('/api/cloud/files/3', () => {
+      http.get('/api/v1/cloud/files/3', () => {
         cloudFilesHit = true;
         return HttpResponse.json({ detail: 'Unknown provider' }, { status: 400 });
       }),
-      http.get('/api/webdav/3/files', ({ request }) => {
+      http.get('/api/v1/webdav/3/files', ({ request }) => {
         expect(new URL(request.url).searchParams.get('path')).toBe('/');
         return HttpResponse.json([
           { name: 'notes.txt', path: '/notes.txt', is_directory: false, size: 12, modified_at: null, mime_type: 'text/plain' },

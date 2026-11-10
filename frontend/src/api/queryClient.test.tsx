@@ -29,7 +29,7 @@ describe('queryClient global error handling', () => {
     useToastStore.setState({ toasts: [] });
     queryClient.clear();
     server.use(
-      http.get('/api/test-error', () =>
+      http.get('/api/v1/test-error', () =>
         HttpResponse.json({ detail: 'boom' }, { status: 500 }),
       ),
     );
@@ -76,7 +76,7 @@ describe('queryClient default retry predicate (F143)', () => {
   it('does not retry a 4xx — one request, then gives up', async () => {
     let getCount = 0;
     server.use(
-      http.get('/api/test-error', () => {
+      http.get('/api/v1/test-error', () => {
         getCount += 1;
         return HttpResponse.json({ detail: 'nope' }, { status: 403 });
       }),
@@ -91,7 +91,7 @@ describe('queryClient default retry predicate (F143)', () => {
   it('retries once on a 500 before giving up', async () => {
     let getCount = 0;
     server.use(
-      http.get('/api/test-error', () => {
+      http.get('/api/v1/test-error', () => {
         getCount += 1;
         return HttpResponse.json({ detail: 'boom' }, { status: 500 });
       }),

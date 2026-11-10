@@ -20,13 +20,13 @@ function makeWrapper() {
 // those components.
 function mockAncillaryEndpoints() {
   server.use(
-    http.get('/api/printers', () => HttpResponse.json([])),
-    http.get('/api/scanners', () => HttpResponse.json([])),
-    http.get('/api/cloud/providers', () => HttpResponse.json({ providers: [] })),
-    http.get('/api/webhooks', () => HttpResponse.json([])),
-    http.get('/api/webhooks/events', () => HttpResponse.json([])),
-    http.get('/api/auth/tokens', () => HttpResponse.json([])),
-    http.get('/api/email/webhook-info', () =>
+    http.get('/api/v1/printers', () => HttpResponse.json([])),
+    http.get('/api/v1/scanners', () => HttpResponse.json([])),
+    http.get('/api/v1/cloud/providers', () => HttpResponse.json({ providers: [] })),
+    http.get('/api/v1/webhooks', () => HttpResponse.json([])),
+    http.get('/api/v1/webhooks/events', () => HttpResponse.json([])),
+    http.get('/api/v1/auth/tokens', () => HttpResponse.json([])),
+    http.get('/api/v1/email/webhook-info', () =>
       HttpResponse.json({ webhook_url: 'https://papyrus.test/api/email/receive', configured: false })
     ),
   );
@@ -39,7 +39,7 @@ describe('SettingsPage', () => {
 
   it('shows a spinner while loading, then feeds fetched settings into the value cards', async () => {
     server.use(
-      http.get('/api/settings', () => HttpResponse.json({ base_url: 'https://old.example.com' })),
+      http.get('/api/v1/settings', () => HttpResponse.json({ base_url: 'https://old.example.com' })),
     );
 
     render(<SettingsPage />, { wrapper: makeWrapper() });
@@ -54,7 +54,7 @@ describe('SettingsPage', () => {
 
   it('shows the error banner copy when the initial load fails', async () => {
     server.use(
-      http.get('/api/settings', () =>
+      http.get('/api/v1/settings', () =>
         HttpResponse.json({ detail: 'db unavailable' }, { status: 500 })
       ),
     );
@@ -71,7 +71,7 @@ describe('SettingsPage', () => {
     let getCount = 0;
 
     server.use(
-      http.get('/api/settings', () => {
+      http.get('/api/v1/settings', () => {
         getCount += 1;
         return HttpResponse.json(
           getCount === 1
@@ -79,7 +79,7 @@ describe('SettingsPage', () => {
             : { base_url: 'https://new.example.com' }
         );
       }),
-      http.put('/api/settings', async ({ request }) => {
+      http.put('/api/v1/settings', async ({ request }) => {
         putBody = (await request.json()) as Record<string, string>;
         return HttpResponse.json({});
       }),

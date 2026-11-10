@@ -12,7 +12,7 @@ function makeWrapper() {
 }
 
 describe('useJobs', () => {
-  it('returns the raw { jobs, total } shape from the msw-mocked /api/jobs', async () => {
+  it('returns the raw { jobs, total } shape from the msw-mocked /api/v1/jobs', async () => {
     const { result } = renderHook(() => useJobs(), { wrapper: makeWrapper() });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));

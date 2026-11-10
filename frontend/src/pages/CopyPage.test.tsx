@@ -17,10 +17,10 @@ function renderPage() {
 
 describe('CopyPage paper default', () => {
   it('defaults to the printer paper and sends it', async () => {
-    server.use(http.get('/api/printer/paper', () => HttpResponse.json({ media: 'Letter' })));
+    server.use(http.get('/api/v1/printers/default/paper', () => HttpResponse.json({ media: 'Letter' })));
     let body: { media?: string } = {};
     server.use(
-      http.post('/api/copy', async ({ request }) => {
+      http.post('/api/v1/copy', async ({ request }) => {
         body = (await request.json()) as { media?: string };
         return HttpResponse.json({ message: 'ok', scan_id: 's', cups_job_id: 1 });
       }),

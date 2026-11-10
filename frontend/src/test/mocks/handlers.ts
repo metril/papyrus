@@ -31,14 +31,14 @@ export function makeDashboardStats(overrides: Partial<DashboardStats> = {}): Das
 }
 
 export const handlers: RequestHandler[] = [
-  http.get('/api/jobs', () => {
+  http.get('/api/v1/jobs', () => {
     return HttpResponse.json({ items: [], total: 0, limit: 50, offset: 0 });
   }),
-  http.get('/api/admin/stats', () => {
+  http.get('/api/v1/admin/stats', () => {
     return HttpResponse.json(makeDashboardStats());
   }),
-  http.get('/api/printer/paper', () => HttpResponse.json({ media: null })),
-  http.get('/api/printer/status', () => {
+  http.get('/api/v1/printers/default/paper', () => HttpResponse.json({ media: null })),
+  http.get('/api/v1/printers/default/status', () => {
     return HttpResponse.json({
       state: 3,
       state_message: 'Ready',

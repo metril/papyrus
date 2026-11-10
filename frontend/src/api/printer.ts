@@ -2,17 +2,17 @@ import api from './client';
 import type { Page, PrinterStatus, PrintJob } from '../types';
 
 export async function getPrinterStatus(): Promise<PrinterStatus> {
-  const { data } = await api.get('/printer/status');
+  const { data } = await api.get('/printers/default/status');
   return data;
 }
 
 export async function getLoadedPaper(): Promise<string | null> {
-  const { data } = await api.get<{ media: string | null }>('/printer/paper');
+  const { data } = await api.get<{ media: string | null }>('/printers/default/paper');
   return data.media;
 }
 
 export async function getPrinterSettings(): Promise<Record<string, unknown>> {
-  const { data } = await api.get('/printer/settings');
+  const { data } = await api.get('/printers/default/settings');
   return data;
 }
 

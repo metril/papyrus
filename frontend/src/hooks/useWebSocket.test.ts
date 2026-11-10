@@ -93,10 +93,10 @@ afterEach(() => {
 
 describe('useWebSocket', () => {
   it('opens a socket derived from the given url and reports connected on open', () => {
-    const { result } = renderHook(() => useWebSocket({ url: '/api/system/ws/jobs' }));
+    const { result } = renderHook(() => useWebSocket({ url: '/api/v1/ws/jobs' }));
 
     expect(MockWebSocket.instances).toHaveLength(1);
-    expect(latestSocket().url).toContain('/api/system/ws/jobs');
+    expect(latestSocket().url).toContain('/api/v1/ws/jobs');
     expect(result.current.connected).toBe(false);
 
     act(() => latestSocket().simulateOpen());

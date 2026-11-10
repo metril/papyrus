@@ -16,7 +16,7 @@ function makeWrapper() {
 describe('PrinterDiscovery', () => {
   it('renders a discovered device once the scan resolves', async () => {
     server.use(
-      http.get('/api/printers/discover', () =>
+      http.get('/api/v1/printers/discover', () =>
         HttpResponse.json({
           printers: [
             {
@@ -47,7 +47,7 @@ describe('PrinterDiscovery', () => {
 
   it('shows the error state — not the empty-state copy — when discovery fails', async () => {
     server.use(
-      http.get('/api/printers/discover', () =>
+      http.get('/api/v1/printers/discover', () =>
         HttpResponse.json({ detail: 'boom' }, { status: 500 }),
       ),
     );

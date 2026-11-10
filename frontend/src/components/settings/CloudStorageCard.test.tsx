@@ -18,7 +18,7 @@ describe('CloudStorageCard', () => {
   it('disconnects a provider: DELETE fires, the list refetches, and the row disappears', async () => {
     let getCount = 0;
     server.use(
-      http.get('/api/cloud/providers', () => {
+      http.get('/api/v1/cloud/providers', () => {
         getCount += 1;
         return HttpResponse.json({
           providers:
@@ -27,7 +27,7 @@ describe('CloudStorageCard', () => {
               : [],
         });
       }),
-      http.delete('/api/cloud/disconnect/1', () => new HttpResponse(null, { status: 204 })),
+      http.delete('/api/v1/cloud/providers/1', () => new HttpResponse(null, { status: 204 })),
     );
 
     const user = userEvent.setup();

@@ -18,7 +18,7 @@ describe('CloudSaveDialog (F149)', () => {
   it('fetches providers via the Query cache (useCloudProviders) and labels every provider kind correctly', async () => {
     let providerGetCount = 0;
     server.use(
-      http.get('/api/cloud/providers', () => {
+      http.get('/api/v1/cloud/providers', () => {
         providerGetCount += 1;
         return HttpResponse.json({
           providers: [
@@ -44,10 +44,10 @@ describe('CloudSaveDialog (F149)', () => {
   it('saves a gdrive/dropbox/onedrive provider via /scanner/scans/{id}/cloud', async () => {
     let providerId: string | null = null;
     server.use(
-      http.get('/api/cloud/providers', () =>
+      http.get('/api/v1/cloud/providers', () =>
         HttpResponse.json({ providers: [{ id: 1, provider: 'gdrive', connected_at: '2026-01-01T00:00:00Z' }] }),
       ),
-      http.post('/api/scanner/scans/scan-1/cloud', ({ request }) => {
+      http.post('/api/v1/scans/scan-1/cloud', ({ request }) => {
         providerId = new URL(request.url).searchParams.get('provider_id');
         return HttpResponse.json({ message: 'ok' });
       }),
@@ -68,14 +68,14 @@ describe('CloudSaveDialog (F149)', () => {
     let webdavPostBody: unknown = null;
     let cloudEndpointHit = false;
     server.use(
-      http.get('/api/cloud/providers', () =>
+      http.get('/api/v1/cloud/providers', () =>
         HttpResponse.json({ providers: [{ id: 3, provider: 'webdav', connected_at: '2026-01-03T00:00:00Z' }] }),
       ),
-      http.post('/api/webdav/3/upload', async ({ request }) => {
+      http.post('/api/v1/webdav/3/upload', async ({ request }) => {
         webdavPostBody = await request.json();
         return HttpResponse.json({ message: 'Uploaded' });
       }),
-      http.post('/api/scanner/scans/scan-1/cloud', () => {
+      http.post('/api/v1/scans/scan-1/cloud', () => {
         cloudEndpointHit = true;
         return HttpResponse.json({ message: 'ok' });
       }),

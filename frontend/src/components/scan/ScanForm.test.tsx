@@ -46,7 +46,7 @@ describe('ScanForm', () => {
   beforeEach(() => {
     FakeWebSocket.instances = [];
     vi.stubGlobal('WebSocket', FakeWebSocket);
-    server.use(http.get('/api/scanner/profiles', () => HttpResponse.json([])));
+    server.use(http.get('/api/v1/scan-profiles', () => HttpResponse.json([])));
   });
 
   afterEach(() => {
@@ -57,7 +57,7 @@ describe('ScanForm', () => {
     let postedBody: { scan_id?: string } | null = null;
 
     server.use(
-      http.post('/api/scanner/scan', async ({ request }) => {
+      http.post('/api/v1/scans', async ({ request }) => {
         postedBody = (await request.json()) as { scan_id?: string };
         return HttpResponse.json({
           id: 1,
@@ -91,7 +91,7 @@ describe('ScanForm', () => {
     // subscriber existed at all, since the POST doesn't resolve until the
     // scan is done).
     const wsForThisScan = FakeWebSocket.instances.find((ws) =>
-      ws.url.endsWith(`/api/scanner/ws/scan/${sentScanId}`),
+      ws.url.endsWith(`/api/v1/ws/scans/${sentScanId}`),
     );
     expect(wsForThisScan).toBeDefined();
 
@@ -102,7 +102,7 @@ describe('ScanForm', () => {
     const postedIds: string[] = [];
 
     server.use(
-      http.post('/api/scanner/scan', async ({ request }) => {
+      http.post('/api/v1/scans', async ({ request }) => {
         const body = (await request.json()) as { scan_id?: string };
         postedIds.push(body.scan_id!);
         return HttpResponse.json({
@@ -136,7 +136,7 @@ describe('ScanForm', () => {
 
   it('shows the source, format and pages the scan really used', async () => {
     server.use(
-      http.post('/api/scanner/scan', async ({ request }) => {
+      http.post('/api/v1/scans', async ({ request }) => {
         const body = (await request.json()) as { scan_id?: string };
         return HttpResponse.json({
           id: 1,
@@ -165,7 +165,7 @@ describe('ScanForm', () => {
 
   it('adds no note when the scan used what was asked for', async () => {
     server.use(
-      http.post('/api/scanner/scan', async ({ request }) => {
+      http.post('/api/v1/scans', async ({ request }) => {
         const body = (await request.json()) as { scan_id?: string };
         return HttpResponse.json({
           id: 1,
@@ -202,7 +202,7 @@ describe('ScanForm', () => {
 
     async function renderWith(feeder_formats: string[]) {
       server.use(
-        http.get('/api/scanner/options', () => HttpResponse.json({ ...base, feeder_formats })),
+        http.get('/api/v1/scanners/default/options', () => HttpResponse.json({ ...base, feeder_formats })),
       );
       const user = userEvent.setup();
       render(<ScanForm />, { wrapper: makeWrapper() });
@@ -220,7 +220,7 @@ describe('ScanForm', () => {
     it('sends pdf even if a profile or earlier choice was jpeg', async () => {
       let body: { format?: string } = {};
       server.use(
-        http.post('/api/scanner/scan', async ({ request }) => {
+        http.post('/api/v1/scans', async ({ request }) => {
           body = (await request.json()) as { format?: string };
           return HttpResponse.json(
             { id: 1, scan_id: 'x', status: 'completed', format: 'pdf', source: 'ADF', page_count: 1 },

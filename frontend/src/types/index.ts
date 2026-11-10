@@ -1,48 +1,33 @@
-// --- Auth ---
+import type { components } from './api.gen';
 
-export interface User {
-  id: string;
-  email: string;
-  display_name: string;
-  role: string;
-}
+type S = components['schemas'];
 
-export interface APIToken {
-  id: string;
-  name: string;
-  permissions: string[];
-  expires_at: string | null;
-  created_at: string;
-  last_used_at: string | null;
-}
+// Server shapes: aliases of the generated OpenAPI types (npm run gen:api).
+export type User = S['UserResponse'];
+export type APIToken = S['APITokenResponse'];
+export type APITokenCreated = S['APITokenCreated'];
+export type PrintJob = S['PrintJobResponse'];
+export type ScanJob = S['ScanResponse'];
+export type ScanRequest = S['ScanRequest'];
+export type CopyRequest = S['CopyRequest'];
+export type SMBShare = S['SMBShareResponse'];
+export type SMBFileEntry = S['SMBFileEntry'];
+// The server types `provider` as a plain string; the client switches on the known set.
+export type CloudProvider = Omit<S['CloudProviderEntry'], 'provider'> & {
+  provider: 'gdrive' | 'dropbox' | 'onedrive' | 'webdav';
+};
+export type CloudFileEntry = S['CloudFileEntry'];
+export type PrinterStatus = S['PrinterStatus'];
+export type ManagedPrinter = S['PrinterInfo'];
+export type ManagedPrinterCreate = S['PrinterCreate'];
+export type ManagedPrinterUpdate = S['PrinterUpdate'];
+export type DiscoveredPrinter = S['DiscoveredPrinter'];
+export type ManagedScanner = S['ScannerResponse'];
+export type ManagedScannerCreate = S['ScannerCreate'];
+export type ManagedScannerUpdate = S['ScannerUpdate'];
+export type DiscoveredDevice = S['DiscoveredScanner'];
 
-export interface APITokenCreated extends APIToken {
-  token: string;
-}
-
-// --- Print Jobs ---
-
-export interface PrintJob {
-  id: number;
-  user_id: string | null;
-  cups_job_id: number | null;
-  title: string;
-  filename: string;
-  file_size: number;
-  mime_type: string;
-  status: 'held' | 'converting' | 'printing' | 'completed' | 'failed' | 'cancelled';
-  copies: number;
-  duplex: boolean;
-  media: string;
-  source_type: 'upload' | 'smb' | 'cloud' | 'email' | 'network' | 'test_page';
-  printer_id: number | null;
-  has_pin: boolean;
-  release_pin?: string | null;
-  error_message: string | null;
-  created_at: string;
-  updated_at: string;
-  completed_at: string | null;
-}
+// Client-only types.
 
 export interface PrintJobUpload {
   copies: number;
@@ -50,176 +35,6 @@ export interface PrintJobUpload {
   media: string;
   hold: boolean;
 }
-
-// --- Scanner ---
-
-export interface ScanJob {
-  id: number;
-  scan_id: string;
-  status: 'scanning' | 'completed' | 'failed' | 'deleted';
-  resolution: number;
-  mode: 'Color' | 'Gray' | 'Lineart';
-  format: 'png' | 'jpeg' | 'tiff' | 'pdf';
-  source: 'Flatbed' | 'ADF';
-  page_count: number;
-  file_size: number | null;
-  error_message: string | null;
-  created_at: string;
-  completed_at: string | null;
-  duplex_merged: boolean;
-  duplex_source_scan_id: string | null;
-}
-
-export interface ScanRequest {
-  resolution: number;
-  mode: string;
-  format: string;
-  source: string;
-  // F26: generated client-side (crypto.randomUUID()) before the scan starts
-  // so the progress WebSocket can be opened on this id *before* POSTing —
-  // otherwise every scan_progress frame fires before any subscriber exists,
-  // since POST /api/scanner/scan only returns once the scan has finished.
-  scan_id?: string;
-}
-
-// --- Copy ---
-
-export interface CopyRequest {
-  resolution: number;
-  mode: string;
-  source: string;
-  copies: number;
-  duplex: boolean;
-  media: string;
-}
-
-// --- SMB ---
-
-export interface SMBShare {
-  id: number;
-  name: string;
-  server: string;
-  share_name: string;
-  username: string | null;
-  domain: string;
-  created_at: string;
-}
-
-export interface SMBFileEntry {
-  name: string;
-  is_directory: boolean;
-  size: number;
-  modified_at: string | null;
-}
-
-// --- Cloud ---
-
-export interface CloudProvider {
-  id: number;
-  provider: 'gdrive' | 'dropbox' | 'onedrive' | 'webdav';
-  connected_at: string;
-}
-
-export interface CloudFileEntry {
-  name: string;
-  id: string;
-  is_directory: boolean;
-  size: number | null;
-  modified_at: string | null;
-  mime_type: string | null;
-}
-
-// --- Printer ---
-
-export interface PrinterStatus {
-  state: number;
-  state_message: string;
-  accepting_jobs: boolean;
-}
-
-export interface ManagedPrinter {
-  id: number;
-  display_name: string;
-  cups_name: string;
-  uri: string;
-  description: string | null;
-  make_and_model: string | null;
-  location: string | null;
-  is_default: boolean;
-  is_network_queue: boolean;
-  auto_release: boolean;
-  created_at: string;
-  cups_status: PrinterStatus;
-}
-
-export interface ManagedPrinterCreate {
-  display_name: string;
-  uri?: string;
-  description?: string;
-  is_network_queue?: boolean;
-  auto_release?: boolean;
-}
-
-export interface ManagedPrinterUpdate {
-  display_name?: string;
-  uri?: string;
-  description?: string;
-  auto_release?: boolean;
-}
-
-export interface DiscoveredPrinter {
-  name: string;
-  ip: string;
-  port: number;
-  make_model: string | null;
-  location: string | null;
-  uri: string;
-  uuid: string | null;
-  protocols: string[];
-  already_configured: boolean;
-}
-
-// --- Scanner Management ---
-
-export interface ManagedScanner {
-  id: number;
-  name: string;
-  device: string;
-  description: string | null;
-  is_default: boolean;
-  auto_deliver: boolean;
-  post_scan_config: Record<string, unknown> | null;
-  created_at: string;
-}
-
-export interface ManagedScannerCreate {
-  name: string;
-  device: string;
-  description?: string;
-  auto_deliver?: boolean;
-  post_scan_config?: Record<string, unknown>;
-}
-
-export interface ManagedScannerUpdate {
-  name?: string;
-  device?: string;
-  description?: string;
-  auto_deliver?: boolean;
-  post_scan_config?: Record<string, unknown>;
-}
-
-export interface DiscoveredDevice {
-  /** Null for devices that are listed but cannot be added (untested models). */
-  device: string | null;
-  description: string;
-  /** Absent for SANE results. */
-  driver?: 'brothernet';
-  supported?: boolean;
-  ip?: string;
-  busy?: boolean;
-}
-
-// --- WebSocket ---
 
 export interface WSMessage {
   type: string;

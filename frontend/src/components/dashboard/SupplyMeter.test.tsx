@@ -16,7 +16,7 @@ function makeWrapper() {
 
 function serveMarkers(markers: { name: string; level: number; color: string }[]) {
   server.use(
-    http.get('/api/printer/status', () =>
+    http.get('/api/v1/printers/default/status', () =>
       HttpResponse.json({
         state: 3,
         state_message: 'Ready',

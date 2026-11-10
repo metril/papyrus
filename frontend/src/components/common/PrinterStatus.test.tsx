@@ -32,7 +32,7 @@ describe('PrinterStatus', () => {
     useConnectionStore.setState({ printersConnected: false });
 
     server.use(
-      http.get('/api/printer/status', () =>
+      http.get('/api/v1/printers/default/status', () =>
         HttpResponse.json({
           state: 3,
           state_message: 'Ready',

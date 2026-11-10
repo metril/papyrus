@@ -58,8 +58,8 @@ describe('AppShell', () => {
   describe('unauthenticated (F16)', () => {
     it('renders LoginScreen — not a raw JSON error page — when /auth/me 401s, with no forced navigation', async () => {
       server.use(
-        http.get('/api/auth/me', () => HttpResponse.json({ detail: 'Not authenticated' }, { status: 401 })),
-        http.get('/api/auth/providers', () =>
+        http.get('/api/v1/auth/me', () => HttpResponse.json({ detail: 'Not authenticated' }, { status: 401 })),
+        http.get('/api/v1/auth/providers', () =>
           HttpResponse.json({ local_enabled: true, oidc_enabled: false, admin_override: false }),
         ),
       );
@@ -76,8 +76,8 @@ describe('AppShell', () => {
 
     it('shows the SSO button (not a hard redirect) when providers report OIDC as the only method', async () => {
       server.use(
-        http.get('/api/auth/me', () => HttpResponse.json({ detail: 'Not authenticated' }, { status: 401 })),
-        http.get('/api/auth/providers', () =>
+        http.get('/api/v1/auth/me', () => HttpResponse.json({ detail: 'Not authenticated' }, { status: 401 })),
+        http.get('/api/v1/auth/providers', () =>
           HttpResponse.json({ local_enabled: false, oidc_enabled: true, admin_override: false }),
         ),
       );
@@ -91,11 +91,11 @@ describe('AppShell', () => {
 
     it('a wrong local-login password shows the error message in place, instead of navigating away from it', async () => {
       server.use(
-        http.get('/api/auth/me', () => HttpResponse.json({ detail: 'Not authenticated' }, { status: 401 })),
-        http.get('/api/auth/providers', () =>
+        http.get('/api/v1/auth/me', () => HttpResponse.json({ detail: 'Not authenticated' }, { status: 401 })),
+        http.get('/api/v1/auth/providers', () =>
           HttpResponse.json({ local_enabled: true, oidc_enabled: false, admin_override: false }),
         ),
-        http.post('/api/auth/local-login', () =>
+        http.post('/api/v1/auth/local-login', () =>
           HttpResponse.json({ detail: 'Invalid credentials' }, { status: 401 }),
         ),
       );
@@ -126,7 +126,7 @@ describe('AppShell', () => {
 
     beforeEach(() => {
       server.use(
-        http.get('/api/auth/me', () =>
+        http.get('/api/v1/auth/me', () =>
           HttpResponse.json({ id: 'u1', email: 'admin@example.com', display_name: 'Admin', role: 'admin' }),
         ),
       );

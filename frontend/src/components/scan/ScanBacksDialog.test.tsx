@@ -28,7 +28,7 @@ describe('ScanBacksDialog', () => {
   it('sends the defaults (blank removal off, no rotation) and reports the merge', async () => {
     let body: unknown;
     server.use(
-      http.post('/api/scanner/scans/abc/backs', async ({ request }) => {
+      http.post('/api/v1/scans/abc/backs', async ({ request }) => {
         body = await request.json();
         return ok();
       }),
@@ -43,7 +43,7 @@ describe('ScanBacksDialog', () => {
   });
 
   it('says how many blank backs were removed', async () => {
-    server.use(http.post('/api/scanner/scans/abc/backs', () => ok(2)));
+    server.use(http.post('/api/v1/scans/abc/backs', () => ok(2)));
     renderDialog();
     await userEvent.click(screen.getByLabelText(/remove blank backs/i));
     await userEvent.click(screen.getByRole('button', { name: 'Start' }));
@@ -53,7 +53,7 @@ describe('ScanBacksDialog', () => {
   it('sends the chosen options', async () => {
     let body: unknown;
     server.use(
-      http.post('/api/scanner/scans/abc/backs', async ({ request }) => {
+      http.post('/api/v1/scans/abc/backs', async ({ request }) => {
         body = await request.json();
         return ok();
       }),
@@ -67,7 +67,7 @@ describe('ScanBacksDialog', () => {
 
   it('shows the backend refusal and stays open', async () => {
     server.use(
-      http.post('/api/scanner/scans/abc/backs', () =>
+      http.post('/api/v1/scans/abc/backs', () =>
         HttpResponse.json({ detail: 'No pages scanned from ADF' }, { status: 503 }),
       ),
     );
@@ -79,7 +79,7 @@ describe('ScanBacksDialog', () => {
 
   it('locks the form while the long request is running', async () => {
     server.use(
-      http.post('/api/scanner/scans/abc/backs', async () => {
+      http.post('/api/v1/scans/abc/backs', async () => {
         await delay(100);
         return ok();
       }),

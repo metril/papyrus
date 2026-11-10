@@ -32,7 +32,7 @@ function entry(overrides: Partial<{ id: number; action: string; entity_id: strin
 describe('AuditPage', () => {
   it('renders page 1 entries from the msw-mocked audit log', async () => {
     server.use(
-      http.get('/api/admin/audit', ({ request }) => {
+      http.get('/api/v1/admin/audit', ({ request }) => {
         const url = new URL(request.url);
         expect(url.searchParams.get('limit')).toBe('50');
         expect(url.searchParams.get('offset')).toBe('0');
@@ -61,7 +61,7 @@ describe('AuditPage', () => {
     const page2Gate = new Promise<void>((resolve) => { resolvePage2 = resolve; });
 
     server.use(
-      http.get('/api/admin/audit', async ({ request }) => {
+      http.get('/api/v1/admin/audit', async ({ request }) => {
         const url = new URL(request.url);
         const offset = Number(url.searchParams.get('offset'));
         if (offset === 0) {
@@ -99,7 +99,7 @@ describe('AuditPage', () => {
 
   it('shows "Admin access required" when the audit log request 403s', async () => {
     server.use(
-      http.get('/api/admin/audit', () =>
+      http.get('/api/v1/admin/audit', () =>
         HttpResponse.json({ detail: 'Forbidden' }, { status: 403 }),
       ),
     );

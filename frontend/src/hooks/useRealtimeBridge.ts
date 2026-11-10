@@ -166,7 +166,7 @@ function invalidatePrinters(queryClient: QueryClient): void {
  * F144: the initial list fetch and the socket handshake start concurrently
  * at mount, and the socket can win or lose that race. If it loses (opens
  * *after* the fetch resolved), an event broadcast in between reaches no
- * listener and is silently dropped — e.g. GET /api/jobs resolves at t=80ms,
+ * listener and is silently dropped — e.g. GET /api/v1/jobs resolves at t=80ms,
  * a job is created at t=100ms, and ws.onopen doesn't fire until t=140ms.
  * On the first `connected → true`, `freshnessKey`'s `dataUpdatedAt` is
  * compared against the socket-open time: if the cached data predates the
@@ -251,7 +251,7 @@ export function useRealtimeBridge(): void {
   }, []);
 
   useChannel(
-    '/api/system/ws/jobs',
+    '/api/v1/ws/jobs',
     queryClient,
     applyJobEvent,
     invalidateJobs,
@@ -259,7 +259,7 @@ export function useRealtimeBridge(): void {
     JOBS_LIST_KEY,
   );
   useChannel(
-    '/api/system/ws/scans',
+    '/api/v1/ws/scans',
     queryClient,
     applyScanWithToast,
     invalidateScans,
@@ -267,7 +267,7 @@ export function useRealtimeBridge(): void {
     SCANS_LIST_KEY,
   );
   useChannel(
-    '/api/system/ws/printers',
+    '/api/v1/ws/printers',
     queryClient,
     applyPrinterEvent,
     invalidatePrinters,

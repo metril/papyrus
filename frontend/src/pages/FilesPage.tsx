@@ -360,7 +360,7 @@ function CloudBrowser() {
     queryFn: (): Promise<CloudFileEntry[]> => {
       const provider = selectedProvider!;
       // F82: 'webdav' providers are served by a different backend router
-      // (/api/webdav/*, not /api/cloud/*) with its own path-based, rather
+      // (/api/v1/webdav/*, not /api/v1/cloud/*) with its own path-based, rather
       // than folder-id-based, navigation — dispatch explicitly instead of
       // falling through to a generic /cloud/files call that 400s for them.
       // The `never` default makes adding a provider without updating this

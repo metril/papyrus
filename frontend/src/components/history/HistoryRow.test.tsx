@@ -53,8 +53,8 @@ const printItem: HistoryItem = {
   status: 'completed',
   time: '2026-07-05T00:00:00Z',
   detail: '1 copy · A4',
-  downloadUrl: '/api/jobs/1/download',
-  previewUrl: '/api/jobs/1/preview',
+  downloadUrl: '/api/v1/jobs/1/download',
+  previewUrl: '/api/v1/jobs/1/preview',
   mimeType: 'application/pdf',
   filename: 'doc.pdf',
   raw: rawJob,
@@ -69,7 +69,7 @@ const scanItem: HistoryItem = {
   status: 'completed',
   time: '2026-07-04T00:00:00Z',
   detail: 'Color · Flatbed',
-  downloadUrl: '/api/scanner/scans/scan-abc/download',
+  downloadUrl: '/api/v1/scans/scan-abc/download',
   mimeType: 'application/pdf',
   filename: 'scan_scan-abc.pdf',
   raw: rawScan,
@@ -94,7 +94,7 @@ describe('HistoryRow thumbnail', () => {
     const { container } = render(<HistoryRowComponent {...makeProps({ item: printItem })} />);
     const img = container.querySelector('img');
     expect(img).not.toBeNull();
-    expect(img).toHaveAttribute('src', '/api/jobs/1/thumbnail');
+    expect(img).toHaveAttribute('src', '/api/v1/jobs/1/thumbnail');
     expect(img).toHaveAttribute('loading', 'lazy');
   });
 
@@ -102,7 +102,7 @@ describe('HistoryRow thumbnail', () => {
     const { container } = render(<HistoryRowComponent {...makeProps({ item: scanItem })} />);
     const img = container.querySelector('img');
     expect(img).not.toBeNull();
-    expect(img).toHaveAttribute('src', '/api/scanner/scans/scan-abc/thumbnail');
+    expect(img).toHaveAttribute('src', '/api/v1/scans/scan-abc/thumbnail');
   });
 
   it('falls back to the Printer glyph on image error for a print item', () => {
@@ -166,7 +166,7 @@ describe('HistoryRow PIN lock placeholder (F27)', () => {
     useAuthStore.setState({ user: otherUser });
     const { container } = render(<HistoryRowComponent {...makeProps({ item: pinPrintItem })} />);
 
-    expect(container.querySelector('img[src="/api/jobs/1/thumbnail"]')).toBeNull();
+    expect(container.querySelector('img[src="/api/v1/jobs/1/thumbnail"]')).toBeNull();
     expect(container.querySelector('svg.lucide-lock')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'View' })).toBeNull();
     expect(screen.queryByRole('link')).toBeNull(); // no Download <a>
@@ -176,7 +176,7 @@ describe('HistoryRow PIN lock placeholder (F27)', () => {
     useAuthStore.setState({ user: owner });
     const { container } = render(<HistoryRowComponent {...makeProps({ item: pinPrintItem })} />);
 
-    expect(container.querySelector('img')).toHaveAttribute('src', '/api/jobs/1/thumbnail');
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/v1/jobs/1/thumbnail');
     expect(container.querySelector('svg.lucide-lock')).toBeNull();
   });
 
@@ -184,7 +184,7 @@ describe('HistoryRow PIN lock placeholder (F27)', () => {
     useAuthStore.setState({ user: admin });
     const { container } = render(<HistoryRowComponent {...makeProps({ item: pinPrintItem })} />);
 
-    expect(container.querySelector('img')).toHaveAttribute('src', '/api/jobs/1/thumbnail');
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/v1/jobs/1/thumbnail');
     expect(container.querySelector('svg.lucide-lock')).toBeNull();
   });
 
@@ -192,7 +192,7 @@ describe('HistoryRow PIN lock placeholder (F27)', () => {
     useAuthStore.setState({ user: otherUser });
     const { container } = render(<HistoryRowComponent {...makeProps({ item: scanItem })} />);
 
-    expect(container.querySelector('img')).toHaveAttribute('src', '/api/scanner/scans/scan-abc/thumbnail');
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/v1/scans/scan-abc/thumbnail');
     expect(container.querySelector('svg.lucide-lock')).toBeNull();
   });
 
@@ -200,7 +200,7 @@ describe('HistoryRow PIN lock placeholder (F27)', () => {
     useAuthStore.setState({ user: otherUser });
     const { container } = render(<HistoryRowComponent {...makeProps({ item: printItem })} />);
 
-    expect(container.querySelector('img')).toHaveAttribute('src', '/api/jobs/1/thumbnail');
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/v1/jobs/1/thumbnail');
     expect(container.querySelector('svg.lucide-lock')).toBeNull();
   });
 });
