@@ -84,10 +84,11 @@ _CONNECT_TIMEOUT_SECONDS = 5.0
 
 
 def pytest_collection_modifyitems(config, items):
-    """Auto-mark any test that uses a DB-backed fixture as `integration`."""
+    """Auto-mark DB-backed tests `integration`, then apply `--shard I/N`."""
     for item in items:
         if _INTEGRATION_FIXTURES & set(getattr(item, "fixturenames", ())):
             item.add_marker("integration")
+    _apply_shard(config, items)
 
 
 async def _admin_execute(sql_for_name) -> None:
@@ -289,7 +290,8 @@ def pytest_addoption(parser):
     )
 
 
-def pytest_collection_modifyitems(config, items):
+def _apply_shard(config, items):
+    """Keep only this shard's test files (stable hash of the rootdir-relative path)."""
     spec = config.getoption("--shard")
     if not spec:
         return
@@ -298,6 +300,7 @@ def pytest_collection_modifyitems(config, items):
     index, total = (int(x) for x in spec.split("/"))
     keep, drop = [], []
     for item in items:
-        (keep if zlib.crc32(str(item.path).encode()) % total == index else drop).append(item)
+        file_id = item.nodeid.split("::", 1)[0].encode()
+        (keep if zlib.crc32(file_id) % total == index else drop).append(item)
     items[:] = keep
     config.hook.pytest_deselected(items=drop)
