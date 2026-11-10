@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 import asyncio
 import ipaddress
 import logging
@@ -6,15 +7,24 @@ from urllib.parse import urlparse
 
 import ifaddr
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import AUTH_ERRORS, CONFLICT, NOT_FOUND, VALIDATION, ErrorResponse, std_responses
 from app.auth.dependencies import get_current_user, require_admin
 from app.database import get_db
 from app.exceptions import ExternalServiceError, PapyrusError
 from app.models import Printer, User
-from app.schemas import serialize_print_job
+from app.routers.jobs import BAD_GATEWAY, BAD_REQUEST
+from app.schemas import (
+    DiscoverPrintersResponse,
+    PrinterCreate,
+    PrinterInfo,
+    PrinterProbeResponse,
+    PrinterUpdate,
+    PrintJobResponse,
+    serialize_print_job,
+)
 from app.services import cups_admin
 from app.services.audit_service import log_event
 from app.services.cups_service import CupsService
@@ -32,21 +42,6 @@ def _sanitize(display_name: str) -> str:
     name = re.sub(r"[^a-zA-Z0-9_-]", "_", display_name)
     name = re.sub(r"_+", "_", name).strip("_")
     return name or "printer"
-
-
-class PrinterCreate(BaseModel):
-    display_name: str
-    uri: str = ""
-    description: str | None = None
-    is_network_queue: bool = False
-    auto_release: bool = False
-
-
-class PrinterUpdate(BaseModel):
-    display_name: str | None = None
-    uri: str | None = None
-    description: str | None = None
-    auto_release: bool | None = None
 
 
 async def _cups_status(cups_name: str) -> dict:
@@ -139,11 +134,20 @@ async def _enrich_printer_info(printer: Printer, uri: str) -> bool:
     return True
 
 
-@router.get("")
+@router.get(
+    "",
+    response_model=list[PrinterInfo],
+    response_model_exclude_unset=True,
+    summary="List printers",
+    responses=std_responses(AUTH_ERRORS),
+)
 async def list_printers(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
 ) -> list[dict]:
+    """All configured printers and hold queues with live CUPS status (queried concurrently).
+
+    Any authenticated user. Read-only; a printer CUPS cannot reach reports a stopped state."""
     result = await db.execute(select(Printer).order_by(Printer.id))
     # Fetch per-printer CUPS status concurrently.
     return list(await asyncio.gather(*(_printer_response(p) for p in result.scalars())))
@@ -196,13 +200,20 @@ def _filter_self_advertisement(devices: list[dict]) -> list[dict]:
     return [d for d in devices if not _is_self_advertisement(d)]
 
 
-@router.get("/discover")
+@router.get(
+    "/discover",
+    response_model=DiscoverPrintersResponse,
+    summary="Discover printers on the network",
+    responses=std_responses(AUTH_ERRORS),
+)
 async def discover_network_printers(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ) -> dict:
-    """Browse the LAN via mDNS, drop Papyrus's own advertisement, and flag
-    devices already configured."""
+    """Browse the LAN via mDNS (a few seconds), drop Papyrus's own advertisement, and flag
+    devices already configured.
+
+    Admin only. Read-only."""
     devices = await discover_printers()
     devices = _filter_self_advertisement(devices)
     result = await db.execute(select(Printer))
@@ -243,12 +254,20 @@ def _validate_probe_ip(ip: str) -> None:
         raise HTTPException(status_code=400, detail="Invalid IP address")
 
 
-@router.get("/probe")
+@router.get(
+    "/probe",
+    response_model=PrinterProbeResponse,
+    summary="Probe a printer by IP",
+    responses=std_responses(AUTH_ERRORS, BAD_REQUEST, VALIDATION),
+)
 async def probe_printer_ip(
     ip: str,
     _user: User = Depends(require_admin),
 ) -> dict:
-    """Probe a printer at the given IP address for reachability and IPP details."""
+    """Probe a printer at the given IP address for reachability and IPP details.
+
+    Admin only. Opens TCP connections to ports 631/80 and sends an IPP query; 400 for
+    loopback, link-local, multicast or unparseable addresses."""
     _validate_probe_ip(ip)
     fallback_uri = f"ipp://{ip}/ipp"
     empty_fields = {
@@ -276,12 +295,23 @@ async def probe_printer_ip(
     }
 
 
-@router.post("", status_code=201)
+@router.post(
+    "",
+    status_code=201,
+    response_model=PrinterInfo,
+    summary="Add a printer",
+    responses=std_responses(AUTH_ERRORS, BAD_REQUEST, CONFLICT, VALIDATION, BAD_GATEWAY),
+)
 async def add_printer(
     body: PrinterCreate,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ) -> dict:
+    """Create a printer (or hold-only network queue) and its CUPS queues.
+
+    Admin only. The first physical printer becomes the default. 400 for the reserved name
+    `Papyrus`, 409 if the CUPS name exists, 502 if CUPS provisioning fails. Physical
+    printers are enriched with make/model/location via IPP."""
     cups_name = _sanitize(body.display_name)
 
     # F113: this name would collide with the built-in zero-config hold queue
@@ -345,13 +375,21 @@ async def add_printer(
     return await _printer_response(printer)
 
 
-@router.patch("/{printer_id}")
+@router.patch(
+    "/{printer_id}",
+    response_model=PrinterInfo,
+    summary="Update a printer",
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, VALIDATION, BAD_GATEWAY),
+)
 async def update_printer(
     printer_id: int,
     body: PrinterUpdate,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ) -> dict:
+    """Partially update a printer; the CUPS queue and mDNS advert follow URI or name changes.
+
+    Admin only. 502 if CUPS cannot apply the change (nothing is saved)."""
     printer = await db.get(Printer, printer_id)
     if not printer:
         raise HTTPException(status_code=404, detail="Printer not found")
@@ -397,12 +435,20 @@ async def update_printer(
     return await _printer_response(printer)
 
 
-@router.delete("/{printer_id}", status_code=204)
+@router.delete(
+    "/{printer_id}",
+    status_code=204,
+    summary="Delete a printer",
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND),
+)
 async def delete_printer(
     printer_id: int,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ) -> None:
+    """Delete a printer and remove its CUPS queues.
+
+    Admin only. If it was the default, the oldest remaining physical printer is promoted."""
     printer = await db.get(Printer, printer_id)
     if not printer:
         raise HTTPException(status_code=404, detail="Printer not found")
@@ -427,12 +473,21 @@ async def delete_printer(
             await db.commit()
 
 
-@router.post("/{printer_id}/default", status_code=200)
+@router.post(
+    "/{printer_id}/default",
+    status_code=200,
+    response_model=PrinterInfo,
+    summary="Set the default printer",
+    responses=std_responses(AUTH_ERRORS, BAD_REQUEST, NOT_FOUND),
+)
 async def set_default_printer(
     printer_id: int,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ) -> dict:
+    """Make a physical printer the default release target.
+
+    Admin only. 400 for a network (hold-only) queue."""
     printer = await db.get(Printer, printer_id)
     if not printer:
         raise HTTPException(status_code=404, detail="Printer not found")
@@ -462,13 +517,21 @@ async def set_default_printer(
     return await _printer_response(printer)
 
 
-@router.post("/{printer_id}/resume", status_code=200)
+@router.post(
+    "/{printer_id}/resume",
+    status_code=200,
+    response_model=PrinterInfo,
+    summary="Resume a stopped printer queue",
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, {500: {"model": ErrorResponse, "description": "Re-enabling the queue failed."}}),
+)
 async def resume_printer(
     printer_id: int,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ) -> dict:
-    """Re-enable a stopped CUPS printer queue via pycups."""
+    """Re-enable and re-accept a stopped CUPS printer queue.
+
+    Admin only. 500 if CUPS refuses (generic error)."""
     printer = await db.get(Printer, printer_id)
     if not printer:
         raise HTTPException(status_code=404, detail="Printer not found")
@@ -480,14 +543,22 @@ async def resume_printer(
     return await _printer_response(printer)
 
 
-@router.post("/{printer_id}/test-page")
+@router.post(
+    "/{printer_id}/test-page",
+    response_model=PrintJobResponse,
+    summary="Print a test page",
+    responses=std_responses(AUTH_ERRORS, BAD_REQUEST, NOT_FOUND, BAD_GATEWAY),
+)
 async def send_test_page(
     printer_id: int,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),
 ) -> dict:
     """Print an identify sheet so an admin can physically confirm which
-    device this printer maps to."""
+    device this printer maps to.
+
+    Admin only. 400 for a network hold queue, 502 if printing fails. Side effects: a PrintJob
+    row (`job_created`/`job_updated` events), a `print.test_page` audit entry and webhook."""
     printer = await db.get(Printer, printer_id)
     if not printer:
         raise HTTPException(status_code=404, detail="Printer not found")
@@ -526,13 +597,20 @@ async def send_test_page(
     return response
 
 
-@router.post("/{printer_id}/refresh-info")
+@router.post(
+    "/{printer_id}/refresh-info",
+    response_model=PrinterInfo,
+    summary="Refresh printer device info",
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND),
+)
 async def refresh_printer_info(
     printer_id: int,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ) -> dict:
-    """Re-probe a configured printer's IPP endpoint and refresh its device info."""
+    """Re-probe a configured printer's IPP endpoint and refresh make/model/location.
+
+    Admin only. A failed probe leaves stored values unchanged (not an error)."""
     printer = await db.get(Printer, printer_id)
     if not printer:
         raise HTTPException(status_code=404, detail="Printer not found")

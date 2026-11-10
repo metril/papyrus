@@ -23,11 +23,23 @@ from app.schemas.common import BulkDeleteResponse, Page  # noqa: F401
 from app.schemas.jobs import (  # noqa: F401
     BulkDeleteJobsRequest,
     CopyRequest,
+    CopyResponse,
+    DiscoveredPrinter,
+    DiscoverPrintersResponse,
+    LoadedPaper,
     MarkerLevel,
+    PrinterAssign,
+    PrinterCreate,
+    PrinterInfo,
+    PrinterOptions,
+    PrinterProbeResponse,
     PrinterSettings,
     PrinterStatus,
+    PrinterUpdate,
     PrintJobResponse,
     PrintJobUpload,
+    ReleaseRequest,
+    ReprintRequest,
     serialize_print_job,
 )
 from app.schemas.scans import (  # noqa: F401

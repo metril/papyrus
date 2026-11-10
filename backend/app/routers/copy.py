@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 import asyncio
 import os
 import shutil
@@ -6,10 +7,12 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import AUTH_ERRORS, CONFLICT, VALIDATION, std_responses
 from app.auth.dependencies import require_permission
 from app.database import get_db
 from app.models import PrintJob, ScanJob, User
-from app.schemas import CopyRequest, serialize_print_job, serialize_scan_job
+from app.routers.jobs import BAD_GATEWAY, UNAVAILABLE
+from app.schemas import CopyRequest, CopyResponse, serialize_print_job, serialize_scan_job
 from app.services.copy_service import copy_service
 from app.services.cups_service import CupsService, get_default_release_queue_name
 from app.services.file_service import get_upload_path
@@ -19,13 +22,23 @@ from app.services.ws_manager import ws_manager
 router = APIRouter()
 
 
-@router.post("")
+@router.post(
+    "",
+    response_model=CopyResponse,
+    summary="Copy a document",
+    responses=std_responses(AUTH_ERRORS, CONFLICT, VALIDATION, BAD_GATEWAY, UNAVAILABLE),
+)
 async def create_copy(
     request: CopyRequest,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
     """Scan a document and immediately print it (copy workflow).
+
+    Requires the `print` permission. Side effects: creates a ScanJob and a PrintJob
+    (broadcast as `scan_completed` / `job_created` WebSocket events). Returns 409 when a
+    feeder request finds the feeder empty and 503 when the scanner or printer is
+    unavailable.
 
     Resolves the default printer's release queue and default scanner device
     from the DB (F10) — the service used to fall back to never-configured
