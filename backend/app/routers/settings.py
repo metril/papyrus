@@ -73,6 +73,11 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "alert_toner_threshold": (int, False),
     "alert_email": (str, False),
     "alert_poll_minutes": (int, False),
+    # API: rate limiting (app/rate_limit_middleware.py) and docs gating
+    "rate_limit_enabled": (bool, False),
+    "rate_limit_token_rpm": (int, False),
+    "rate_limit_ip_rpm": (int, False),
+    "public_api_docs": (bool, False),
     # OIDC (configured via Settings UI)
     "oidc_enabled": (bool, False),
     "oidc_issuer": (str, False),
@@ -110,6 +115,10 @@ DEFAULTS: dict[str, str] = {
     "alert_toner_threshold": "20",
     "alert_email": "",
     "alert_poll_minutes": "5",
+    "rate_limit_enabled": "true",
+    "rate_limit_token_rpm": "600",
+    "rate_limit_ip_rpm": "300",
+    "public_api_docs": "false",
     "local_auth_enabled": "true",
     "oidc_enabled": "false",
     "oidc_scopes": "openid email profile",
@@ -130,6 +139,9 @@ def _coerce(value: str, type_: type) -> Any:
 _BOOL_STRINGS = {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
 
 
+_POSITIVE_INT_KEYS = {"rate_limit_token_rpm", "rate_limit_ip_rpm"}
+
+
 def _coerce_for_storage(key: str, value: Any, type_: type) -> str:
     """Coerce an incoming PUT value to its declared type's DB string form.
 
@@ -146,9 +158,12 @@ def _coerce_for_storage(key: str, value: Any, type_: type) -> str:
         raise HTTPException(status_code=400, detail=f"Setting {key} must be a boolean")
     if type_ is int:
         try:
-            return str(int(value))
+            number = int(value)
         except (ValueError, TypeError):
             raise HTTPException(status_code=400, detail=f"Setting {key} must be an integer")
+        if key in _POSITIVE_INT_KEYS and number < 1:
+            raise HTTPException(status_code=400, detail=f"Setting {key} must be at least 1")
+        return str(number)
     return str(value)
 
 

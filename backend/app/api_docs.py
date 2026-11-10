@@ -170,6 +170,20 @@ def _register_webhooks(app: FastAPI) -> None:
         )(handler)
 
 
+def _add_rate_limited(paths: dict[str, Any]) -> None:
+    """Every rate-limited (/api, non-health) operation can answer 429."""
+    for path, ops in paths.items():
+        if not path.startswith("/api/") or path.endswith("/system/health"):
+            continue
+        for op in ops.values():
+            if isinstance(op, dict) and "responses" in op:
+                op["responses"].setdefault("429", {
+                    "description": "Too many requests.",
+                    "headers": RATE_LIMITED[429]["headers"],
+                    "content": {"application/json": {"schema": _ERROR_REF}},
+                })
+
+
 def install_openapi(app: FastAPI) -> None:
     """Replace FastAPI's default 422 body (HTTPValidationError) with ErrorResponse; publish
     webhook and WebSocket message models."""
@@ -189,6 +203,7 @@ def install_openapi(app: FastAPI) -> None:
             webhooks=app.webhooks.routes,
         )
         _swap_validation_refs(schema["paths"])
+        _add_rate_limited(schema["paths"])
         comps = schema.setdefault("components", {}).setdefault("schemas", {})
         _register_ws_schemas(comps)
         for name in ("HTTPValidationError", "ValidationError"):
