@@ -7,7 +7,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Build Python wheels (includes build-time deps only)
-FROM python:3.12-slim-bookworm AS python-build
+FROM python:3.15-slim-bookworm AS python-build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libcups2-dev \
@@ -20,7 +20,7 @@ RUN mkdir -p app && touch app/__init__.py \
     && pip wheel --no-cache-dir -w /wheels ".[cloud,ocr,sftp]"
 
 # Stage 3: Runtime (no build tools, no -dev packages)
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 # Automatic buildx platform arg; must be re-declared inside this stage to be
 # usable here (it's only in scope pre-FROM otherwise).

@@ -3270,11 +3270,10 @@ export interface components {
             uptime_seconds?: number;
             /**
              * Version
-             * @description Reserved; not populated by the health endpoint.
-             * @default 0.1.0
-             * @example 0.1.0
+             * @description Papyrus release version.
+             * @example 1.4.0
              */
-            version?: string;
+            version: string;
         };
         /**
          * JobCreatedMessage

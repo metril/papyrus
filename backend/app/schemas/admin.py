@@ -366,8 +366,7 @@ class WebhookResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str = Field(default="ok", description="'ok' when CUPS and the database are up, "
         "otherwise 'degraded'.", examples=["ok"])
-    version: str = Field(default="0.1.0", description="Reserved; not populated by the health "
-        "endpoint.", examples=["0.1.0"])
+    version: str = Field(description="Papyrus release version.", examples=["1.4.0"])
     cups_running: bool = Field(
         default=False, description="CUPS answered (cached ~15s).", examples=[True]
     )

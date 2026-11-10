@@ -4,7 +4,7 @@
 Papyrus is a web-based print and scan server for network-connected Brother DCP-L2540DW (and potentially other devices). It provides a responsive web UI for managing print jobs (hold-release with optional PIN, reprint), scanning (with OCR, profiles, PDF collation, image enhancement, deskew, and template naming), copying, SMB share integration, bidirectional email (send + webhook receive), bidirectional cloud storage (Google Drive/Dropbox/OneDrive/Nextcloud via OAuth2 or WebDAV), FTP/SFTP upload, Paperless-ngx archival, outgoing webhooks, audit logging, usage dashboard, backup/restore, retention policies, and PWA support.
 
 ## Tech Stack
-- **Backend**: Python 3.12, FastAPI, Uvicorn, SQLAlchemy async (asyncpg), Alembic
+- **Backend**: Python 3.15, FastAPI, Uvicorn, SQLAlchemy async (asyncpg), Alembic
 - **Frontend**: React 19, Vite, TypeScript (strict, `verbatimModuleSyntax`), Tailwind CSS, TanStack Query v5 (server state), Zustand (client state), React Router v6, vitest + Testing Library + msw (unit tests). Design system (see `frontend/src/index.css` `@theme`): "paper" = remapped gray-* scale + "ink" accent scale (use `ink-*`, never `blue-*`); IBM Plex Sans/Mono via @fontsource with mono reserved for data readouts (IDs, timestamps, sizes, URLs/IPs/device strings); `rule-perf` (perforation divider) and `led` (status dot) utilities; Skeleton/EmptyState/ErrorState primitives in `components/common/`; lucide-react icons
 - **Database**: PostgreSQL 16
 - **Printing**: CUPS (driverless/IPP Everywhere), AirPrint via Avahi mDNS, pycups

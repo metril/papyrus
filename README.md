@@ -51,7 +51,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 
 ## Tech Stack
 
-- **Backend**: Python 3.12, FastAPI, SQLAlchemy (async), PostgreSQL
+- **Backend**: Python 3.15, FastAPI, SQLAlchemy (async), PostgreSQL
 - **Frontend**: React 19, TypeScript, Vite, Tailwind CSS, TanStack Query (server state), Zustand (client state), lazy-loaded routes, vitest/Testing Library (unit tests)
 - **Design**: "Paper & ink" design system — warm paper-toned grays with a process-cyan ink accent, IBM Plex Sans/Mono type (mono for data readouts), LED status dots and perforation dividers as an office-machine motif, full light/dark parity
 - **Printing**: CUPS (driverless/IPP Everywhere), AirPrint via Avahi mDNS, printer discovery via python-zeroconf

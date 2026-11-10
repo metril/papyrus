@@ -1646,15 +1646,17 @@
             "type": "integer"
           },
           "version": {
-            "default": "0.1.0",
-            "description": "Reserved; not populated by the health endpoint.",
+            "description": "Papyrus release version.",
             "examples": [
-              "0.1.0"
+              "1.4.0"
             ],
             "title": "Version",
             "type": "string"
           }
         },
+        "required": [
+          "version"
+        ],
         "title": "HealthResponse",
         "type": "object"
       },

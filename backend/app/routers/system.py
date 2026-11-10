@@ -2,7 +2,7 @@ import asyncio
 import shutil
 import time
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_docs import SERVER, std_responses
@@ -136,7 +136,7 @@ async def _probe_subsystems() -> tuple[bool, bool]:
     response_model=HealthResponse,
     responses=std_responses(SERVER),
 )
-async def health_check(db: AsyncSession = Depends(get_db)):
+async def health_check(request: Request, db: AsyncSession = Depends(get_db)):
     """Liveness/readiness probe with subsystem status.
 
     Public: no authentication. Reports CUPS, scanner, database and disk state
@@ -173,6 +173,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
     return HealthResponse(
         status=status,
+        version=request.app.version,
         cups_running=cups_ok,
         scanner_available=scanner_ok,
         db_connected=db_ok,
