@@ -123,7 +123,7 @@ async def test_upload_creates_held_job_with_file_on_disk(db, user_client, tmp_pa
     body = resp.json()
     assert body["status"] == "held"
     assert body["filename"] == "test.pdf"
-    assert "release_pin" not in body
+    assert body.get("release_pin") is None
 
     on_disk = list(tmp_path.iterdir())
     assert len(on_disk) == 1
@@ -222,6 +222,13 @@ async def test_upload_with_required_pin_setting_returns_generated_pin(db, user_c
     assert len(body["release_pin"]) == 4
     assert body["release_pin"].isdigit()
     assert body["has_pin"] is True
+
+
+def test_upload_response_model_documents_release_pin():
+    from app.main import app
+
+    schema = app.openapi()["components"]["schemas"]["PrintJobCreatedResponse"]
+    assert "release_pin" in schema["properties"]
 
 
 # --------------------------------------------------------------------------- #
@@ -1519,7 +1526,7 @@ async def test_share_target_authenticated_creates_held_job_and_redirects(db, cli
 
     list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
     assert list_resp.status_code == 200
-    jobs = list_resp.json()["jobs"]
+    jobs = list_resp.json()["items"]
     assert len(jobs) == 1
     assert jobs[0]["status"] == "held"
     assert jobs[0]["filename"] == "test.pdf"
@@ -1541,7 +1548,7 @@ async def test_share_target_multiple_files_each_create_a_job(db, client, tmp_pat
     assert resp.headers["location"] == "/print"
 
     list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
-    jobs = list_resp.json()["jobs"]
+    jobs = list_resp.json()["items"]
     assert len(jobs) == 2
     assert {j["filename"] for j in jobs} == {"a.pdf", "b.pdf"}
 
@@ -1549,7 +1556,7 @@ async def test_share_target_multiple_files_each_create_a_job(db, client, tmp_pat
 async def test_share_target_unauthenticated_redirects_to_login(client, tmp_path):
     resp = await client.post("/api/share-target", files=_pdf_file())
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/api/auth/login"
+    assert resp.headers["location"] == "/api/v1/auth/login"
 
 
 async def test_share_target_oversize_file_redirects_with_share_failed_count(db, client, tmp_path):
@@ -1571,7 +1578,7 @@ async def test_share_target_oversize_file_redirects_with_share_failed_count(db, 
     assert resp.headers["location"] == "/print?share_failed=1"
 
     list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
-    assert list_resp.json()["jobs"] == []
+    assert list_resp.json()["items"] == []
 
 
 async def test_share_target_mixed_valid_and_invalid_files_creates_the_valid_one(
@@ -1594,7 +1601,7 @@ async def test_share_target_mixed_valid_and_invalid_files_creates_the_valid_one(
     assert resp.headers["location"] == "/print?share_failed=1"
 
     list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
-    jobs = list_resp.json()["jobs"]
+    jobs = list_resp.json()["items"]
     assert [j["filename"] for j in jobs] == ["good.pdf"]
 
 
@@ -1614,7 +1621,7 @@ async def test_share_target_skips_auto_pin_under_require_release_pin(db, client,
     assert resp.status_code == 303
 
     list_resp = await client.get("/api/jobs", headers={"Authorization": f"Bearer {plaintext}"})
-    jobs = list_resp.json()["jobs"]
+    jobs = list_resp.json()["items"]
     assert len(jobs) == 1
     assert jobs[0]["status"] == "held"
     assert jobs[0]["has_pin"] is False
@@ -1644,7 +1651,7 @@ async def test_share_target_token_without_print_permission_redirects_to_login(db
         headers={"Authorization": f"Bearer {plaintext}"},
     )
     assert resp.status_code == 303
-    assert resp.headers["location"] == "/api/auth/login"
+    assert resp.headers["location"] == "/api/v1/auth/login"
     assert list(tmp_path.iterdir()) == []
 
 

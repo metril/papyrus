@@ -98,7 +98,7 @@ export default function HistoryPage() {
       queryFn: () => listJobs({ limit: HISTORY_PAGE_SIZE, offset: page * HISTORY_PAGE_SIZE }),
     })),
     combine: (results) => ({
-      jobs: results.flatMap((r) => r.data?.jobs ?? []),
+      jobs: results.flatMap((r) => r.data?.items ?? []),
       total: results[0]?.data?.total ?? 0,
       isPending: results[0]?.isPending ?? false,
       isError: results.some((r) => r.isError),
@@ -111,7 +111,7 @@ export default function HistoryPage() {
       queryFn: () => listScans({ limit: HISTORY_PAGE_SIZE, offset: page * HISTORY_PAGE_SIZE }),
     })),
     combine: (results) => ({
-      scans: results.flatMap((r) => r.data?.scans ?? []),
+      scans: results.flatMap((r) => r.data?.items ?? []),
       total: results[0]?.data?.total ?? 0,
       isPending: results[0]?.isPending ?? false,
       isError: results.some((r) => r.isError),

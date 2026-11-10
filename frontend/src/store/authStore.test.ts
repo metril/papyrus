@@ -24,7 +24,7 @@ describe('authStore', () => {
   it('logout posts to /auth/logout, then signs out and clears the cache', async () => {
     let called = false;
     server.use(
-      http.post('/api/auth/logout', () => {
+      http.post('/api/v1/auth/logout', () => {
         called = true;
         return HttpResponse.json({});
       }),
@@ -39,7 +39,7 @@ describe('authStore', () => {
 
   it('logout signs out and clears the cache even when the POST fails (F83)', async () => {
     server.use(
-      http.post('/api/auth/logout', () => HttpResponse.json({ detail: 'boom' }, { status: 500 })),
+      http.post('/api/v1/auth/logout', () => HttpResponse.json({ detail: 'boom' }, { status: 500 })),
     );
 
     // Must not throw / produce an unhandled rejection.

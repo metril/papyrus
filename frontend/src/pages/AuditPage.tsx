@@ -37,7 +37,7 @@ export default function AuditPage() {
     meta: { suppressGlobalError: true },
   });
 
-  const entries = isError ? [] : (data?.entries ?? []);
+  const entries = isError ? [] : (data?.items ?? []);
   const total = isError ? 0 : (data?.total ?? 0);
   const error = isError ? describeAuditLoadError(queryError) : '';
 

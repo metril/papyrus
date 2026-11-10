@@ -5,10 +5,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import AUTH_ERRORS, error_group, std_responses
 from app.auth.dependencies import require_admin
 from app.config import settings
 from app.database import get_db
 from app.models import AppConfig, User
+from app.schemas import OkResponse
 from app.services import settings_cache
 from app.services.audit_service import log_event
 from app.services.crypto import decrypt_value, encrypt_value
@@ -17,6 +19,9 @@ from app.services.webhook_service import dispatch_webhook
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_BAD_SETTING = error_group(400, "Unknown setting key, or a value that does not match the setting's "
+    "type.")
 
 # Maps setting key → (python_type, is_encrypted)
 # Encrypted values are stored in AppConfig as "{key}_encrypted"
@@ -68,6 +73,13 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "alert_toner_threshold": (int, False),
     "alert_email": (str, False),
     "alert_poll_minutes": (int, False),
+    # API: rate limiting (app/rate_limit_middleware.py) and docs gating
+    "rate_limit_enabled": (bool, False),
+    "rate_limit_token_rpm": (int, False),
+    "rate_limit_ip_rpm": (int, False),
+    "public_api_docs": (bool, False),
+    # Comma-separated IPs/CIDRs whose X-Forwarded-For the rate limiter trusts.
+    "trusted_proxies": (str, False),
     # OIDC (configured via Settings UI)
     "oidc_enabled": (bool, False),
     "oidc_issuer": (str, False),
@@ -105,6 +117,11 @@ DEFAULTS: dict[str, str] = {
     "alert_toner_threshold": "20",
     "alert_email": "",
     "alert_poll_minutes": "5",
+    "rate_limit_enabled": "true",
+    "rate_limit_token_rpm": "600",
+    "rate_limit_ip_rpm": "300",
+    "public_api_docs": "false",
+    "trusted_proxies": "127.0.0.1/32,::1/128,172.16.0.0/12",
     "local_auth_enabled": "true",
     "oidc_enabled": "false",
     "oidc_scopes": "openid email profile",
@@ -125,6 +142,9 @@ def _coerce(value: str, type_: type) -> Any:
 _BOOL_STRINGS = {"true": True, "1": True, "yes": True, "false": False, "0": False, "no": False}
 
 
+_POSITIVE_INT_KEYS = {"rate_limit_token_rpm", "rate_limit_ip_rpm"}
+
+
 def _coerce_for_storage(key: str, value: Any, type_: type) -> str:
     """Coerce an incoming PUT value to its declared type's DB string form.
 
@@ -141,9 +161,26 @@ def _coerce_for_storage(key: str, value: Any, type_: type) -> str:
         raise HTTPException(status_code=400, detail=f"Setting {key} must be a boolean")
     if type_ is int:
         try:
-            return str(int(value))
+            number = int(value)
         except (ValueError, TypeError):
             raise HTTPException(status_code=400, detail=f"Setting {key} must be an integer")
+        if key in _POSITIVE_INT_KEYS and number < 1:
+            raise HTTPException(status_code=400, detail=f"Setting {key} must be at least 1")
+        return str(number)
+    if key == "trusted_proxies":
+        import ipaddress
+
+        parts = [p.strip() for p in str(value).split(",") if p.strip()]
+        for part in parts:
+            try:
+                ipaddress.ip_network(part, strict=False)
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Setting {key} must be comma-separated IP addresses or CIDR ranges "
+                    f"(invalid: {part[:64]})",
+                )
+        return ",".join(parts)
     return str(value)
 
 
@@ -204,11 +241,23 @@ def safe_int_setting(val: str | None, default: int) -> int:
         return default
 
 
-@router.get("")
+@router.get(
+    "",
+    summary="Get all settings",
+    response_model=dict[str, Any],
+    responses=std_responses(AUTH_ERRORS),
+)
 async def get_settings(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ) -> dict[str, Any]:
+    """Return every UI-managed setting as a flat key/value object.
+
+    Admin only. Values are typed (int, bool, string) per setting; unset keys
+    fall back to environment/default values. Secret settings (SMTP password,
+    OAuth client secrets, API tokens) are never returned: they appear as the
+    placeholder `*set*` when configured and `""` when not.
+    """
     db_values = await _load_db_values(db)
     out: dict[str, Any] = {}
     for key, (type_, encrypted) in CONFIGURABLE.items():
@@ -234,12 +283,25 @@ async def get_settings(
     return out
 
 
-@router.put("")
+@router.put(
+    "",
+    summary="Update settings",
+    response_model=OkResponse,
+    responses=std_responses(AUTH_ERRORS, _BAD_SETTING),
+)
 async def update_settings(
     updates: dict[str, Any],
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ) -> dict[str, bool]:
+    """Update one or more settings from a flat key/value object.
+
+    Admin only. Only keys the server knows are accepted. An empty string or
+    null clears a setting back to its default; sending `*set*` for a secret
+    leaves it unchanged. Side effects: invalidates the settings cache, writes
+    a `settings.update` audit entry and fires the `settings.update` webhook
+    (listing the changed keys, never values) when anything changed.
+    """
     for key, value in updates.items():
         if key not in CONFIGURABLE:
             raise HTTPException(status_code=400, detail=f"Unknown setting: {key}")

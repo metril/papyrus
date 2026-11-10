@@ -13,7 +13,7 @@ describe('api client 401 interceptor (F16)', () => {
   });
 
   it('signs out locally on a 401 from a non-auth endpoint', async () => {
-    server.use(http.get('/api/jobs', () => HttpResponse.json({ detail: 'nope' }, { status: 401 })));
+    server.use(http.get('/api/v1/jobs', () => HttpResponse.json({ detail: 'nope' }, { status: 401 })));
 
     await expect(api.get('/jobs')).rejects.toBeTruthy();
 
@@ -32,7 +32,7 @@ describe('api client 401 interceptor (F16)', () => {
   );
 
   it('leaves the session alone on a non-401 error', async () => {
-    server.use(http.get('/api/jobs', () => HttpResponse.json({ detail: 'boom' }, { status: 500 })));
+    server.use(http.get('/api/v1/jobs', () => HttpResponse.json({ detail: 'boom' }, { status: 500 })));
 
     await expect(api.get('/jobs')).rejects.toBeTruthy();
 

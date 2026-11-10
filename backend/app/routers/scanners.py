@@ -5,20 +5,43 @@ import os
 import re
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import (
+    AUTH_ERRORS,
+    CONFLICT,
+    NOT_FOUND,
+    VALIDATION,
+    error_group,
+    std_responses,
+)
 from app.auth.dependencies import get_current_user, require_admin
 from app.database import get_db
 from app.exceptions import PapyrusError, ScannerBusyError, ScanRequestError
 from app.models import Scanner, User
+from app.schemas.scans import (
+    Brscan4Register,
+    Brscan4RegisterResult,
+    DiscoveredScanner,
+    ScannerCreate,
+    ScannerDiagnostics,
+    ScannerProbeResult,
+    ScannerResponse,
+    ScannerTestResult,
+    ScannerUpdate,
+)
 from app.services import brother_protocol as bp
 from app.services.discovery_service import discover_scanner_services
 from app.services.scan_service import is_native_device, scan_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+ADMIN = AUTH_ERRORS
+BAD_REQUEST = error_group(400, "Invalid input, e.g. an IP address that cannot be probed.")
+SCANNER_BUSY = error_group(503, "The scanner or its tooling timed out or is busy.")
 
 AIRSCAN_PAPYRUS_CONF = "/etc/sane.d/airscan.d/papyrus.conf"
 DEFAULT_WSD_PATH = "/WebServices/ScannerService"
@@ -159,28 +182,12 @@ def _write_airscan_device(name: str, url: str, protocol: str) -> None:
     logger.info("Wrote %s with %d device(s)", AIRSCAN_PAPYRUS_CONF, len(devices))
 
 
-class ScannerCreate(BaseModel):
-    name: str
-    device: str
-    description: str | None = None
-    auto_deliver: bool = False
-    post_scan_config: dict | None = None
-
-
-class ScannerUpdate(BaseModel):
-    name: str | None = None
-    device: str | None = None
-    description: str | None = None
-    auto_deliver: bool | None = None
-    post_scan_config: dict | None = None
-
-
 def _is_secret_key(key: str) -> bool:
     lowered = key.lower()
     return any(s in lowered for s in _SECRET_KEY_SUBSTRINGS)
 
 
-def _redact_secrets(config: dict) -> dict:
+def _redact_secrets(config: dict):
     """Recursively replace secret values in a post_scan_config dict with a
     fixed sentinel before it's ever sent to a client (F5) -- e.g.
     ``ftp_password``. Recurses into nested dicts in case a future field adds
@@ -196,7 +203,7 @@ def _redact_secrets(config: dict) -> dict:
     return result
 
 
-def _encrypt_secrets(old_config: dict | None, new_config: dict) -> dict:
+def _encrypt_secrets(old_config: dict | None, new_config: dict):
     """Return `new_config` with every secret-looking value encrypted at
     rest (F5).
 
@@ -240,7 +247,7 @@ def _encrypt_secrets(old_config: dict | None, new_config: dict) -> dict:
     return result
 
 
-def _scanner_response(s: Scanner) -> dict:
+def _scanner_response(s: Scanner):
     config = _redact_secrets(s.post_scan_config) if s.post_scan_config else s.post_scan_config
     return {
         "id": s.id,
@@ -254,11 +261,20 @@ def _scanner_response(s: Scanner) -> dict:
     }
 
 
-@router.get("")
+@router.get(
+    "",
+    summary="List scanners",
+    response_model=list[ScannerResponse],
+    responses=std_responses(AUTH_ERRORS),
+)
 async def list_scanners(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(get_current_user),
-) -> list[dict]:
+):
+    """List all configured scanners with secret post-scan values redacted.
+
+    Any authenticated user.
+    """
     result = await db.execute(select(Scanner).order_by(Scanner.id))
     return [_scanner_response(s) for s in result.scalars()]
 
@@ -276,14 +292,22 @@ def _validate_probe_ip(ip: str) -> None:
         raise HTTPException(status_code=400, detail="Invalid IP address")
 
 
-@router.get("/probe")
+@router.get(
+    "/probe",
+    summary="Probe a scanner by IP",
+    response_model=ScannerProbeResult,
+    responses=std_responses(ADMIN, BAD_REQUEST),
+)
 async def probe_scanner_ip(
     ip: str,
     _user: User = Depends(require_admin),
-) -> dict:
-    """Probe a scanner at the given IP using airscan-discover (WSD + eSCL).
+):
+    """Probe a scanner at an IP using airscan-discover (WSD and eSCL), falling back to manual eSCL
+    and WSD checks.
 
-    Falls back to manual eSCL port probing if airscan-discover doesn't find the device.
+    Admin only. Rejects loopback, link-local, multicast and unspecified addresses (400). Side
+    effect: writes the discovered device into the airscan config. A failed probe still returns 200
+    with `reachable: false` and an `error`.
     """
     _validate_probe_ip(ip)
 
@@ -416,12 +440,21 @@ async def probe_scanner_ip(
     }
 
 
-@router.get("/diagnostics")
+@router.get(
+    "/diagnostics",
+    summary="Get scanner diagnostics",
+    response_model=ScannerDiagnostics,
+    responses=std_responses(ADMIN),
+)
 async def scanner_diagnostics(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
-) -> dict:
-    """Return scanner diagnostics: config files, scanimage -L, airscan-discover."""
+):
+    """Return config files, `scanimage -L`, `airscan-discover` output and native scanner
+    reachability for troubleshooting.
+
+    Admin only. Read-only; probe failures are reported inside the fields rather than as errors.
+    """
     # Read our papyrus.conf
     papyrus_conf = ""
     try:
@@ -518,18 +551,21 @@ async def scanner_diagnostics(
     }
 
 
-class Brscan4Register(BaseModel):
-    name: str
-    model: str
-    ip: str
-
-
-@router.post("/register-brscan4")
+@router.post(
+    "/register-brscan4",
+    summary="Register a brscan4 scanner",
+    response_model=Brscan4RegisterResult,
+    responses=std_responses(ADMIN, BAD_REQUEST, VALIDATION, SCANNER_BUSY),
+)
 async def register_brscan4(
     body: Brscan4Register,
     _user: User = Depends(require_admin),
-) -> dict:
-    """Register a Brother scanner with brsaneconfig4 and return its SANE device string."""
+):
+    """Register a Brother scanner with brsaneconfig4 and return its SANE device string.
+
+    Admin only. Returns 422 when the brscan4 driver is not installed (ARM images); a driver failure
+    comes back as 200 with `device: null` and an `error`.
+    """
     if not re.match(r"^[\d.]+$", body.ip):
         raise HTTPException(status_code=400, detail="Invalid IP address")
 
@@ -579,13 +615,23 @@ async def register_brscan4(
     return {"device": device, "error": None}
 
 
-@router.get("/{scanner_id}/test")
+@router.get(
+    "/{scanner_id}/test",
+    summary="Test a saved scanner",
+    response_model=ScannerTestResult,
+    response_model_exclude_unset=True,
+    responses=std_responses(ADMIN, NOT_FOUND),
+)
 async def test_scanner(
     scanner_id: int,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
-) -> dict:
-    """Test an already-saved scanner: eSCL HTTP check + SANE device check."""
+):
+    """Test a saved scanner: eSCL HTTP check plus SANE (or native) connectivity check.
+
+    Admin only. Native `brothernet:` devices only get a lease probe and also report `native` and
+    `busy`; busy counts as reachable.
+    """
     import re
     import xml.etree.ElementTree as ET
 
@@ -697,7 +743,7 @@ async def _confirm_native(rec: dict) -> dict | None:
     }
 
 
-async def _discover_native() -> list[dict]:
+async def _discover_native():
     try:
         services = await discover_scanner_services()
     except Exception:
@@ -708,8 +754,14 @@ async def _discover_native() -> list[dict]:
     return [c for c in confirmed if c is not None]
 
 
-@router.get("/discover")
-async def discover_scanners(_user: User = Depends(require_admin)) -> list[dict]:
+@router.get(
+    "/discover",
+    summary="Discover scanners",
+    response_model=list[DiscoveredScanner],
+    response_model_exclude_unset=True,
+    responses=std_responses(ADMIN, SCANNER_BUSY),
+)
+async def discover_scanners(_user: User = Depends(require_admin)):
     """Run scanimage -L and return found SANE devices."""
     proc = await asyncio.create_subprocess_exec(
         "scanimage", "-L",
@@ -736,12 +788,23 @@ async def discover_scanners(_user: User = Depends(require_admin)) -> list[dict]:
     return devices + await _discover_native()
 
 
-@router.post("", status_code=201)
+@router.post(
+    "",
+    summary="Add a scanner",
+    response_model=ScannerResponse,
+    status_code=201,
+    responses=std_responses(ADMIN, CONFLICT, VALIDATION),
+)
 async def add_scanner(
     body: ScannerCreate,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
-) -> dict:
+):
+    """Add a scanner. The first scanner added becomes the default.
+
+    Admin only. Secret values in `post_scan_config` are encrypted at rest; airscan devices get their
+    config entry written immediately. 409 when the name exists.
+    """
     existing = await db.execute(select(Scanner).where(Scanner.name == body.name))
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail=f"Scanner '{body.name}' already exists")
@@ -782,13 +845,22 @@ async def add_scanner(
     return _scanner_response(scanner)
 
 
-@router.patch("/{scanner_id}")
+@router.patch(
+    "/{scanner_id}",
+    summary="Update a scanner",
+    response_model=ScannerResponse,
+    responses=std_responses(ADMIN, NOT_FOUND, VALIDATION),
+)
 async def update_scanner(
     scanner_id: int,
     body: ScannerUpdate,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
-) -> dict:
+):
+    """Partially update a scanner; omitted fields are unchanged.
+
+    Admin only. A `*set*` placeholder for a secret in `post_scan_config` keeps the stored value.
+    """
     scanner = await db.get(Scanner, scanner_id)
     if not scanner:
         raise HTTPException(status_code=404, detail="Scanner not found")
@@ -815,12 +887,21 @@ async def update_scanner(
     return _scanner_response(scanner)
 
 
-@router.delete("/{scanner_id}", status_code=204)
+@router.delete(
+    "/{scanner_id}",
+    summary="Delete a scanner",
+    status_code=204,
+    responses=std_responses(ADMIN, NOT_FOUND),
+)
 async def delete_scanner(
     scanner_id: int,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ) -> None:
+    """Delete a scanner. If it was the default, the oldest remaining scanner becomes the default.
+
+    Admin only.
+    """
     scanner = await db.get(Scanner, scanner_id)
     if not scanner:
         raise HTTPException(status_code=404, detail="Scanner not found")
@@ -838,12 +919,23 @@ async def delete_scanner(
             await db.commit()
 
 
-@router.post("/{scanner_id}/default", status_code=200)
+@router.post(
+    "/{scanner_id}/default",
+    summary="Set the default scanner",
+    response_model=ScannerResponse,
+    status_code=200,
+    responses=std_responses(ADMIN, NOT_FOUND),
+)
 async def set_default_scanner(
     scanner_id: int,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
-) -> dict:
+):
+    """Make a scanner the default used by scans, clearing the flag elsewhere in the same
+    transaction.
+
+    Admin only.
+    """
     scanner = await db.get(Scanner, scanner_id)
     if not scanner:
         raise HTTPException(status_code=404, detail="Scanner not found")

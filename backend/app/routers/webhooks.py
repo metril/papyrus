@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import AUTH_ERRORS, NOT_FOUND, error_group, std_responses
 from app.auth.dependencies import require_admin
 from app.database import get_db
 from app.models import User, Webhook
@@ -11,30 +12,53 @@ from app.services.webhook_service import WEBHOOK_EVENTS
 
 router = APIRouter()
 
+_BAD_EVENTS = error_group(400, "One or more event names are not valid.")
 
-@router.get("/events")
+
+@router.get(
+    "/events",
+    summary="List webhook event types",
+    response_model=list[str],
+    responses=std_responses(AUTH_ERRORS),
+)
 async def list_webhook_events(_user: User = Depends(require_admin)) -> list[str]:
-    """List all available webhook event types."""
+    """List every event name a webhook can subscribe to (admin only)."""
     return WEBHOOK_EVENTS
 
 
-@router.get("", response_model=list[WebhookResponse])
+@router.get(
+    "",
+    summary="List webhooks",
+    response_model=list[WebhookResponse],
+    responses=std_responses(AUTH_ERRORS),
+)
 async def list_webhooks(
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ):
-    """List all configured webhooks."""
+    """List configured outgoing webhooks, newest first (admin only). Signing secrets are never
+    returned."""
     result = await db.execute(select(Webhook).order_by(Webhook.created_at.desc()))
     return result.scalars().all()
 
 
-@router.post("", response_model=WebhookResponse, status_code=201)
+@router.post(
+    "",
+    summary="Create a webhook",
+    response_model=WebhookResponse,
+    status_code=201,
+    responses=std_responses(AUTH_ERRORS, _BAD_EVENTS),
+)
 async def create_webhook(
     body: WebhookCreate,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(require_admin),
 ):
-    """Create a new webhook."""
+    """Create an outgoing webhook (admin only).
+
+    The optional secret is encrypted at rest and used to sign deliveries with
+    HMAC. Events must come from the events endpoint.
+    """
     # Validate events
     invalid = [e for e in body.events if e not in WEBHOOK_EVENTS]
     if invalid:
@@ -58,14 +82,19 @@ async def create_webhook(
     return webhook
 
 
-@router.put("/{webhook_id}", response_model=WebhookResponse)
+@router.put(
+    "/{webhook_id}",
+    summary="Update a webhook",
+    response_model=WebhookResponse,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, _BAD_EVENTS),
+)
 async def update_webhook(
     webhook_id: int,
     body: WebhookUpdate,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ):
-    """Update a webhook.
+    """Update a webhook (admin only).
 
     PATCH semantics (F18): a field the client didn't send is left alone, so
     e.g. the enable/disable toggle can PUT just `{"enabled": ...}` without
@@ -102,13 +131,18 @@ async def update_webhook(
     return webhook
 
 
-@router.delete("/{webhook_id}", status_code=204)
+@router.delete(
+    "/{webhook_id}",
+    summary="Delete a webhook",
+    status_code=204,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND),
+)
 async def delete_webhook(
     webhook_id: int,
     db: AsyncSession = Depends(get_db),
     _user: User = Depends(require_admin),
 ):
-    """Delete a webhook."""
+    """Delete a webhook permanently (admin only)."""
     webhook = await db.get(Webhook, webhook_id)
     if not webhook:
         raise HTTPException(status_code=404, detail="Webhook not found")

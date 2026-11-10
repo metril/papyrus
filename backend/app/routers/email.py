@@ -8,11 +8,19 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import AUTH_ERRORS, RATE_LIMITED, error_group, std_responses
 from app.auth.dependencies import get_current_user, require_admin
 from app.database import get_db
 from app.models import AppConfig, User
 from app.routers.jobs import _create_print_job_from_upload
-from app.schemas import EmailConfig, EmailConfigStatus
+from app.schemas import (
+    EmailConfig,
+    EmailConfigStatus,
+    EmailReceiveResponse,
+    MessageResponse,
+    WebhookInfo,
+    WebhookSecretResponse,
+)
 from app.services import settings_cache
 from app.services.convert_service import is_printable
 from app.services.crypto import decrypt_value, encrypt_value
@@ -30,6 +38,10 @@ router = APIRouter()
 _webhook_requests: dict[str, list[float]] = defaultdict(list)
 _BUCKET_IDLE_SECONDS = 3600.0
 
+_FORBIDDEN_TOKEN = error_group(403, "Invalid webhook token.")
+_NOT_CONFIGURED = error_group(503, "The email webhook has no secret configured.")
+_SMTP_FAILED = error_group(502, "The SMTP server could not be reached or rejected the login.")
+
 
 async def _get_smtp_config(db: AsyncSession) -> dict:
     """Load SMTP config from database."""
@@ -40,12 +52,18 @@ async def _get_smtp_config(db: AsyncSession) -> dict:
     return {row.key: row.value for row in rows}
 
 
-@router.get("/config", response_model=EmailConfigStatus)
+@router.get(
+    "/config",
+    summary="Get SMTP status",
+    response_model=EmailConfigStatus,
+    responses=std_responses(AUTH_ERRORS),
+)
 async def get_email_config(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get SMTP configuration status (no secrets returned)."""
+    """Report whether SMTP is configured, with host and From address (any signed-in user). No
+    secrets are returned."""
     db_config = await _get_smtp_config(db)
     return EmailConfigStatus(
         configured=email_service.is_configured(db_config),
@@ -54,13 +72,19 @@ async def get_email_config(
     )
 
 
-@router.put("/config")
+@router.put(
+    "/config",
+    summary="Update SMTP configuration",
+    response_model=MessageResponse,
+    responses=std_responses(AUTH_ERRORS),
+)
 async def update_email_config(
     data: EmailConfig,
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update SMTP configuration (admin only)."""
+    """Replace the SMTP host, port, credentials and From address (admin only). The password is
+    encrypted at rest and the settings cache is invalidated."""
     config_items = {
         "smtp_host": data.smtp_host,
         "smtp_port": str(data.smtp_port),
@@ -83,12 +107,18 @@ async def update_email_config(
     return {"message": "SMTP configuration updated"}
 
 
-@router.post("/test")
+@router.post(
+    "/test",
+    summary="Test the SMTP connection",
+    response_model=MessageResponse,
+    responses=std_responses(AUTH_ERRORS, _SMTP_FAILED),
+)
 async def test_email(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Test SMTP connection."""
+    """Open an SMTP connection with the stored configuration (admin only). 502 when it fails; no
+    mail is sent."""
     db_config = await _get_smtp_config(db)
     success = await email_service.test_connection(db_config)
     if not success:
@@ -153,7 +183,18 @@ def _check_rate_limit(key: str, max_requests: int = 10) -> bool:
     return True
 
 
-@router.post("/receive", status_code=201)
+@router.post(
+    "/receive",
+    summary="Receive email attachments for printing",
+    response_model=EmailReceiveResponse,
+    status_code=201,
+    responses=std_responses(
+        _FORBIDDEN_TOKEN,
+        RATE_LIMITED,
+        _NOT_CONFIGURED,
+        error_group(413, "An attachment exceeds the maximum upload size."),
+    ),
+)
 async def receive_email(
     files: list[UploadFile] = File(...),
     token: str = Form(...),
@@ -161,11 +202,13 @@ async def receive_email(
     subject: str = Form(default="Email Attachment"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Receive forwarded email attachments and create print jobs.
+    """Receive forwarded email attachments and create held print jobs.
 
-    This endpoint is called by external services (Postfix, Zapier, n8n)
-    to forward email attachments for printing. Authentication is via
-    a shared secret token, not OIDC.
+    Called by external services (Postfix, Zapier, n8n) as multipart form data
+    with `files`, the shared secret as `token`, and optional `sender` and
+    `subject`. Authenticated by the token, not a session or API token; rate
+    limited per token. Unprintable attachments are skipped. Each job fires
+    the `print.upload` and `print.held` webhooks.
     """
     # F57: validate the token *before* touching the rate limiter -- an
     # attacker posting junk tokens must not be able to exhaust the
@@ -219,12 +262,18 @@ async def receive_email(
     return {"jobs": created_jobs, "total": len(created_jobs)}
 
 
-@router.get("/webhook-info")
+@router.get(
+    "/webhook-info",
+    summary="Get email webhook info",
+    response_model=WebhookInfo,
+    responses=std_responses(AUTH_ERRORS),
+)
 async def get_webhook_info(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get webhook URL and configuration status (admin only)."""
+    """Return the inbound email webhook URL and whether a secret exists (admin only). The secret
+    is not returned."""
     from app.routers.settings import get_setting
     webhook_secret = await get_setting(db, "email_webhook_secret")
     has_secret = bool(webhook_secret)
@@ -235,12 +284,18 @@ async def get_webhook_info(
     }
 
 
-@router.post("/webhook-secret")
+@router.post(
+    "/webhook-secret",
+    summary="Generate the email webhook secret",
+    response_model=WebhookSecretResponse,
+    responses=std_responses(AUTH_ERRORS),
+)
 async def generate_webhook_secret(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Generate a new webhook secret (admin only). Returns plaintext once."""
+    """Generate and store a new email webhook secret, replacing any previous one (admin only). The
+    plaintext is returned only in this response."""
     new_secret = secrets.token_urlsafe(32)
 
     result = await db.execute(

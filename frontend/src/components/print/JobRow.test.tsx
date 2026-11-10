@@ -92,7 +92,7 @@ describe('JobRow thumbnail', () => {
     const { container } = render(<JobRowComponent {...makeProps()} />);
     const img = container.querySelector('img');
     expect(img).not.toBeNull();
-    expect(img).toHaveAttribute('src', '/api/jobs/1/thumbnail');
+    expect(img).toHaveAttribute('src', '/api/v1/jobs/1/thumbnail');
     expect(img).toHaveAttribute('loading', 'lazy');
   });
 
@@ -101,7 +101,7 @@ describe('JobRow thumbnail', () => {
       <JobRowComponent {...makeProps({ job: { ...heldJob, id: 5, status: 'completed' } })} />
     );
     const img = container.querySelector('img');
-    expect(img).toHaveAttribute('src', '/api/jobs/5/thumbnail');
+    expect(img).toHaveAttribute('src', '/api/v1/jobs/5/thumbnail');
   });
 
   it('does not render a thumbnail for jobs that are neither held nor completed', () => {
@@ -147,7 +147,7 @@ describe('JobRow printer selector (F150)', () => {
       is_network_queue: false,
       auto_release: false,
       created_at: '2026-07-05T00:00:00Z',
-      cups_status: { state: 3, state_message: '', accepting_jobs: true },
+      cups_status: { state: 3, state_message: '', accepting_jobs: true, markers: [], state_reasons: [] },
     };
   }
 
@@ -225,7 +225,7 @@ describe('JobRow PIN lock placeholder (F27)', () => {
       <JobRowComponent {...makeProps({ job: pinJobOwnedByOwner })} />
     );
 
-    expect(container.querySelector('img')).toHaveAttribute('src', '/api/jobs/2/thumbnail');
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/v1/jobs/2/thumbnail');
     expect(container.querySelector('svg.lucide-lock')).toBeNull();
   });
 
@@ -235,7 +235,7 @@ describe('JobRow PIN lock placeholder (F27)', () => {
       <JobRowComponent {...makeProps({ job: pinJobOwnedByOwner })} />
     );
 
-    expect(container.querySelector('img')).toHaveAttribute('src', '/api/jobs/2/thumbnail');
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/v1/jobs/2/thumbnail');
     expect(container.querySelector('svg.lucide-lock')).toBeNull();
   });
 
@@ -244,7 +244,7 @@ describe('JobRow PIN lock placeholder (F27)', () => {
     const networkJob: PrintJob = { ...heldJob, id: 3, user_id: null, has_pin: true };
     const { container } = render(<JobRowComponent {...makeProps({ job: networkJob })} />);
 
-    expect(container.querySelector('img')).toHaveAttribute('src', '/api/jobs/3/thumbnail');
+    expect(container.querySelector('img')).toHaveAttribute('src', '/api/v1/jobs/3/thumbnail');
     expect(container.querySelector('svg.lucide-lock')).toBeNull();
   });
 

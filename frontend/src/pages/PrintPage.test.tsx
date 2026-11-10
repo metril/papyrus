@@ -22,7 +22,7 @@ function makeWrapper(initialEntry: string) {
 describe('PrintPage share_failed toast (F133)', () => {
   beforeEach(() => {
     useToastStore.setState({ toasts: [] });
-    server.use(http.get('/api/printers', () => HttpResponse.json([])));
+    server.use(http.get('/api/v1/printers', () => HttpResponse.json([])));
   });
 
   it('toasts a pluralized message exactly once and clears the query param when share_failed is present', async () => {

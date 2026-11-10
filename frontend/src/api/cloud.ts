@@ -7,7 +7,7 @@ export async function listProviders(): Promise<CloudProvider[]> {
 }
 
 export async function disconnectProvider(id: number): Promise<void> {
-  await api.delete(`/cloud/disconnect/${id}`);
+  await api.delete(`/cloud/providers/${id}`);
 }
 
 export interface WebdavConnect {
@@ -21,7 +21,7 @@ export async function connectWebdav(body: WebdavConnect): Promise<void> {
 }
 
 export function getAuthorizeUrl(provider: string): string {
-  return `/api/cloud/authorize/${provider}`;
+  return `/api/v1/cloud/authorize/${provider}`;
 }
 
 export async function listFiles(
@@ -58,8 +58,8 @@ export async function downloadCloudFile(
 // --- WebDAV browsing (F82) ---
 //
 // A WebDAV-connected provider (Nextcloud, ...) is a `CloudProvider` row like
-// any other, but it's served by its own router (`/api/webdav/*`) rather than
-// `/api/cloud/*` — that router has no browse-by-provider-id dispatch for
+// any other, but it's served by its own router (`/api/v1/webdav/*`) rather than
+// `/api/v1/cloud/*` — that router has no browse-by-provider-id dispatch for
 // "webdav", so routing a webdav provider through `listFiles`/`getDownloadUrl`
 // above 400s. The WebDAV service also has no generic file-download endpoint
 // (only listing and a scan-upload target), so browsing a webdav provider
@@ -122,5 +122,5 @@ export function getDownloadUrl(
   if (mimeType) {
     params.set('mime_type', mimeType);
   }
-  return `/api/cloud/download/${providerId}?${params.toString()}`;
+  return `/api/v1/cloud/download/${providerId}?${params.toString()}`;
 }

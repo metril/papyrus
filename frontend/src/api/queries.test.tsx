@@ -12,10 +12,10 @@ function makeWrapper() {
 }
 
 describe('useJobs', () => {
-  it('returns the raw { jobs, total } shape from the msw-mocked /api/jobs', async () => {
+  it('returns the raw { jobs, total } shape from the msw-mocked /api/v1/jobs', async () => {
     const { result } = renderHook(() => useJobs(), { wrapper: makeWrapper() });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toEqual({ jobs: [], total: 0 });
+    expect(result.current.data).toEqual({ items: [], total: 0, limit: 50, offset: 0 });
   });
 });

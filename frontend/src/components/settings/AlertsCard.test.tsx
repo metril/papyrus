@@ -79,7 +79,7 @@ describe('AlertsCard', () => {
   it('saves the section: PUTs exactly the four alert keys', async () => {
     let putBody: Record<string, string> | null = null;
     server.use(
-      http.put('/api/settings', async ({ request }) => {
+      http.put('/api/v1/settings', async ({ request }) => {
         putBody = (await request.json()) as Record<string, string>;
         return HttpResponse.json({});
       })

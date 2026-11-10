@@ -49,7 +49,7 @@ export default defineConfig({
         // by navigateFallbackDenylist below, so no service-worker change is
         // needed for the share POST to reach the network/backend.
         share_target: {
-          action: '/api/share-target',
+          action: '/api/v1/jobs/share-target',
           method: 'POST',
           enctype: 'multipart/form-data',
           params: {
@@ -95,9 +95,6 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8080',
         changeOrigin: true,
-      },
-      '/ws': {
-        target: 'ws://localhost:8080',
         ws: true,
       },
     },

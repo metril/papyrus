@@ -16,7 +16,7 @@ function wrapper() {
 
 async function openNativeAdd() {
   const user = userEvent.setup();
-  server.use(http.get('/api/scanners', () => HttpResponse.json([])));
+  server.use(http.get('/api/v1/scanners', () => HttpResponse.json([])));
   render(<ScannersCard />, { wrapper: wrapper() });
   await user.click(await screen.findByText('+ Add scanner'));
   await user.click(screen.getByRole('button', { name: 'Brother' }));
@@ -48,7 +48,7 @@ describe('ScannersCard native driver', () => {
   it('adds a native scanner without brscan4 config', async () => {
     let posted: Record<string, unknown> | null = null;
     server.use(
-      http.post('/api/scanners', async ({ request }) => {
+      http.post('/api/v1/scanners', async ({ request }) => {
         posted = (await request.json()) as Record<string, unknown>;
         return HttpResponse.json({ id: 1, ...posted }, { status: 201 });
       }),
@@ -65,7 +65,7 @@ describe('ScannersCard native driver', () => {
 
   it('lists discovered devices, selecting a supported one and disabling untested models', async () => {
     server.use(
-      http.get('/api/scanners/discover', () =>
+      http.get('/api/v1/scanners/discover', () =>
         HttpResponse.json([
           { device: 'brother4:net1;dev0', description: 'Brother DCP' },
           {

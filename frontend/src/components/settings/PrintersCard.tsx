@@ -132,7 +132,7 @@ export default function PrintersCard() {
     setForm((f) => ({
       ...f,
       display_name: device.make_model ?? device.name,
-      uri: device.uri,
+      uri: device.uri ?? '',
       description: device.location ?? '',
     }));
   };

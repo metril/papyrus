@@ -2,9 +2,10 @@ import asyncio
 import shutil
 import time
 
-from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import SERVER, std_responses
 from app.auth.ws import authenticate_websocket, has_ws_permission
 from app.database import async_session, get_db
 from app.schemas import HealthResponse
@@ -12,6 +13,8 @@ from app.services.scan_service import get_default_scanner, is_native_device, sca
 from app.services.ws_manager import ws_manager
 
 router = APIRouter()
+# WebSocket channels are mounted separately at /api/v1/ws.
+ws_router = APIRouter()
 
 _start_time = time.monotonic()
 
@@ -127,9 +130,19 @@ async def _probe_subsystems() -> tuple[bool, bool]:
         return cups_ok, scanner_ok
 
 
-@router.get("/health", response_model=HealthResponse)
-async def health_check(db: AsyncSession = Depends(get_db)):
-    """Detailed health check with subsystem status."""
+@router.get(
+    "/health",
+    summary="Health check",
+    response_model=HealthResponse,
+    responses=std_responses(SERVER),
+)
+async def health_check(request: Request, db: AsyncSession = Depends(get_db)):
+    """Liveness/readiness probe with subsystem status.
+
+    Public: no authentication. Reports CUPS, scanner, database and disk state
+    plus uptime. `status` is `degraded` when CUPS or the database is down.
+    The CUPS and scanner probes are cached for about 15 seconds.
+    """
     db_ok = False
     disk_free_mb = 0
 
@@ -160,6 +173,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
 
     return HealthResponse(
         status=status,
+        version=request.app.version,
         cups_running=cups_ok,
         scanner_available=scanner_ok,
         db_connected=db_ok,
@@ -168,7 +182,7 @@ async def health_check(db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.websocket("/ws/jobs")
+@ws_router.websocket("/jobs")
 async def jobs_ws(websocket: WebSocket):
     """WebSocket for real-time print job status updates.
 
@@ -198,7 +212,7 @@ async def jobs_ws(websocket: WebSocket):
         ws_manager.disconnect("jobs", websocket)
 
 
-@router.websocket("/ws/scans")
+@ws_router.websocket("/scans")
 async def scans_ws(websocket: WebSocket):
     """WebSocket for real-time scan list updates. See jobs_ws's F48 note
     (permission "scan" here, and the same short-lived auth session)."""
@@ -215,7 +229,7 @@ async def scans_ws(websocket: WebSocket):
         ws_manager.disconnect("scans", websocket)
 
 
-@router.websocket("/ws/printers")
+@ws_router.websocket("/printers")
 async def printers_ws(websocket: WebSocket):
     """WebSocket for real-time printer status updates. See jobs_ws's F48
     note (permission "print" here, and the same short-lived auth session)."""

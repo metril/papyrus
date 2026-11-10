@@ -106,7 +106,7 @@ export default function ScanForm() {
   });
 
   useWebSocket({
-    url: scanId ? `/api/scanner/ws/scan/${scanId}` : null,
+    url: scanId ? `/api/v1/ws/scans/${scanId}` : null,
     onMessage: (msg) => {
       if (msg.type === 'scan_progress') {
         setProgress((msg.data as { progress: number }).progress);

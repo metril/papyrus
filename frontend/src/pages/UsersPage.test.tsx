@@ -41,13 +41,13 @@ describe('UsersPage', () => {
     let patchBody: unknown = null;
 
     server.use(
-      http.get('/api/admin/users', () => {
+      http.get('/api/v1/admin/users', () => {
         getCount += 1;
         return HttpResponse.json(
           getCount === 1 ? [me, other] : [me, { ...other, role: 'admin' }],
         );
       }),
-      http.patch('/api/admin/users/other-1', async ({ request }) => {
+      http.patch('/api/v1/admin/users/other-1', async ({ request }) => {
         patchBody = await request.json();
         return HttpResponse.json({ id: 'other-1', role: 'admin' });
       }),

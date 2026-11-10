@@ -63,11 +63,15 @@ function msg(type: string, data: unknown): WSMessage {
 }
 
 interface JobsCache {
-  jobs: PrintJob[];
+  items: PrintJob[];
+  limit: number;
+  offset: number;
   total: number;
 }
 interface ScansCache {
-  scans: ScanJob[];
+  items: ScanJob[];
+  limit: number;
+  offset: number;
   total: number;
 }
 
@@ -80,52 +84,52 @@ describe('applyJobEvent', () => {
   });
 
   it('job_created prepends onto an existing cache and increments total', () => {
-    qc.setQueryData<JobsCache>(key, { jobs: [], total: 0 });
+    qc.setQueryData<JobsCache>(key, { items: [], total: 0, limit: 50, offset: 0 });
 
     applyJobEvent(qc, msg('job_created', makeJob(1)));
 
     const cache = qc.getQueryData<JobsCache>(key);
-    expect(cache).toEqual({ jobs: [makeJob(1)], total: 1 });
+    expect(cache).toEqual({ items: [makeJob(1)], total: 1, limit: 50, offset: 0 });
   });
 
   it('job_created prepends a newer job ahead of existing ones', () => {
-    qc.setQueryData<JobsCache>(key, { jobs: [makeJob(1)], total: 1 });
+    qc.setQueryData<JobsCache>(key, { items: [makeJob(1)], total: 1, limit: 50, offset: 0 });
 
     applyJobEvent(qc, msg('job_created', makeJob(2)));
 
     const cache = qc.getQueryData<JobsCache>(key)!;
-    expect(cache.jobs.map((j) => j.id)).toEqual([2, 1]);
+    expect(cache.items.map((j) => j.id)).toEqual([2, 1]);
     expect(cache.total).toBe(2);
   });
 
   it('job_updated replaces in place without reordering or changing total', () => {
-    qc.setQueryData<JobsCache>(key, { jobs: [makeJob(1), makeJob(2)], total: 2 });
+    qc.setQueryData<JobsCache>(key, { items: [makeJob(1), makeJob(2)], total: 2, limit: 50, offset: 0 });
 
     applyJobEvent(qc, msg('job_updated', makeJob(2, { status: 'printing' })));
 
     const cache = qc.getQueryData<JobsCache>(key)!;
-    expect(cache.jobs.map((j) => j.id)).toEqual([1, 2]);
-    expect(cache.jobs[1].status).toBe('printing');
+    expect(cache.items.map((j) => j.id)).toEqual([1, 2]);
+    expect(cache.items[1].status).toBe('printing');
     expect(cache.total).toBe(2);
   });
 
   it('job_deleted removes the row and decrements total', () => {
-    qc.setQueryData<JobsCache>(key, { jobs: [makeJob(1), makeJob(2)], total: 2 });
+    qc.setQueryData<JobsCache>(key, { items: [makeJob(1), makeJob(2)], total: 2, limit: 50, offset: 0 });
 
     applyJobEvent(qc, msg('job_deleted', { id: 1 }));
 
     const cache = qc.getQueryData<JobsCache>(key)!;
-    expect(cache.jobs.map((j) => j.id)).toEqual([2]);
+    expect(cache.items.map((j) => j.id)).toEqual([2]);
     expect(cache.total).toBe(1);
   });
 
   it('job_deleted for an id not in the cache leaves total unchanged', () => {
-    qc.setQueryData<JobsCache>(key, { jobs: [makeJob(1)], total: 1 });
+    qc.setQueryData<JobsCache>(key, { items: [makeJob(1)], total: 1, limit: 50, offset: 0 });
 
     applyJobEvent(qc, msg('job_deleted', { id: 999 }));
 
     const cache = qc.getQueryData<JobsCache>(key)!;
-    expect(cache.jobs.map((j) => j.id)).toEqual([1]);
+    expect(cache.items.map((j) => j.id)).toEqual([1]);
     expect(cache.total).toBe(1);
   });
 
@@ -133,8 +137,8 @@ describe('applyJobEvent', () => {
   // (a new/deleted job shifts every later page's offset), so every job
   // event invalidates the whole historyAll prefix instead.
   it('job_created also invalidates any cached jobs-history pages', () => {
-    qc.setQueryData(key, { jobs: [], total: 0 });
-    qc.setQueryData(queryKeys.jobs.history(0), { jobs: [makeJob(1)], total: 1 });
+    qc.setQueryData(key, { items: [], total: 0, limit: 50, offset: 0 });
+    qc.setQueryData(queryKeys.jobs.history(0), { items: [makeJob(1)], total: 1, limit: 50, offset: 0 });
 
     applyJobEvent(qc, msg('job_created', makeJob(2)));
 
@@ -142,8 +146,8 @@ describe('applyJobEvent', () => {
   });
 
   it('job_deleted also invalidates any cached jobs-history pages', () => {
-    qc.setQueryData(key, { jobs: [makeJob(1)], total: 1 });
-    qc.setQueryData(queryKeys.jobs.history(0), { jobs: [makeJob(1)], total: 1 });
+    qc.setQueryData(key, { items: [makeJob(1)], total: 1, limit: 50, offset: 0 });
+    qc.setQueryData(queryKeys.jobs.history(0), { items: [makeJob(1)], total: 1, limit: 50, offset: 0 });
 
     applyJobEvent(qc, msg('job_deleted', { id: 1 }));
 
@@ -172,45 +176,49 @@ describe('applyScanEvent', () => {
   });
 
   it('scan_completed inserts an unseen scan and increments total', () => {
-    qc.setQueryData<ScansCache>(key, { scans: [], total: 0 });
+    qc.setQueryData<ScansCache>(key, { items: [], total: 0, limit: 50, offset: 0 });
 
     applyScanEvent(qc, msg('scan_completed', makeScan('abc')));
 
     const cache = qc.getQueryData<ScansCache>(key)!;
-    expect(cache.scans.map((s) => s.scan_id)).toEqual(['abc']);
+    expect(cache.items.map((s) => s.scan_id)).toEqual(['abc']);
     expect(cache.total).toBe(1);
   });
 
   it('scan_completed upserts by scan_id in place', () => {
     qc.setQueryData<ScansCache>(key, {
-      scans: [makeScan('abc'), makeScan('def')],
+      items: [makeScan('abc'), makeScan('def')],
       total: 2,
+      limit: 50,
+      offset: 0,
     });
 
     applyScanEvent(qc, msg('scan_completed', makeScan('def', { page_count: 5 })));
 
     const cache = qc.getQueryData<ScansCache>(key)!;
-    expect(cache.scans.map((s) => s.scan_id)).toEqual(['abc', 'def']);
-    expect(cache.scans[1].page_count).toBe(5);
+    expect(cache.items.map((s) => s.scan_id)).toEqual(['abc', 'def']);
+    expect(cache.items[1].page_count).toBe(5);
     expect(cache.total).toBe(2);
   });
 
   it('scan_deleted removes by scan_id and decrements total', () => {
     qc.setQueryData<ScansCache>(key, {
-      scans: [makeScan('abc'), makeScan('def')],
+      items: [makeScan('abc'), makeScan('def')],
       total: 2,
+      limit: 50,
+      offset: 0,
     });
 
     applyScanEvent(qc, msg('scan_deleted', { scan_id: 'abc' }));
 
     const cache = qc.getQueryData<ScansCache>(key)!;
-    expect(cache.scans.map((s) => s.scan_id)).toEqual(['def']);
+    expect(cache.items.map((s) => s.scan_id)).toEqual(['def']);
     expect(cache.total).toBe(1);
   });
 
   it('scan_completed also invalidates any cached scans-history pages', () => {
-    qc.setQueryData(key, { scans: [], total: 0 });
-    qc.setQueryData(queryKeys.scans.history(0), { scans: [makeScan('abc')], total: 1 });
+    qc.setQueryData(key, { items: [], total: 0, limit: 50, offset: 0 });
+    qc.setQueryData(queryKeys.scans.history(0), { items: [makeScan('abc')], total: 1, limit: 50, offset: 0 });
 
     applyScanEvent(qc, msg('scan_completed', makeScan('def')));
 
@@ -218,8 +226,8 @@ describe('applyScanEvent', () => {
   });
 
   it('scan_deleted also invalidates any cached scans-history pages', () => {
-    qc.setQueryData(key, { scans: [makeScan('abc')], total: 1 });
-    qc.setQueryData(queryKeys.scans.history(0), { scans: [makeScan('abc')], total: 1 });
+    qc.setQueryData(key, { items: [makeScan('abc')], total: 1, limit: 50, offset: 0 });
+    qc.setQueryData(queryKeys.scans.history(0), { items: [makeScan('abc')], total: 1, limit: 50, offset: 0 });
 
     applyScanEvent(qc, msg('scan_deleted', { scan_id: 'abc' }));
 
@@ -242,19 +250,19 @@ describe('shouldToastScanCompleted', () => {
 
   it('toasts a new scan', () => {
     const qc = new QueryClient();
-    qc.setQueryData<ScansCache>(key, { scans: [], total: 0 });
+    qc.setQueryData<ScansCache>(key, { items: [], total: 0, limit: 50, offset: 0 });
     expect(shouldToastScanCompleted(qc, frame({}))).toBe(true);
   });
 
   it('does not toast a rebroadcast of a row already in the cache (fronts, merged after delivery)', () => {
     const qc = new QueryClient();
-    qc.setQueryData<ScansCache>(key, { scans: [makeScan('s1')], total: 1 });
+    qc.setQueryData<ScansCache>(key, { items: [makeScan('s1')], total: 1, limit: 50, offset: 0 });
     expect(shouldToastScanCompleted(qc, frame({ duplex_merged: true }))).toBe(false);
   });
 
   it('does not toast a back-side scan, but does toast the merged result', () => {
     const qc = new QueryClient();
-    qc.setQueryData<ScansCache>(key, { scans: [], total: 0 });
+    qc.setQueryData<ScansCache>(key, { items: [], total: 0, limit: 50, offset: 0 });
     expect(shouldToastScanCompleted(qc, frame({ duplex_source_scan_id: 'f' }))).toBe(false);
     expect(
       shouldToastScanCompleted(qc, frame({ duplex_source_scan_id: 'f', duplex_merged: true })),
@@ -353,14 +361,14 @@ describe('useRealtimeBridge (F144: first-connect invalidation)', () => {
 
   it('invalidates once when cached data predates the socket opening (missed-event race)', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    // Simulates GET /api/jobs resolving before the socket opens: a
+    // Simulates GET /api/v1/jobs resolving before the socket opens: a
     // job_created broadcast in between would have reached no listener.
-    qc.setQueryData(queryKeys.jobs.list(), { jobs: [], total: 0 }, { updatedAt: Date.now() - 10_000 });
+    qc.setQueryData(queryKeys.jobs.list(), { items: [], total: 0, limit: 50, offset: 0 }, { updatedAt: Date.now() - 10_000 });
 
     renderHook(() => useRealtimeBridge(), { wrapper: makeWrapper(qc) });
     expect(qc.getQueryState(queryKeys.jobs.list())?.isInvalidated).toBe(false);
 
-    act(() => socketFor('/api/system/ws/jobs').simulateOpen());
+    act(() => socketFor('/api/v1/ws/jobs').simulateOpen());
 
     expect(qc.getQueryState(queryKeys.jobs.list())?.isInvalidated).toBe(true);
   });
@@ -368,10 +376,10 @@ describe('useRealtimeBridge (F144: first-connect invalidation)', () => {
   it('does not invalidate when cached data is at least as new as the socket open (no race lost)', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     // Fetch "resolves" after the socket will open -- nothing was missed.
-    qc.setQueryData(queryKeys.jobs.list(), { jobs: [], total: 0 }, { updatedAt: Date.now() + 10_000 });
+    qc.setQueryData(queryKeys.jobs.list(), { items: [], total: 0, limit: 50, offset: 0 }, { updatedAt: Date.now() + 10_000 });
 
     renderHook(() => useRealtimeBridge(), { wrapper: makeWrapper(qc) });
-    act(() => socketFor('/api/system/ws/jobs').simulateOpen());
+    act(() => socketFor('/api/v1/ws/jobs').simulateOpen());
 
     expect(qc.getQueryState(queryKeys.jobs.list())?.isInvalidated).toBe(false);
   });
@@ -380,7 +388,7 @@ describe('useRealtimeBridge (F144: first-connect invalidation)', () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
     renderHook(() => useRealtimeBridge(), { wrapper: makeWrapper(qc) });
-    act(() => socketFor('/api/system/ws/jobs').simulateOpen());
+    act(() => socketFor('/api/v1/ws/jobs').simulateOpen());
 
     expect(qc.getQueryCache().find({ queryKey: queryKeys.jobs.list() })).toBeUndefined();
   });
@@ -391,10 +399,10 @@ describe('useRealtimeBridge (F144: first-connect invalidation)', () => {
     // Fresh data -- the first-connect freshness check alone would skip
     // invalidating, so a positive result here can only come from the
     // reconnect branch.
-    qc.setQueryData(queryKeys.jobs.list(), { jobs: [], total: 0 }, { updatedAt: Date.now() + 10_000 });
+    qc.setQueryData(queryKeys.jobs.list(), { items: [], total: 0, limit: 50, offset: 0 }, { updatedAt: Date.now() + 10_000 });
 
     renderHook(() => useRealtimeBridge(), { wrapper: makeWrapper(qc) });
-    const first = socketFor('/api/system/ws/jobs');
+    const first = socketFor('/api/v1/ws/jobs');
     act(() => first.simulateOpen());
     expect(qc.getQueryState(queryKeys.jobs.list())?.isInvalidated).toBe(false);
 

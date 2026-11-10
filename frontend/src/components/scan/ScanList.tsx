@@ -32,7 +32,7 @@ function scanMimeType(scan: ScanJob): string {
 export default function ScanList() {
   const queryClient = useQueryClient();
   const scansQuery = useScans();
-  const scans = scansQuery.data?.scans ?? [];
+  const scans = scansQuery.data?.items ?? [];
   const toast = useToast();
   const [emailScanId, setEmailScanId] = useState<string | null>(null);
   const [cloudScanId, setCloudScanId] = useState<string | null>(null);

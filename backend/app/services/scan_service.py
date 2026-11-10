@@ -1112,6 +1112,11 @@ async def run_post_scan_actions(
     )
     filename = render_scan_filename(template, scan_job)
 
+    # Every delivery below is slow network/subprocess I/O: end whatever
+    # transaction the caller left open (and each DB read made along the way)
+    # before it, so no connection sits idle-in-transaction during uploads.
+    await db.commit()
+
     # OCR — apply before other delivery actions so recipients get searchable PDF
     if config.get("ocr") and scan_job.format == "pdf" and scan_job.filepath:
         try:
@@ -1127,6 +1132,7 @@ async def run_post_scan_actions(
     if config.get("email"):
         try:
             db_config = await _get_smtp_config(db)
+            await db.commit()
             await email_service.send_scan(
                 to=config["email"],
                 subject=f"Scan: {filename}",
@@ -1160,6 +1166,7 @@ async def run_post_scan_actions(
                 sa_select(CloudProvider).where(CloudProvider.id == config["cloud_provider_id"])
             )
             provider = result.scalar_one_or_none()
+            await db.commit()
             if provider:
                 if provider.provider in ("gdrive", "dropbox"):
                     # F14: refresh the token first if it's expired, rather
@@ -1226,6 +1233,7 @@ async def run_post_scan_actions(
                 # SFTP host key. Global (not per-scanner) setting -- see
                 # FtpCard.
                 host_key_fingerprint = await get_setting(db, "sftp_host_key_fingerprint")
+                await db.commit()
                 await ftp_service.upload_sftp(
                     host, port, user, pwd_enc, scan_job.filepath, filename, remote_dir,
                     host_key_fingerprint=host_key_fingerprint,

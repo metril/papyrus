@@ -5,11 +5,19 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import (
+    AUTH_ERRORS,
+    BAD_GATEWAY,
+    NOT_FOUND,
+    VALIDATION,
+    error_group,
+    file_response,
+    std_responses,
+)
 from app.auth.dependencies import get_current_user, require_permission
 from app.auth.ws import authenticate_websocket, has_ws_permission
 from app.database import async_session, get_db
@@ -26,13 +34,23 @@ from app.schemas import (
     BulkDeleteScansRequest,
     CollateRequest,
     EmailSendRequest,
+    Page,
     ScanBatchRequest,
-    ScanList,
     ScanProfileCreate,
     ScanProfileResponse,
     ScanRequest,
     ScanResponse,
     serialize_scan_job,
+)
+from app.schemas.scans import (
+    BacksRequest,
+    BacksResponse,
+    EnhanceRequest,
+    MessageResponse,
+    ScanCloudUploadResponse,
+    ScannerOptions,
+    ScannerStatus,
+    ScanPaperlessResponse,
 )
 from app.services import duplex_service
 from app.services.audit_service import log_event
@@ -59,40 +77,77 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/status")
+BAD_REQUEST = error_group(400, "The scan is not available (not completed) or the request does not "
+    "fit it.")
+SOURCE_CONFLICT = error_group(409, "Wrong paper source state, e.g. an empty feeder or a back-side "
+    "page-count mismatch.")
+SCANNER_BUSY = error_group(503, "The scanner is busy or unreachable.")
+
+
+@router.get(
+    "/scanners/default/status",
+    summary="Check scanner availability",
+    response_model=ScannerStatus,
+    response_model_exclude_unset=True,
+    responses=std_responses(AUTH_ERRORS, VALIDATION, SCANNER_BUSY),
+)
 async def get_scanner_status(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Check if the scanner device is available.
+    """Report whether the default scanner is reachable.
 
-    F42: resolves the configured device from the DB first -- previously this
-    never called configure(), so the singleton's device stayed "" and
-    check_device's old ``"" in output`` check reported every device as
-    available unconditionally.
+    Any authenticated user. Uses the default scanner's device (or the configured fallback). Native
+    `brothernet:` devices report `busy: true` while a scan is running and still count as available.
     """
     scanner = await get_default_scanner(db)
     device = scanner.device if scanner else await get_default_scanner_device(db)
     return await scan_service.check_device(device=device)
 
 
-@router.get("/options")
+@router.get(
+    "/scanners/default/options",
+    summary="Get scanner options",
+    response_model=ScannerOptions,
+    responses=std_responses(AUTH_ERRORS, VALIDATION),
+)
 async def get_scanner_options(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get available scan options for the default scanner."""
+    """List the resolutions, colour modes, formats and sources the default scanner supports.
+
+    Any authenticated user. `feeder_formats` lists the formats usable with the feeder (PDF only on
+    Brother devices, whose feeder always scans the whole stack).
+    """
     scanner = await get_default_scanner(db)
     return await scan_service.get_options(scanner.device if scanner else None)
 
 
-@router.post("/scan", response_model=ScanResponse, status_code=201)
+@router.post(
+    "/scans",
+    summary="Start a scan",
+    response_model=ScanResponse,
+    status_code=201,
+    responses=std_responses(AUTH_ERRORS, VALIDATION, SOURCE_CONFLICT, SCANNER_BUSY),
+)
 async def initiate_scan(
     request: ScanRequest,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Initiate a single-page scan."""
+    """Scan one page (or the whole stack) and store the result.
+
+    Requires the `scan` permission. Runs synchronously: progress is broadcast on
+    `/ws/scans/{scan_id}` and the finished row on the `scans` channel (`scan_completed`); fires the
+    `scan.complete` webhook and post-scan actions. Pass `scan_id` to subscribe to progress before
+    posting.
+
+    Feeder/glass: on Brother devices paper loaded in the feeder takes over a glass request, so the
+    scan can come back as a multi-page PDF with `source=ADF`; check the returned `format`, `source`
+    and `page_count`. An explicit feeder request with an empty feeder returns 409. Feeder scans on
+    those devices are PDF-only (422 otherwise).
+    """
     from app.routers.settings import get_setting
     scanner = await get_default_scanner(db)
     device = scanner.device if scanner else await get_default_scanner_device(db)
@@ -127,6 +182,7 @@ async def initiate_scan(
     db.add(job)
     await db.commit()
     await db.refresh(job)
+    await db.commit()  # refresh autobegins; end it before the long scan
 
     async def progress_callback(_scan_id: str, percent: float):
         await ws_manager.broadcast(f"scan:{job.scan_id}", {
@@ -178,6 +234,7 @@ async def initiate_scan(
         await dispatch_webhook(
             db, "scan.complete", {"scan_id": job.scan_id, "format": job.format}
         )
+        await db.commit()  # dispatch_webhook's query must not span delivery I/O
 
         if scanner and scanner.auto_deliver:
             await run_post_scan_actions(
@@ -208,13 +265,24 @@ async def initiate_scan(
     return job
 
 
-@router.post("/scan/batch", response_model=ScanResponse, status_code=201)
+@router.post(
+    "/scans/batch",
+    summary="Start a feeder batch scan",
+    response_model=ScanResponse,
+    status_code=201,
+    responses=std_responses(AUTH_ERRORS, VALIDATION, SOURCE_CONFLICT, SCANNER_BUSY),
+)
 async def initiate_batch_scan(
     request: ScanBatchRequest,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Initiate a multi-page ADF batch scan into a single PDF."""
+    """Scan every sheet in the feeder into one multi-page document.
+
+    Requires the `scan` permission. Same progress WebSocket, `scan_completed` broadcast,
+    `scan.complete` webhook and post-scan actions as `POST /scans`. Returns 409 when the feeder is
+    empty and 503 while the scanner is busy.
+    """
     from app.routers.settings import get_setting
     scanner = await get_default_scanner(db)
     device = scanner.device if scanner else await get_default_scanner_device(db)
@@ -241,6 +309,7 @@ async def initiate_batch_scan(
     db.add(job)
     await db.commit()
     await db.refresh(job)
+    await db.commit()  # refresh autobegins; end it before the long scan
 
     async def progress_callback(_scan_id: str, percent: float):
         await ws_manager.broadcast(f"scan:{job.scan_id}", {
@@ -281,6 +350,7 @@ async def initiate_batch_scan(
             db, "scan.complete",
             {"scan_id": job.scan_id, "format": request.format, "pages": page_count},
         )
+        await db.commit()  # dispatch_webhook's query must not span delivery I/O
 
         if scanner and scanner.auto_deliver:
             await run_post_scan_actions(
@@ -311,14 +381,22 @@ async def initiate_batch_scan(
     return job
 
 
-@router.get("/scans", response_model=ScanList)
+@router.get(
+    "/scans",
+    summary="List scans",
+    response_model=Page[ScanResponse],
+    responses=std_responses(AUTH_ERRORS, VALIDATION),
+)
 async def list_scans(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """List recent scans."""
+    """List scans, newest first, with limit/offset pagination.
+
+    Requires the `scan` permission.
+    """
     count_result = await db.execute(select(func.count(ScanJob.id)))
     total = count_result.scalar() or 0
 
@@ -326,16 +404,29 @@ async def list_scans(
         select(ScanJob).order_by(ScanJob.created_at.desc()).limit(limit).offset(offset)
     )
     scans = result.scalars().all()
-    return ScanList(scans=scans, total=total)
+    return Page[ScanResponse](items=scans, total=total, limit=limit, offset=offset)
 
 
-@router.get("/scans/{scan_id}/download")
+@router.get(
+    "/scans/{scan_id}/download",
+    summary="Download a scan file",
+    response_class=Response,
+    responses=file_response(
+        ["application/pdf", "image/png", "image/jpeg", "image/tiff"],
+        "The scan file, served inline.",
+    )
+    | std_responses(AUTH_ERRORS, NOT_FOUND, BAD_REQUEST),
+)
 async def download_scan(
     scan_id: str,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Download a completed scan file."""
+    """Download the file of a completed scan, served inline.
+
+    Requires the `scan` permission. 400 when the scan is not completed; 404 when unknown or the file
+    is gone.
+    """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -353,16 +444,22 @@ async def download_scan(
     )
 
 
-@router.get("/scans/{scan_id}/thumbnail")
+@router.get(
+    "/scans/{scan_id}/thumbnail",
+    summary="Get a scan thumbnail",
+    response_class=Response,
+    responses=file_response(["image/jpeg"], "JPEG preview, about 320px.")
+    | std_responses(AUTH_ERRORS, NOT_FOUND),
+)
 async def get_scan_thumbnail(
     scan_id: str,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return a small cached preview (~320px) of a completed scan.
+    """Return a small cached JPEG preview (about 320px) of a completed scan.
 
-    Generated on first request and reused after; much cheaper to load in
-    list/grid views than the full scan file.
+    Requires the `scan` permission. Generated on first request and cached; much cheaper than the
+    full file in list views.
     """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
@@ -386,14 +483,22 @@ async def get_scan_thumbnail(
     )
 
 
-@router.post("/scans/{scan_id}/email")
+@router.post(
+    "/scans/{scan_id}/email",
+    summary="Email a scan",
+    response_model=MessageResponse,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, BAD_REQUEST, VALIDATION, BAD_GATEWAY),
+)
 async def email_scan(
     scan_id: str,
     data: EmailSendRequest,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Email a scan as an attachment."""
+    """Send a completed scan as an email attachment through the configured SMTP server.
+
+    Requires the `scan` permission.
+    """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -417,14 +522,25 @@ async def email_scan(
     return {"message": f"Scan emailed to {data.to}"}
 
 
-@router.post("/scans/{scan_id}/cloud")
+@router.post(
+    "/scans/{scan_id}/cloud",
+    summary="Upload a scan to cloud storage",
+    response_model=ScanCloudUploadResponse,
+    response_model_exclude_unset=True,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, BAD_REQUEST, VALIDATION, BAD_GATEWAY),
+)
 async def upload_scan_to_cloud(
     scan_id: str,
     provider_id: int,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a scan to a connected cloud storage provider."""
+    """Upload a completed scan to one of the caller's connected cloud providers (Google Drive,
+    Dropbox or OneDrive).
+
+    Requires the `scan` permission. The response carries `file_id` (Drive, OneDrive) or `path`
+    (Dropbox).
+    """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -474,13 +590,21 @@ async def upload_scan_to_cloud(
         return {"message": "Uploaded to OneDrive", "file_id": file_id}
 
 
-@router.post("/scans/{scan_id}/paperless")
+@router.post(
+    "/scans/{scan_id}/paperless",
+    summary="Send a scan to Paperless-ngx",
+    response_model=ScanPaperlessResponse,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, BAD_REQUEST, BAD_GATEWAY),
+)
 async def send_scan_to_paperless(
     scan_id: str,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Send a scan to Paperless-ngx for archival."""
+    """Push a completed scan to Paperless-ngx for archival.
+
+    Requires the `scan` permission. 400 when Paperless-ngx is not configured.
+    """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -510,13 +634,21 @@ async def send_scan_to_paperless(
     return {"message": "Sent to Paperless-ngx", "task_id": task_id}
 
 
-@router.post("/scans/{scan_id}/ocr")
+@router.post(
+    "/scans/{scan_id}/ocr",
+    summary="Run OCR on a scan",
+    response_model=MessageResponse,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, BAD_REQUEST),
+)
 async def apply_ocr_to_scan(
     scan_id: str,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Apply OCR to a completed PDF scan, making it searchable."""
+    """Make a completed PDF scan searchable with OCR, rewriting the file in place.
+
+    Requires the `scan` permission. PDF only (400 otherwise). Invalidates the cached thumbnail.
+    """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -540,22 +672,24 @@ async def apply_ocr_to_scan(
     return {"message": "OCR applied successfully"}
 
 
-class EnhanceRequest(BaseModel):
-    brightness: float = Field(default=1.0, ge=0.1, le=3.0)
-    contrast: float = Field(default=1.0, ge=0.1, le=3.0)
-    rotation: int = Field(default=0)
-    auto_crop: bool = False
-    deskew: bool = False
-
-
-@router.post("/scans/{scan_id}/enhance")
+@router.post(
+    "/scans/{scan_id}/enhance",
+    summary="Enhance a scan image",
+    response_model=MessageResponse,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, BAD_REQUEST, VALIDATION),
+)
 async def enhance_scan(
     scan_id: str,
     body: EnhanceRequest,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Apply image enhancements (brightness, contrast, rotation, crop) to a completed scan."""
+    """Apply brightness, contrast, rotation, crop and deskew to a completed image scan, rewriting
+    the file in place.
+
+    Requires the `scan` permission. Image scans only (png/jpeg/tiff); PDFs return 400. Invalidates
+    the cached thumbnail.
+    """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -585,36 +719,34 @@ async def enhance_scan(
     return {"message": "Enhancement applied"}
 
 
-class BacksRequest(BaseModel):
-    rotate_backs: bool = False
-    skip_blank_backs: bool = False
-    reverse_backs: bool = True
-
-
 _BACKS_KEPT_MESSAGE = (
     "The pages could not be combined, so nothing was merged. "
     "The back-side scan was saved to your history."
 )
 
 
-class BacksResponse(BaseModel):
-    merged: ScanResponse
-    backs: ScanResponse | None
-    fronts: ScanResponse | None
-    blanks_dropped: int
-
-
-@router.post("/scans/{scan_id}/backs", response_model=BacksResponse)
+@router.post(
+    "/scans/{scan_id}/backs",
+    summary="Scan the back sides of a feeder PDF",
+    response_model=BacksResponse,
+    responses=std_responses(
+        AUTH_ERRORS, NOT_FOUND, BAD_REQUEST, VALIDATION, SOURCE_CONFLICT, SCANNER_BUSY
+    ),
+)
 async def scan_backs(
     scan_id: str,
     body: BacksRequest,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Scan the other side of a feeder PDF: the user flips the stack, the
-    feeder scans the backs, and fronts and backs are interleaved into a NEW
-    scan. The fronts and the backs both stay in history untouched, so a wrong
-    physical order can simply be deleted and redone.
+    """Scan the other side of a feeder PDF: the user flips the stack, the feeder scans the backs,
+    and fronts and backs are interleaved into a NEW scan.
+
+    Requires the `scan` permission; owner or admin only (others get 404). The fronts and the backs
+    both stay in history. The fronts row is marked `duplex_merged` so neither merges again.
+    Broadcasts `scan_completed` per row and fires audit/webhook/post-scan actions for the merged
+    row. 400 when the scan is not an eligible completed feeder PDF; 409 when page counts mismatch
+    (only the backs row is added) or the feeder is empty.
     """
     from app.routers.settings import get_setting
 
@@ -764,6 +896,7 @@ async def scan_backs(
         scanner = await db.get(Scanner, scanner_id) if scanner_id else None
         if scanner is None:
             scanner = await get_default_scanner(db)
+        await db.commit()
         if scanner and scanner.auto_deliver:
             await run_post_scan_actions(
                 merged_row, scanner, db, default_filename_template=filename_template
@@ -787,7 +920,12 @@ async def scan_backs(
     )
 
 
-@router.post("/scans/{scan_id}/smb")
+@router.post(
+    "/scans/{scan_id}/smb",
+    summary="Save a scan to an SMB share",
+    response_model=MessageResponse,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, BAD_REQUEST, VALIDATION, BAD_GATEWAY),
+)
 async def save_scan_to_smb(
     scan_id: str,
     share_id: int,
@@ -795,7 +933,10 @@ async def save_scan_to_smb(
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Save a scan to an SMB network share."""
+    """Write a completed scan to an SMB network share at `remote_path`.
+
+    Requires the `scan` permission.
+    """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -824,13 +965,22 @@ async def save_scan_to_smb(
     return {"message": f"Scan saved to {share.name}:{dest_path}"}
 
 
-@router.post("/scans/bulk-delete", response_model=BulkDeleteResponse)
+@router.post(
+    "/scans/bulk-delete",
+    summary="Delete several scans",
+    response_model=BulkDeleteResponse,
+    responses=std_responses(AUTH_ERRORS, VALIDATION),
+)
 async def bulk_delete_scans(
     body: BulkDeleteScansRequest,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete multiple scans and their files."""
+    """Delete scans and their files by scan id; unknown ids are ignored.
+
+    Requires the `scan` permission. Broadcasts `scan_deleted` per id (and `scan_completed` for
+    fronts freed from a duplex merge).
+    """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id.in_(body.scan_ids)))
     jobs = result.scalars().all()
 
@@ -910,13 +1060,22 @@ def _collate_pdfs_sync(page_specs: list[tuple[str, int]], out_path: str) -> None
         shutil.rmtree(work_dir, ignore_errors=True)
 
 
-@router.post("/collate", response_model=ScanResponse, status_code=201)
+@router.post(
+    "/scans/collate",
+    summary="Merge scans into one PDF",
+    response_model=ScanResponse,
+    status_code=201,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, BAD_REQUEST, VALIDATION),
+)
 async def collate_scans(
     body: CollateRequest,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Convert or merge scans into a single PDF."""
+    """Convert or merge completed scans into a single PDF, in the order given, stored as a new scan.
+
+    Requires the `scan` permission. Originals are kept.
+    """
     import uuid as _uuid
 
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id.in_(body.scan_ids)))
@@ -975,13 +1134,22 @@ async def collate_scans(
     return merged_job
 
 
-@router.delete("/scans/{scan_id}", status_code=204)
+@router.delete(
+    "/scans/{scan_id}",
+    summary="Delete a scan",
+    status_code=204,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND),
+)
 async def delete_scan(
     scan_id: str,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a scan and its file."""
+    """Delete a scan row and its file.
+
+    Requires the `scan` permission. Fires the `scan.delete` webhook and broadcasts `scan_deleted` on
+    the `scans` channel.
+    """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -1014,25 +1182,42 @@ async def delete_scan(
 # --- Scan Profiles ---
 
 
-@router.get("/profiles", response_model=list[ScanProfileResponse])
+@router.get(
+    "/scan-profiles",
+    summary="List scan profiles",
+    response_model=list[ScanProfileResponse],
+    responses=std_responses(AUTH_ERRORS),
+)
 async def list_profiles(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """List the current user's scan profiles."""
+    """List the caller's own scan profiles, sorted by name.
+
+    Any authenticated user.
+    """
     result = await db.execute(
         select(ScanProfile).where(ScanProfile.user_id == user.id).order_by(ScanProfile.name)
     )
     return result.scalars().all()
 
 
-@router.post("/profiles", response_model=ScanProfileResponse, status_code=201)
+@router.post(
+    "/scan-profiles",
+    summary="Create a scan profile",
+    response_model=ScanProfileResponse,
+    status_code=201,
+    responses=std_responses(AUTH_ERRORS, VALIDATION),
+)
 async def create_profile(
     data: ScanProfileCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a scan profile."""
+    """Create a scan profile owned by the caller.
+
+    Any authenticated user.
+    """
     profile = ScanProfile(
         name=data.name,
         resolution=data.resolution,
@@ -1048,14 +1233,22 @@ async def create_profile(
     return profile
 
 
-@router.put("/profiles/{profile_id}", response_model=ScanProfileResponse)
+@router.put(
+    "/scan-profiles/{profile_id}",
+    summary="Update a scan profile",
+    response_model=ScanProfileResponse,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, VALIDATION),
+)
 async def update_profile(
     profile_id: int,
     data: ScanProfileCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Update a scan profile."""
+    """Replace all fields of one of the caller's scan profiles.
+
+    Any authenticated user; other users' profiles return 404.
+    """
     result = await db.execute(
         select(ScanProfile).where(ScanProfile.id == profile_id, ScanProfile.user_id == user.id)
     )
@@ -1074,13 +1267,21 @@ async def update_profile(
     return profile
 
 
-@router.delete("/profiles/{profile_id}", status_code=204)
+@router.delete(
+    "/scan-profiles/{profile_id}",
+    summary="Delete a scan profile",
+    status_code=204,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND),
+)
 async def delete_profile(
     profile_id: int,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a scan profile."""
+    """Delete one of the caller's scan profiles.
+
+    Any authenticated user; other users' profiles return 404.
+    """
     result = await db.execute(
         select(ScanProfile).where(ScanProfile.id == profile_id, ScanProfile.user_id == user.id)
     )
@@ -1093,7 +1294,7 @@ async def delete_profile(
 
 
 # WebSocket endpoint for scan progress
-@router.websocket("/ws/scan/{scan_id}")
+@router.websocket("/ws/scans/{scan_id}")
 async def scan_progress_ws(websocket: WebSocket, scan_id: str):
     """WebSocket for real-time scan progress updates.
 

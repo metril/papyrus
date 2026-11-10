@@ -1,8 +1,8 @@
 import api from './client';
-import type { ScanJob, ScanRequest } from '../types';
+import type { Page, ScanJob, ScanRequest } from '../types';
 
 export async function getScannerStatus(): Promise<Record<string, unknown>> {
-  const { data } = await api.get('/scanner/status');
+  const { data } = await api.get('/scanners/default/status');
   return data;
 }
 
@@ -13,17 +13,17 @@ export async function getScannerOptions(): Promise<{
   feeder_formats?: string[];
   sources: string[];
 }> {
-  const { data } = await api.get('/scanner/options');
+  const { data } = await api.get('/scanners/default/options');
   return data;
 }
 
 export async function initiateScan(request: ScanRequest): Promise<ScanJob> {
-  const { data } = await api.post('/scanner/scan', request);
+  const { data } = await api.post('/scans', request);
   return data;
 }
 
 export async function initiateBatchScan(request: ScanRequest): Promise<ScanJob> {
-  const { data } = await api.post('/scanner/scan/batch', request);
+  const { data } = await api.post('/scans/batch', request);
   return data;
 }
 
@@ -45,7 +45,7 @@ export async function scanBacks(
   scanId: string,
   options: ScanBacksOptions,
 ): Promise<ScanBacksResult> {
-  const { data } = await api.post(`/scanner/scans/${scanId}/backs`, options);
+  const { data } = await api.post(`/scans/${scanId}/backs`, options);
   return data;
 }
 
@@ -54,37 +54,37 @@ export interface ListScansParams {
   offset?: number;
 }
 
-export async function listScans(params: ListScansParams = {}): Promise<{ scans: ScanJob[]; total: number }> {
-  const { data } = await api.get('/scanner/scans', { params });
+export async function listScans(params: ListScansParams = {}): Promise<Page<ScanJob>> {
+  const { data } = await api.get('/scans', { params });
   return data;
 }
 
 export async function deleteScan(scanId: string): Promise<void> {
-  await api.delete(`/scanner/scans/${scanId}`);
+  await api.delete(`/scans/${scanId}`);
 }
 
 export async function bulkDeleteScans(scanIds: string[]): Promise<void> {
-  await api.post('/scanner/scans/bulk-delete', { scan_ids: scanIds });
+  await api.post('/scans/bulk-delete', { scan_ids: scanIds });
 }
 
 export function getScanDownloadUrl(scanId: string): string {
-  return `/api/scanner/scans/${scanId}/download`;
+  return `/api/v1/scans/${scanId}/download`;
 }
 
 export function getScanThumbnailUrl(scanId: string): string {
-  return `/api/scanner/scans/${scanId}/thumbnail`;
+  return `/api/v1/scans/${scanId}/thumbnail`;
 }
 
 export function getJobDownloadUrl(jobId: number): string {
-  return `/api/jobs/${jobId}/download`;
+  return `/api/v1/jobs/${jobId}/download`;
 }
 
 export function getJobPreviewUrl(jobId: number): string {
-  return `/api/jobs/${jobId}/preview`;
+  return `/api/v1/jobs/${jobId}/preview`;
 }
 
 export function getJobThumbnailUrl(jobId: number): string {
-  return `/api/jobs/${jobId}/thumbnail`;
+  return `/api/v1/jobs/${jobId}/thumbnail`;
 }
 
 export async function emailScan(
@@ -93,7 +93,7 @@ export async function emailScan(
   subject?: string,
   body?: string,
 ): Promise<void> {
-  await api.post(`/scanner/scans/${scanId}/email`, { to, subject, body });
+  await api.post(`/scans/${scanId}/email`, { to, subject, body });
 }
 
 export async function saveScanToSmb(
@@ -101,7 +101,7 @@ export async function saveScanToSmb(
   shareId: number,
   remotePath?: string,
 ): Promise<void> {
-  await api.post(`/scanner/scans/${scanId}/smb`, null, {
+  await api.post(`/scans/${scanId}/smb`, null, {
     params: { share_id: shareId, remote_path: remotePath },
   });
 }
@@ -110,7 +110,7 @@ export async function saveScanToCloud(
   scanId: string,
   providerId: number,
 ): Promise<{ message: string }> {
-  const { data } = await api.post(`/scanner/scans/${scanId}/cloud`, null, {
+  const { data } = await api.post(`/scans/${scanId}/cloud`, null, {
     params: { provider_id: providerId },
   });
   return data;
@@ -121,7 +121,7 @@ export async function saveScanToCloud(
 // the scans list rather than upsert a returned object.
 
 export async function sendScanToPaperless(scanId: string): Promise<void> {
-  await api.post(`/scanner/scans/${scanId}/paperless`);
+  await api.post(`/scans/${scanId}/paperless`);
 }
 
 export interface ScanEnhanceOptions {
@@ -133,15 +133,15 @@ export interface ScanEnhanceOptions {
 }
 
 export async function enhanceScan(scanId: string, options: ScanEnhanceOptions): Promise<void> {
-  await api.post(`/scanner/scans/${scanId}/enhance`, options);
+  await api.post(`/scans/${scanId}/enhance`, options);
 }
 
 export async function ocrScan(scanId: string): Promise<void> {
-  await api.post(`/scanner/scans/${scanId}/ocr`);
+  await api.post(`/scans/${scanId}/ocr`);
 }
 
 export async function collateScans(scanIds: string[]): Promise<void> {
-  await api.post('/scanner/collate', { scan_ids: scanIds });
+  await api.post('/scans/collate', { scan_ids: scanIds });
 }
 
 // --- Scan profiles ---
@@ -166,15 +166,15 @@ export interface ScanProfileCreate {
 }
 
 export async function listScanProfiles(): Promise<ScanProfile[]> {
-  const { data } = await api.get('/scanner/profiles');
+  const { data } = await api.get('/scan-profiles');
   return data;
 }
 
 export async function createScanProfile(body: ScanProfileCreate): Promise<ScanProfile> {
-  const { data } = await api.post('/scanner/profiles', body);
+  const { data } = await api.post('/scan-profiles', body);
   return data;
 }
 
 export async function deleteScanProfile(id: number): Promise<void> {
-  await api.delete(`/scanner/profiles/${id}`);
+  await api.delete(`/scan-profiles/${id}`);
 }

@@ -10,7 +10,9 @@ from unittest.mock import MagicMock
 try:
     import cups  # noqa: F401
 except ImportError:
-    sys.modules["cups"] = MagicMock()
+    _cups_stub = MagicMock()
+    _cups_stub.Connection = MagicMock()  # explicit, so monkeypatch undo never deletes it
+    sys.modules["cups"] = _cups_stub
 
 # --- Test environment wiring (MUST run before any `app.*` import) ----------
 #
@@ -24,9 +26,18 @@ import os
 
 from cryptography.fernet import Fernet
 
-os.environ["PAPYRUS_DB_URL"] = os.environ.get(
+# xdist: each worker of each run gets its own database
+# (`<name>_gw0_<run-uid>`), created in `migrated_db` and dropped at session end,
+# so parallel workers *and* concurrent pytest runs never share schema or rows.
+# (Only os.environ writes here: ruff's E402 allows those before imports.)
+os.environ.setdefault(
     "PAPYRUS_TEST_DB_URL",
     "postgresql+asyncpg://papyrus:papyrus@localhost:5433/papyrus_test",
+)
+os.environ["PAPYRUS_DB_URL"] = os.environ["PAPYRUS_TEST_DB_URL"] + (
+    f"_{os.environ['PYTEST_XDIST_WORKER']}_{os.environ.get('PYTEST_XDIST_TESTRUNUID', '')[:8]}"
+    if os.environ.get("PYTEST_XDIST_WORKER")
+    else ""
 )
 os.environ.setdefault("PAPYRUS_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
@@ -50,6 +61,9 @@ from app.routers import email as email_router
 from app.routers import jobs as jobs_router
 from app.services import settings_cache
 
+_BASE_TEST_DB_URL = os.environ["PAPYRUS_TEST_DB_URL"]
+_XDIST_WORKER = os.environ.get("PYTEST_XDIST_WORKER", "")
+
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 ALEMBIC_DIR = BACKEND_DIR / "alembic"
 
@@ -70,13 +84,47 @@ _CONNECT_TIMEOUT_SECONDS = 5.0
 
 
 def pytest_collection_modifyitems(config, items):
-    """Auto-mark any test that uses a DB-backed fixture as `integration`."""
+    """Auto-mark DB-backed tests `integration`, then apply `--shard I/N`."""
     for item in items:
         if _INTEGRATION_FIXTURES & set(getattr(item, "fixturenames", ())):
             item.add_marker("integration")
+    _apply_shard(config, items)
+
+
+async def _admin_execute(sql_for_name) -> None:
+    """Run `sql_for_name(worker_db_name)` on the base DB (no-op without xdist)."""
+    if not _XDIST_WORKER:
+        return
+    import asyncpg
+    from sqlalchemy.engine import make_url
+
+    base = make_url(_BASE_TEST_DB_URL)
+    name = make_url(os.environ["PAPYRUS_DB_URL"]).database
+    conn = await asyncpg.connect(
+        host=base.host, port=base.port, user=base.username,
+        password=base.password, database=base.database,
+    )
+    try:
+        sql = sql_for_name(name)
+        exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", name)
+        if sql.startswith("CREATE") and not exists or sql.startswith("DROP") and exists:
+            await conn.execute(sql)
+    finally:
+        await conn.close()
+
+
+async def _ensure_worker_db() -> None:
+    """Create this worker's per-run database if it's missing."""
+    await _admin_execute(lambda n: f'CREATE DATABASE "{n}"')
+
+
+async def _drop_worker_db() -> None:
+    """Drop this worker's per-run database so runs don't accumulate them."""
+    await _admin_execute(lambda n: f'DROP DATABASE "{n}" WITH (FORCE)')
 
 
 async def _probe_db() -> None:
+    await _ensure_worker_db()
     async with engine.connect() as conn:
         await conn.execute(text("SELECT 1"))
 
@@ -110,6 +158,7 @@ async def migrated_db():
     await engine.dispose()
     yield
     await engine.dispose()
+    await _drop_worker_db()
 
 
 def _truncate_sql() -> str:
@@ -134,6 +183,14 @@ async def db(migrated_db):
     finally:
         await session.close()
         async with engine.begin() as conn:
+            # A fire-and-forget task from the test (webhook, post-scan action…)
+            # can still hold a session idle-in-transaction; TRUNCATE would wait
+            # on its lock forever. This DB is private to this worker and run,
+            # so end every other session on it first.
+            await conn.execute(text(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
+                " WHERE datname = current_database() AND pid <> pg_backend_pid()"
+            ))
             await conn.execute(text(_truncate_sql()))
         settings_cache.invalidate_all()
         await engine.dispose()
@@ -154,6 +211,20 @@ def _reset_process_local_throttles():
     jobs_router._release_pin_throttle._entries.clear()
     email_router._webhook_requests.clear()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _disable_rate_limit():
+    """Rate limiting is off by default in tests (cache override, not env);
+    rate-limit tests re-enable it explicitly."""
+    from app import rate_limit_middleware as rlm
+
+    rlm.limiter.clear()
+    rlm._valid_tokens.clear()
+    settings_cache.put("rate_limit_enabled", "false")
+    yield
+    rlm.limiter.clear()
+    rlm._valid_tokens.clear()
 
 
 @pytest_asyncio.fixture(loop_scope="function")
@@ -210,3 +281,26 @@ async def user_client(client, regular_user):
     """`client` with get_current_user overridden to the seeded regular user."""
     app.dependency_overrides[get_current_user] = lambda: regular_user
     return client
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--shard", default=None, metavar="I/N",
+        help="run only shard I (0-based) of N; test files are assigned by a stable hash",
+    )
+
+
+def _apply_shard(config, items):
+    """Keep only this shard's test files (stable hash of the rootdir-relative path)."""
+    spec = config.getoption("--shard")
+    if not spec:
+        return
+    import zlib
+
+    index, total = (int(x) for x in spec.split("/"))
+    keep, drop = [], []
+    for item in items:
+        file_id = item.nodeid.split("::", 1)[0].encode()
+        (keep if zlib.crc32(file_id) % total == index else drop).append(item)
+    items[:] = keep
+    config.hook.pytest_deselected(items=drop)

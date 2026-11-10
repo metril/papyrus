@@ -2,7 +2,7 @@ import axios from 'axios';
 import { useAuthStore } from '../store/authStore';
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: '/api/v1',
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
@@ -23,7 +23,7 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401 && !isAuthEndpoint(error.config?.url)) {
-      // F16: previously a hard `window.location.href = '/api/auth/login'`
+      // F16: previously a hard `window.location.href = '/api/v1/auth/login'`
       // here — but that endpoint 503s whenever OIDC isn't the configured
       // auth method (the default), replacing the whole SPA with raw JSON
       // before LoginScreen (which offers local login and/or an OIDC button)

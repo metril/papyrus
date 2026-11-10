@@ -6,10 +6,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import AUTH_ERRORS, BAD_GATEWAY, CONFLICT, UNAVAILABLE, VALIDATION, std_responses
 from app.auth.dependencies import require_permission
 from app.database import get_db
 from app.models import PrintJob, ScanJob, User
-from app.schemas import CopyRequest, serialize_print_job, serialize_scan_job
+from app.schemas import CopyRequest, CopyResponse, serialize_print_job, serialize_scan_job
 from app.services.copy_service import copy_service
 from app.services.cups_service import CupsService, get_default_release_queue_name
 from app.services.file_service import get_upload_path
@@ -19,13 +20,23 @@ from app.services.ws_manager import ws_manager
 router = APIRouter()
 
 
-@router.post("")
+@router.post(
+    "",
+    response_model=CopyResponse,
+    summary="Copy a document",
+    responses=std_responses(AUTH_ERRORS, CONFLICT, VALIDATION, BAD_GATEWAY, UNAVAILABLE),
+)
 async def create_copy(
     request: CopyRequest,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
     """Scan a document and immediately print it (copy workflow).
+
+    Requires the `print` permission. Side effects: creates a ScanJob and a PrintJob
+    (broadcast as `scan_completed` / `job_created` WebSocket events). Returns 409 when a
+    feeder request finds the feeder empty and 503 when the scanner or printer is
+    unavailable.
 
     Resolves the default printer's release queue and default scanner device
     from the DB (F10) — the service used to fall back to never-configured
@@ -42,6 +53,9 @@ async def create_copy(
     # scan_service singleton's default, which is no longer kept in sync.
     scan_dir = await get_setting(db, "scan_dir") or "/app/data/scans"
     cups = CupsService(printer_name=queue)
+    # End the read transaction: the scan below can run for minutes and must
+    # not hold an idle-in-transaction session (and its locks) meanwhile.
+    await db.commit()
 
     async def record_scan(info: dict) -> None:
         scan_job = ScanJob(
@@ -59,6 +73,7 @@ async def create_copy(
         db.add(scan_job)
         await db.commit()
         await db.refresh(scan_job)
+        await db.commit()  # refresh reopened a transaction; printing comes next
         await ws_manager.broadcast("scans", {
             "type": "scan_completed",
             "data": serialize_scan_job(scan_job),

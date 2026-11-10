@@ -18,11 +18,25 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import FileResponse
 
+from app.api_docs import (
+    AUTH_ERRORS,
+    BAD_GATEWAY,
+    BAD_REQUEST,
+    CONFLICT,
+    NOT_FOUND,
+    RATE_LIMITED,
+    SERVER,
+    TOO_LARGE,
+    UNAVAILABLE,
+    VALIDATION,
+    ErrorResponse,
+    file_response,
+    std_responses,
+)
 from app.auth.dependencies import get_current_user, require_permission
 from app.config import settings
 from app.database import get_db
@@ -31,8 +45,12 @@ from app.models import Printer, PrintJob, User
 from app.schemas import (
     BulkDeleteJobsRequest,
     BulkDeleteResponse,
-    PrintJobList,
+    Page,
+    PrinterAssign,
+    PrintJobCreatedResponse,
     PrintJobResponse,
+    ReleaseRequest,
+    ReprintRequest,
     serialize_print_job,
 )
 from app.services.audit_service import log_event
@@ -215,7 +233,15 @@ async def _create_print_job_from_upload(
     return job, pin
 
 
-@router.post("/upload", response_model=PrintJobResponse, status_code=201)
+@router.post(
+    "/upload",
+    response_model=PrintJobCreatedResponse,
+    status_code=201,
+    summary="Upload a file and create a print job",
+    responses=std_responses(
+        AUTH_ERRORS, BAD_REQUEST, TOO_LARGE, VALIDATION, BAD_GATEWAY, UNAVAILABLE
+    ),
+)
 async def upload_and_create_job(
     file: UploadFile = File(...),
     # F89: the frontend's Copies field used to send whatever it was given
@@ -229,7 +255,14 @@ async def upload_and_create_job(
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a file and create a print job (held by default)."""
+    """Upload a file and create a print job (held by default).
+
+    Multipart form: `file` plus optional `copies`, `duplex`, `media`, `hold`, `release_pin`.
+    Requires the `print` permission. Office documents are converted to PDF. When a
+    release PIN is set (supplied or auto-generated per the require_release_pin setting)
+    and the job is held, the 201 body additionally contains `release_pin` once; it is
+    never returned again. Side effects: `job_created` WebSocket event and `print.upload`
+    / `print.held` webhooks; with `hold=false` the job is printed immediately."""
     job, pin = await _create_print_job_from_upload(
         db, user, file,
         copies=copies, duplex=duplex, media=media, hold=hold, release_pin=release_pin,
@@ -262,7 +295,14 @@ async def _user_from_request_or_none(request: Request, db: AsyncSession) -> User
         return None
 
 
-@share_target_router.post("/share-target")
+@share_target_router.post(
+    "/share-target",
+    status_code=303,
+    summary="PWA share-target",
+    response_class=RedirectResponse,
+    responses=std_responses(SERVER) | {303: {"description": "Redirect to /print (or "
+        "/print?share_failed=N), or to the login page when unauthenticated."}},
+)
 async def share_target(
     request: Request,
     db: AsyncSession = Depends(get_db),
@@ -272,15 +312,19 @@ async def share_target(
     manifest). Deliberately NOT the usual JSON-401 contract: this is a
     browser navigation, so unauthenticated requests redirect to the login
     page and authenticated ones redirect to the print queue, both 303.
+
+    Multipart form with one or more `file` parts. Requires a session or a Bearer token
+    with the `print` permission. Each file becomes a held job without a PIN (`job_created`
+    event, `print.upload` / `print.held` webhooks); failures are counted in `share_failed`.
     """
     user = await _user_from_request_or_none(request, db)
     if user is None:
-        return RedirectResponse("/api/auth/login", status_code=303)
+        return RedirectResponse("/api/v1/auth/login", status_code=303)
     # Scope-limited API tokens need the "print" permission here, matching
     # /upload. Session users pass (token_permissions is None = full access).
     token_permissions = getattr(request.state, "token_permissions", None)
     if token_permissions is not None and "print" not in token_permissions:
-        return RedirectResponse("/api/auth/login", status_code=303)
+        return RedirectResponse("/api/v1/auth/login", status_code=303)
 
     form = await request.form()
     failed = 0
@@ -392,7 +436,19 @@ async def _process_job(job: PrintJob, db: AsyncSession, printer=None):
             await asyncio.to_thread(shutil.rmtree, os.path.dirname(print_path), ignore_errors=True)
 
 
-@router.post("/internal/ingest", response_model=PrintJobResponse, status_code=201)
+@router.post(
+    "/internal/ingest",
+    response_model=PrintJobResponse,
+    status_code=201,
+    summary="Ingest a network print job (internal)",
+    responses=std_responses(BAD_REQUEST, TOO_LARGE, VALIDATION)
+    | {
+        200: {"model": PrintJobResponse, "description": "Duplicate ingest_key: the existing job is "
+            "returned."},
+        403: {"model": ErrorResponse, "description": "Not called from localhost or bad ingest "
+            "token."},
+    },
+)
 async def ingest_network_job(
     request: Request,
     response: Response,
@@ -412,6 +468,11 @@ async def ingest_network_job(
     same-host reverse proxy, a request forwarded from anywhere can present
     peer IP 127.0.0.1, so when `PAPYRUS_INGEST_TOKEN` is configured a
     matching `X-Papyrus-Ingest-Token` header is required too.
+
+    Multipart form: `file` plus `title`, `username`, `copies`, `duplex`, `media`,
+    `queue_name`, `ingest_key`. Not for API clients. Returns 200 with the existing job when
+    `ingest_key` was already ingested. Side effects: `job_created` event, `print.held`
+    webhook (or immediate print when auto-release is on).
     """
     client_host = request.client.host if request.client else ""
     if client_host not in ("127.0.0.1", "::1"):
@@ -509,7 +570,12 @@ async def ingest_network_job(
     return job
 
 
-@router.get("", response_model=PrintJobList)
+@router.get(
+    "",
+    response_model=Page[PrintJobResponse],
+    summary="List print jobs",
+    responses=std_responses(AUTH_ERRORS, VALIDATION),
+)
 async def list_jobs(
     status: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
@@ -517,7 +583,9 @@ async def list_jobs(
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
-    """List print jobs, optionally filtered by status."""
+    """List print jobs, newest first, optionally filtered by `status`.
+
+    Requires the `print` permission. Paginated with `limit` (1-200) and `offset`."""
     query = select(PrintJob).order_by(PrintJob.created_at.desc())
     count_query = select(func.count(PrintJob.id))
 
@@ -531,16 +599,21 @@ async def list_jobs(
     result = await db.execute(query.limit(limit).offset(offset))
     jobs = result.scalars().all()
 
-    return PrintJobList(jobs=jobs, total=total)
+    return Page[PrintJobResponse](items=jobs, total=total, limit=limit, offset=offset)
 
 
-@router.get("/{job_id}", response_model=PrintJobResponse)
+@router.get(
+    "/{job_id}",
+    response_model=PrintJobResponse,
+    summary="Get a print job",
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND),
+)
 async def get_job(
     job_id: int,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get a single print job."""
+    """Get a single print job by id. Requires the `print` permission."""
     result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -615,14 +688,24 @@ def _require_file_access(job: PrintJob, user: User, pin: str | None) -> None:
     _check_pin_or_403(job.id, job.release_pin, pin, "PIN required to access this file")
 
 
-@router.get("/{job_id}/download")
+@router.get(
+    "/{job_id}/download",
+    response_class=Response,
+    summary="Download a job's file",
+    responses=file_response(["application/octet-stream"], "The original uploaded file (its own "
+        "MIME type).")
+    | std_responses(AUTH_ERRORS, NOT_FOUND),
+)
 async def download_job_file(
     job_id: int,
     pin: str | None = None,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Download a print job's file."""
+    """Download a print job's original file (served inline).
+
+    Requires the `print` permission. A PIN-protected job needs the owner, an admin, or the
+    correct `pin` query parameter (403 otherwise; repeated wrong PINs are throttled)."""
     result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -677,14 +760,23 @@ async def _ensure_preview_pdf(job: PrintJob) -> str:
     return preview_path
 
 
-@router.get("/{job_id}/preview")
+@router.get(
+    "/{job_id}/preview",
+    response_class=Response,
+    summary="Preview a job's file",
+    responses=file_response(["application/pdf", "image/*"], "The file, or a PDF conversion for "
+        "office documents.")
+    | std_responses(AUTH_ERRORS, NOT_FOUND, BAD_GATEWAY),
+)
 async def preview_job_file(
     job_id: int,
     pin: str | None = None,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Preview a print job's file. Converts office docs to PDF on the fly."""
+    """Preview a print job's file; office documents are converted to PDF (cached as `.preview.pdf`).
+
+    Requires the `print` permission and the same PIN rules as download."""
     result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -714,7 +806,13 @@ async def preview_job_file(
     )
 
 
-@router.get("/{job_id}/thumbnail")
+@router.get(
+    "/{job_id}/thumbnail",
+    response_class=Response,
+    summary="Get a job thumbnail",
+    responses=file_response(["image/jpeg"], "Cached ~320px JPEG thumbnail.")
+    | std_responses(AUTH_ERRORS, NOT_FOUND, BAD_GATEWAY),
+)
 async def get_job_thumbnail(
     job_id: int,
     pin: str | None = None,
@@ -751,18 +849,22 @@ async def get_job_thumbnail(
     )
 
 
-class PrinterAssign(BaseModel):
-    printer_id: int
-
-
-@router.patch("/{job_id}/printer", response_model=PrintJobResponse)
+@router.patch(
+    "/{job_id}/printer",
+    response_model=PrintJobResponse,
+    summary="Assign a held job to a printer",
+    responses=std_responses(AUTH_ERRORS, BAD_REQUEST, NOT_FOUND, VALIDATION),
+)
 async def assign_printer(
     job_id: int,
     body: PrinterAssign,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Reassign a held job to a different printer."""
+    """Reassign a held job to a different (physical) printer.
+
+    Requires the `print` permission. 400 if the job is not held or the target is a network
+    queue. Side effect: `job_updated` WebSocket event."""
     result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -786,18 +888,33 @@ async def assign_printer(
     return job
 
 
-class ReleaseRequest(BaseModel):
-    pin: str | None = None
-
-
-@router.post("/{job_id}/release", response_model=PrintJobResponse)
+@router.post(
+    "/{job_id}/release",
+    response_model=PrintJobResponse,
+    summary="Release a held job",
+    responses=std_responses(
+        AUTH_ERRORS,
+        BAD_REQUEST,
+        NOT_FOUND,
+        CONFLICT,
+        RATE_LIMITED,
+        BAD_GATEWAY,
+        UNAVAILABLE,
+        VALIDATION,
+    ),
+)
 async def release_job(
     job_id: int,
     body: ReleaseRequest | None = None,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Release a held job to start printing. Requires PIN if one was set."""
+    """Release a held job to start printing on its (or the default) printer.
+
+    Requires the `print` permission. Body is optional; a PIN-protected job needs the correct
+    `pin` (403 if wrong, 429 after repeated failures). 400 if the job is not held, 409 if a
+    concurrent release is in progress. Side effects: `job_updated` event and `print.release`
+    webhook."""
     result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -928,13 +1045,21 @@ async def release_job(
     return job
 
 
-@router.post("/{job_id}/cancel", response_model=PrintJobResponse)
+@router.post(
+    "/{job_id}/cancel",
+    response_model=PrintJobResponse,
+    summary="Cancel a print job",
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND),
+)
 async def cancel_job(
     job_id: int,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Cancel a print job."""
+    """Cancel a print job, also in CUPS when it was queued there.
+
+    Requires the `print` permission and ownership of the job (or admin). Side effect:
+    `job_updated` WebSocket event."""
     result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -976,13 +1101,22 @@ async def cancel_job(
     return job
 
 
-@router.post("/bulk-delete", response_model=BulkDeleteResponse)
+@router.post(
+    "/bulk-delete",
+    response_model=BulkDeleteResponse,
+    summary="Delete multiple print jobs",
+    responses=std_responses(AUTH_ERRORS, VALIDATION),
+)
 async def bulk_delete_jobs(
     body: BulkDeleteJobsRequest,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete multiple print jobs and their files."""
+    """Delete up to 100 print jobs and their files.
+
+    Requires the `print` permission. Jobs the caller does not own (unless admin) and unknown
+    ids are skipped; `deleted` counts the rows removed. Side effects: `job_deleted` WebSocket
+    events and `print.delete` webhooks."""
     result = await db.execute(select(PrintJob).where(PrintJob.id.in_(body.ids)))
     jobs = result.scalars().all()
 
@@ -1045,13 +1179,21 @@ async def bulk_delete_jobs(
     return BulkDeleteResponse(deleted=len(deleted_ids))
 
 
-@router.delete("/{job_id}", status_code=204)
+@router.delete(
+    "/{job_id}",
+    status_code=204,
+    summary="Delete a print job",
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND),
+)
 async def delete_job(
     job_id: int,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete a job record and its file."""
+    """Delete a job record and its file (cancelling it in CUPS if still queued).
+
+    Requires the `print` permission and ownership (or admin). Side effects: `job_deleted`
+    WebSocket event and `print.delete` webhook."""
     result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
     job = result.scalar_one_or_none()
     if job is None:
@@ -1096,18 +1238,24 @@ async def delete_job(
         await db.rollback()
 
 
-class ReprintRequest(BaseModel):
-    pin: str | None = None
-
-
-@router.post("/{job_id}/reprint", response_model=PrintJobResponse, status_code=201)
+@router.post(
+    "/{job_id}/reprint",
+    response_model=PrintJobResponse,
+    status_code=201,
+    summary="Reprint a job",
+    responses=std_responses(AUTH_ERRORS, BAD_REQUEST, NOT_FOUND, RATE_LIMITED, VALIDATION),
+)
 async def reprint_job(
     job_id: int,
     body: ReprintRequest | None = None,
     user: User = Depends(require_permission("print")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Re-create a print job from an existing completed/failed/cancelled job."""
+    """Create a new held job from an existing job's file.
+
+    Requires the `print` permission; a PIN-protected original needs the owner, an admin or
+    the correct `pin`. 400 if the original file no longer exists. Side effects: `job_created`
+    event and `print.held` webhook."""
     result = await db.execute(select(PrintJob).where(PrintJob.id == job_id))
     original = result.scalar_one_or_none()
     if original is None:

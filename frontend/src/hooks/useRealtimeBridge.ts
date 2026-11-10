@@ -33,12 +33,16 @@ const JOBS_LIST_KEY = queryKeys.jobs.list();
 const SCANS_LIST_KEY = queryKeys.scans.list();
 
 interface JobsCache {
-  jobs: PrintJob[];
+  items: PrintJob[];
+  limit: number;
+  offset: number;
   total: number;
 }
 
 interface ScansCache {
-  scans: ScanJob[];
+  items: ScanJob[];
+  limit: number;
+  offset: number;
   total: number;
 }
 
@@ -59,16 +63,16 @@ export function applyJobEvent(queryClient: QueryClient, msg: WSMessage): void {
     const incoming = msg.data as unknown as PrintJob;
     queryClient.setQueryData<JobsCache>(key, (prev) => {
       if (!prev) return undefined;
-      const exists = prev.jobs.some((j) => j.id === incoming.id);
+      const exists = prev.items.some((j) => j.id === incoming.id);
       if (exists) {
         // Replace in place — preserve ordering, total unchanged.
         return {
           ...prev,
-          jobs: prev.jobs.map((j) => (j.id === incoming.id ? incoming : j)),
+          items: prev.items.map((j) => (j.id === incoming.id ? incoming : j)),
         };
       }
       // Unseen job: prepend (list is newest-first) and grow total.
-      return { jobs: [incoming, ...prev.jobs], total: prev.total + 1 };
+      return { ...prev, items: [incoming, ...prev.items], total: prev.total + 1 };
     });
     queryClient.invalidateQueries({ queryKey: queryKeys.jobs.historyAll });
     return;
@@ -79,10 +83,10 @@ export function applyJobEvent(queryClient: QueryClient, msg: WSMessage): void {
     if (typeof id !== 'number') return;
     queryClient.setQueryData<JobsCache>(key, (prev) => {
       if (!prev) return undefined;
-      const exists = prev.jobs.some((j) => j.id === id);
+      const exists = prev.items.some((j) => j.id === id);
       // Only decrement total when the row was actually present.
       if (!exists) return prev;
-      return { jobs: prev.jobs.filter((j) => j.id !== id), total: prev.total - 1 };
+      return { ...prev, items: prev.items.filter((j) => j.id !== id), total: prev.total - 1 };
     });
     queryClient.invalidateQueries({ queryKey: queryKeys.jobs.historyAll });
   }
@@ -100,14 +104,14 @@ export function applyScanEvent(queryClient: QueryClient, msg: WSMessage): void {
     const incoming = msg.data as unknown as ScanJob;
     queryClient.setQueryData<ScansCache>(key, (prev) => {
       if (!prev) return undefined;
-      const exists = prev.scans.some((s) => s.scan_id === incoming.scan_id);
+      const exists = prev.items.some((s) => s.scan_id === incoming.scan_id);
       if (exists) {
         return {
           ...prev,
-          scans: prev.scans.map((s) => (s.scan_id === incoming.scan_id ? incoming : s)),
+          items: prev.items.map((s) => (s.scan_id === incoming.scan_id ? incoming : s)),
         };
       }
-      return { scans: [incoming, ...prev.scans], total: prev.total + 1 };
+      return { ...prev, items: [incoming, ...prev.items], total: prev.total + 1 };
     });
     queryClient.invalidateQueries({ queryKey: queryKeys.scans.historyAll });
     return;
@@ -118,9 +122,9 @@ export function applyScanEvent(queryClient: QueryClient, msg: WSMessage): void {
     if (typeof scanId !== 'string') return;
     queryClient.setQueryData<ScansCache>(key, (prev) => {
       if (!prev) return undefined;
-      const exists = prev.scans.some((s) => s.scan_id === scanId);
+      const exists = prev.items.some((s) => s.scan_id === scanId);
       if (!exists) return prev;
-      return { scans: prev.scans.filter((s) => s.scan_id !== scanId), total: prev.total - 1 };
+      return { ...prev, items: prev.items.filter((s) => s.scan_id !== scanId), total: prev.total - 1 };
     });
     queryClient.invalidateQueries({ queryKey: queryKeys.scans.historyAll });
   }
@@ -162,7 +166,7 @@ function invalidatePrinters(queryClient: QueryClient): void {
  * F144: the initial list fetch and the socket handshake start concurrently
  * at mount, and the socket can win or lose that race. If it loses (opens
  * *after* the fetch resolved), an event broadcast in between reaches no
- * listener and is silently dropped — e.g. GET /api/jobs resolves at t=80ms,
+ * listener and is silently dropped — e.g. GET /api/v1/jobs resolves at t=80ms,
  * a job is created at t=100ms, and ws.onopen doesn't fire until t=140ms.
  * On the first `connected → true`, `freshnessKey`'s `dataUpdatedAt` is
  * compared against the socket-open time: if the cached data predates the
@@ -224,7 +228,7 @@ export function shouldToastScanCompleted(queryClient: QueryClient, msg: WSMessag
   if (incoming.duplex_source_scan_id && !incoming.duplex_merged) return false;
   const known = queryClient
     .getQueryData<ScansCache>(queryKeys.scans.list())
-    ?.scans.some((s) => s.scan_id === incoming.scan_id);
+    ?.items.some((s) => s.scan_id === incoming.scan_id);
   return !known;
 }
 
@@ -247,7 +251,7 @@ export function useRealtimeBridge(): void {
   }, []);
 
   useChannel(
-    '/api/system/ws/jobs',
+    '/api/v1/ws/jobs',
     queryClient,
     applyJobEvent,
     invalidateJobs,
@@ -255,7 +259,7 @@ export function useRealtimeBridge(): void {
     JOBS_LIST_KEY,
   );
   useChannel(
-    '/api/system/ws/scans',
+    '/api/v1/ws/scans',
     queryClient,
     applyScanWithToast,
     invalidateScans,
@@ -263,7 +267,7 @@ export function useRealtimeBridge(): void {
     SCANS_LIST_KEY,
   );
   useChannel(
-    '/api/system/ws/printers',
+    '/api/v1/ws/printers',
     queryClient,
     applyPrinterEvent,
     invalidatePrinters,

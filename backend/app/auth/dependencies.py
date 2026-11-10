@@ -1,6 +1,7 @@
 import uuid
 
 from fastapi import Depends, HTTPException, Request, status
+from fastapi.security import APIKeyCookie, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,9 +12,22 @@ from app.models import User
 ALL_PERMISSIONS = ["print", "scan", "files", "admin", "email"]
 
 
+# Schema-only: these document the auth schemes in OpenAPI. Actual
+# authentication is done by hand in get_current_user (auto_error=False and the
+# credentials are never read from these dependencies).
+_bearer_scheme = HTTPBearer(
+    auto_error=False, description="API token (Authorization: Bearer <token>)"
+)
+_cookie_scheme = APIKeyCookie(
+    name="session", auto_error=False, description="Session cookie from login"
+)
+
+
 async def get_current_user(
     request: Request,
     db: AsyncSession = Depends(get_db),
+    _bearer: object = Depends(_bearer_scheme),
+    _cookie: object = Depends(_cookie_scheme),
 ) -> User:
     """Get the current authenticated user from session cookie or API token.
 

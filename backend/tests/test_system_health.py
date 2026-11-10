@@ -187,3 +187,11 @@ async def test_scanner_probe_timeout_kills_and_awaits_the_child(monkeypatch):
     assert proc.killed is True
     assert proc.waited is True
     assert scanner_ok is False
+
+
+async def test_health_reports_the_app_release_version(client):
+    from app.main import app
+
+    resp = await client.get("/api/v1/system/health")
+    assert resp.status_code == 200
+    assert resp.json()["version"] == app.version != "0.1.0"
