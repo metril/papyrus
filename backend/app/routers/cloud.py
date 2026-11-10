@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 import mimetypes
 import os
 import secrets
@@ -5,21 +6,26 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import AUTH_ERRORS, NOT_FOUND, ErrorResponse, file_response, std_responses
 from app.auth.dependencies import require_permission
 from app.config import settings
 from app.database import get_db
 from app.models import CloudProvider, User
 from app.routers.settings import get_setting
-from app.schemas import CloudFileEntry
+from app.schemas import CloudFileEntry, CloudProviderList
 from app.services.cloud_service import UnknownCloudProviderError, cloud_service
 from app.services.crypto import encrypt_value
 from app.services.http_client import get_http_client
 
 router = APIRouter()
+
+_BAD = {400: {"model": ErrorResponse, "description": "Unknown or unconfigured provider, invalid OAuth state, or a missing required parameter."}}
+_UPSTREAM = {502: {"model": ErrorResponse, "description": "The cloud provider failed or the connection needs reconnecting."}}
+_LOC = {"Location": {"description": "Target URL.", "schema": {"type": "string"}}}
 
 # F119: a bounded timeout on the token-exchange requests -- these three
 # `async with httpx.AsyncClient()` blocks used to construct/tear down a
@@ -59,12 +65,17 @@ ONEDRIVE_TOKEN_URL = "https://login.microsoftonline.com/common/oauth2/v2.0/token
 ONEDRIVE_SCOPES = "Files.ReadWrite.All offline_access"
 
 
-@router.get("/providers")
+@router.get(
+    "/providers",
+    summary="List connected cloud providers",
+    response_model=CloudProviderList,
+    responses=std_responses(AUTH_ERRORS),
+)
 async def list_providers(
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """List connected cloud storage providers for the current user."""
+    """List the caller's connected cloud storage accounts (permission `files`)."""
     result = await db.execute(
         select(CloudProvider).where(CloudProvider.user_id == user.id)
     )
@@ -81,13 +92,18 @@ async def list_providers(
     }
 
 
-@router.delete("/providers/{provider_id}", status_code=204)
+@router.delete(
+    "/providers/{provider_id}",
+    summary="Disconnect a cloud provider",
+    status_code=204,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND),
+)
 async def disconnect_provider(
     provider_id: int,
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Disconnect a cloud storage provider."""
+    """Delete one of the caller's stored provider connections and its tokens (permission `files`)."""
     result = await db.execute(
         select(CloudProvider).where(
             CloudProvider.id == provider_id,
@@ -104,14 +120,28 @@ async def disconnect_provider(
 # --- OAuth ---
 
 
-@router.get("/authorize/{provider}")
+@router.get(
+    "/authorize/{provider}",
+    summary="Start cloud OAuth",
+    response_class=RedirectResponse,
+    status_code=307,
+    responses=std_responses(
+        {307: {"description": "Redirect to the provider's consent screen.", "headers": _LOC}},
+        AUTH_ERRORS,
+        _BAD,
+    ),
+)
 async def authorize_provider(
     provider: str,
     request: Request,
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Redirect to cloud provider OAuth consent screen."""
+    """Redirect the browser to the OAuth consent screen for `gdrive`, `dropbox` or `onedrive` (permission `files`).
+
+    Stores a CSRF state in the session. 400 when the provider is unknown or
+    its client credentials are not configured in Settings.
+    """
     state = secrets.token_urlsafe(32)
     request.session["cloud_oauth_state"] = state
     request.session["cloud_oauth_provider"] = provider
@@ -169,7 +199,18 @@ async def authorize_provider(
     raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 
 
-@router.get("/callback/{provider}")
+@router.get(
+    "/callback/{provider}",
+    summary="Cloud OAuth callback",
+    response_class=RedirectResponse,
+    status_code=303,
+    responses=std_responses(
+        {303: {"description": "Connected; redirect to /settings?cloud=connected.", "headers": _LOC}},
+        AUTH_ERRORS,
+        _BAD,
+        _UPSTREAM,
+    ),
+)
 async def oauth_callback(
     provider: str,
     code: str,
@@ -178,7 +219,12 @@ async def oauth_callback(
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Handle OAuth callback from cloud provider."""
+    """Complete the OAuth flow (redirect target registered at the provider; browser use only, permission `files`).
+
+    Verifies the session state, exchanges the code, stores the tokens
+    encrypted (creating or refreshing the caller's connection) and redirects
+    to the settings page.
+    """
     expected_state = request.session.pop("cloud_oauth_state", None)
     if state != expected_state:
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
@@ -300,7 +346,12 @@ async def _get_access_token(provider: CloudProvider, db: AsyncSession) -> str:
         raise HTTPException(status_code=400, detail=exc.detail) from exc
 
 
-@router.get("/files/{provider_id}", response_model=list[CloudFileEntry])
+@router.get(
+    "/files/{provider_id}",
+    summary="Browse cloud files",
+    response_model=list[CloudFileEntry],
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, _BAD, _UPSTREAM),
+)
 async def list_files(
     provider_id: int,
     folder_id: str | None = None,
@@ -308,7 +359,11 @@ async def list_files(
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Browse files in a cloud storage provider."""
+    """List a folder in one of the caller's cloud connections (permission `files`).
+
+    Use `folder_id` for Google Drive and OneDrive, `path` for Dropbox.
+    Refreshes an expired access token first.
+    """
     result = await db.execute(
         select(CloudProvider).where(
             CloudProvider.id == provider_id,
@@ -341,7 +396,13 @@ def _cleanup_temp_file(path: str):
         pass
 
 
-@router.get("/download/{provider_id}")
+@router.get(
+    "/download/{provider_id}",
+    summary="Download a cloud file",
+    response_class=Response,
+    responses=file_response(["application/octet-stream", "application/pdf"], "The file; types on a safe list are served inline, everything else as an attachment.")
+    | std_responses(AUTH_ERRORS, NOT_FOUND, _BAD, _UPSTREAM),
+)
 async def download_file(
     provider_id: int,
     background_tasks: BackgroundTasks,
@@ -352,7 +413,12 @@ async def download_file(
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Download a file from cloud storage."""
+    """Download a file from a cloud connection (permission `files`).
+
+    Pass `file_id` (Google Drive, OneDrive) or `path` (Dropbox). Google
+    Workspace documents are exported as PDF. The content type is derived from
+    the file name, never from the client-supplied `mime_type`.
+    """
     result = await db.execute(
         select(CloudProvider).where(
             CloudProvider.id == provider_id,

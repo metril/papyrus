@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 """WebDAV/Nextcloud API endpoints."""
 
 from urllib.parse import urlparse
@@ -6,14 +7,24 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import AUTH_ERRORS, NOT_FOUND, SERVER, ErrorResponse, std_responses
 from app.auth.dependencies import require_permission
 from app.database import get_db
 from app.models import CloudProvider, User
+from app.schemas import (
+    MessageResponse,
+    WebDAVConnection,
+    WebDAVConnectRequest,
+    WebDAVFileEntry,
+    WebDAVUploadRequest,
+)
 from app.services.crypto import encrypt_value
 from app.services.net_guard import UnsafeHostError, assert_safe_host
 from app.services.webdav_service import WebDAVConnectError, webdav_service
 
 router = APIRouter()
+
+_BAD = {400: {"model": ErrorResponse, "description": "Missing or invalid fields, or the server could not be reached or authenticated."}}
 
 _CONNECT_ERROR_DETAIL = {
     WebDAVConnectError.AUTH: "Authentication failed — check the username and password",
@@ -22,19 +33,26 @@ _CONNECT_ERROR_DETAIL = {
 }
 
 
-@router.post("/connect", status_code=201)
+@router.post(
+    "/connect",
+    summary="Connect a WebDAV server",
+    response_model=WebDAVConnection,
+    status_code=201,
+    responses=std_responses(AUTH_ERRORS, _BAD),
+)
 async def connect_webdav(
-    body: dict,
+    body: WebDAVConnectRequest,
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Connect a WebDAV/Nextcloud server.
+    """Connect a WebDAV/Nextcloud server for the calling user (permission `files`).
 
-    Body: {url, username, password}
+    Tests the connection first; loopback, link-local and multicast hosts are
+    rejected. Credentials are stored encrypted as a `webdav` cloud provider.
     """
-    url = body.get("url", "").strip()
-    username = body.get("username", "").strip()
-    password = body.get("password", "")
+    url = body.url.strip()
+    username = body.username.strip()
+    password = body.password
 
     if not url or not username or not password:
         raise HTTPException(status_code=400, detail="url, username, and password are required")
@@ -93,14 +111,19 @@ def _parse_webdav_creds(provider: CloudProvider) -> tuple[str, str, str]:
     return url, username, password_encrypted
 
 
-@router.get("/{provider_id}/files")
+@router.get(
+    "/{provider_id}/files",
+    summary="List WebDAV files",
+    response_model=list[WebDAVFileEntry],
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, SERVER),
+)
 async def list_webdav_files(
     provider_id: int,
     path: str = Query(default="/"),
     user: User = Depends(require_permission("files")),
     db: AsyncSession = Depends(get_db),
 ):
-    """List files at a WebDAV path."""
+    """List files and folders at `path` on one of the caller's WebDAV connections (permission `files`). Folders come first."""
     result = await db.execute(
         select(CloudProvider).where(
             CloudProvider.id == provider_id,
@@ -116,21 +139,23 @@ async def list_webdav_files(
     return await webdav_service.list_files(url, username, password_enc, path)
 
 
-@router.post("/{provider_id}/upload")
+@router.post(
+    "/{provider_id}/upload",
+    summary="Upload a scan to WebDAV",
+    response_model=MessageResponse,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, _BAD, SERVER),
+)
 async def upload_to_webdav(
     provider_id: int,
-    body: dict,
+    body: WebDAVUploadRequest,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a scan to WebDAV.
-
-    Body: {scan_id, destination_folder}
-    """
+    """Upload a stored scan file to a folder on a WebDAV connection (permission `scan`)."""
     from app.models import ScanJob
 
-    scan_id = body.get("scan_id")
-    destination = body.get("destination_folder", "/")
+    scan_id = body.scan_id
+    destination = body.destination_folder
     if not scan_id:
         raise HTTPException(status_code=400, detail="scan_id is required")
 

@@ -1,3 +1,4 @@
+# ruff: noqa: E501
 import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -7,10 +8,10 @@ from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api_docs import AUTH_ERRORS, NOT_FOUND, RATE_LIMITED, SERVER, ErrorResponse, std_responses
 from app.auth.dependencies import get_current_user, require_admin
 from app.auth.oidc import ensure_oidc_registered, oauth
 from app.auth.tokens import generate_token
@@ -22,6 +23,10 @@ from app.schemas import (
     APITokenCreate,
     APITokenCreated,
     APITokenResponse,
+    AuthProviders,
+    LocalLoginRequest,
+    LoginResponse,
+    MessageResponse,
     UserResponse,
 )
 from app.services.throttle import Throttle
@@ -29,6 +34,10 @@ from app.services.throttle import Throttle
 router = APIRouter()
 
 _ph = PasswordHasher()
+
+_UNAUTH = {401: {"model": ErrorResponse, "description": "Not authenticated or invalid credentials."}}
+_UNAVAILABLE = {503: {"model": ErrorResponse, "description": "OIDC is not enabled or not configured."}}
+_REDIRECT_HDR = {"Location": {"description": "Target URL.", "schema": {"type": "string"}}}
 
 # Caps local-login guesses at 5 failures / 5 minutes per (ip, username) pair
 # (F68) — this route is unauthenticated, so with no throttle an attacker can
@@ -51,9 +60,18 @@ def _dummy_hash() -> str:
 # --- Auth Providers ---
 
 
-@router.get("/providers")
+@router.get(
+    "/providers",
+    summary="List login methods",
+    response_model=AuthProviders,
+    responses=std_responses(SERVER),
+)
 async def get_providers(db: AsyncSession = Depends(get_db)) -> dict:
-    """Return available auth methods (public, no auth required)."""
+    """Report which login methods are available (public, no authentication).
+
+    Used by the login screen to decide whether to show the local form and/or
+    the OIDC button.
+    """
     local_enabled = (await get_setting(db, "local_auth_enabled") or "true").lower() in (
         "true", "1", "yes",
     )
@@ -73,18 +91,23 @@ async def get_providers(db: AsyncSession = Depends(get_db)) -> dict:
 # --- Local Login ---
 
 
-class LocalLoginRequest(BaseModel):
-    username: str
-    password: str
-
-
-@router.post("/local-login")
+@router.post(
+    "/local-login",
+    summary="Log in with username and password",
+    response_model=LoginResponse,
+    responses=std_responses(_UNAUTH, RATE_LIMITED, {403: {"model": ErrorResponse, "description": "Local login is disabled."}}),
+)
 async def local_login(
     body: LocalLoginRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Authenticate with username and password."""
+    """Authenticate a local account and start a session (public endpoint).
+
+    Sets the session cookie. Failed attempts are throttled per client IP and
+    username (5 failures per 5 minutes, then 429). 403 when local login is
+    disabled, unless the username is the environment-configured admin.
+    """
     # Env var admin can always log in, even if local auth is disabled
     is_env_admin = (
         settings.admin_username
@@ -137,9 +160,22 @@ async def local_login(
 # --- OIDC Login ---
 
 
-@router.get("/login")
+@router.get(
+    "/login",
+    summary="Start OIDC login",
+    response_class=RedirectResponse,
+    status_code=302,
+    responses=std_responses(
+        {302: {"description": "Redirect to the OIDC provider (or to / after an automatic dev-mode login).", "headers": _REDIRECT_HDR}},
+        _UNAVAILABLE,
+    ),
+)
 async def oidc_login(request: Request, db: AsyncSession = Depends(get_db)):
-    """Redirect to OIDC provider for authentication."""
+    """Redirect the browser to the OIDC provider to authenticate (public endpoint).
+
+    In dev mode this signs in a built-in admin and redirects to `/` instead.
+    503 when OIDC is not enabled or configured.
+    """
     # Dev mode auto-login
     if settings.dev_mode:
         result = await db.execute(select(User).where(User.username == "dev-admin"))
@@ -179,9 +215,23 @@ async def oidc_login(request: Request, db: AsyncSession = Depends(get_db)):
     return await oauth.papyrus.authorize_redirect(request, redirect_uri)
 
 
-@router.get("/callback")
+@router.get(
+    "/callback",
+    summary="OIDC callback",
+    response_class=RedirectResponse,
+    status_code=302,
+    responses=std_responses(
+        {302: {"description": "Signed in; redirect to /.", "headers": _REDIRECT_HDR}},
+        _UNAUTH,
+    ),
+)
 async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
-    """Handle OIDC callback and create/update user."""
+    """Complete the OIDC flow (redirect target registered at the provider; browser use only).
+
+    Exchanges the authorization code, creates or updates the user, maps the
+    configured admin group to the admin role, starts a session and redirects
+    to `/`.
+    """
     token = await oauth.papyrus.authorize_access_token(request)
     userinfo = token.get("userinfo")
     if not userinfo:
@@ -231,39 +281,64 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
     return RedirectResponse(url="/", status_code=302)
 
 
-@router.post("/logout")
+@router.post(
+    "/logout",
+    summary="Log out",
+    response_model=MessageResponse,
+    responses=std_responses(SERVER),
+)
 async def logout(request: Request):
-    """Clear the session."""
+    """Clear the session cookie. Safe to call when not signed in."""
     request.session.clear()
     return {"message": "logged out"}
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get(
+    "/me",
+    summary="Get the current user",
+    response_model=UserResponse,
+    responses=std_responses(AUTH_ERRORS),
+)
 async def me(user: User = Depends(get_current_user)):
-    """Get the current authenticated user."""
+    """Return the authenticated user (session cookie or Bearer API token)."""
     return user
 
 
 # --- API Token Management ---
 
 
-@router.get("/tokens", response_model=list[APITokenResponse])
+@router.get(
+    "/tokens",
+    summary="List API tokens",
+    response_model=list[APITokenResponse],
+    responses=std_responses(AUTH_ERRORS),
+)
 async def list_tokens(
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """List all API tokens (admin only)."""
+    """List all API tokens, newest first (admin only). Token values are never returned after creation."""
     result = await db.execute(select(APIToken).order_by(APIToken.created_at.desc()))
     return result.scalars().all()
 
 
-@router.post("/tokens", response_model=APITokenCreated, status_code=201)
+@router.post(
+    "/tokens",
+    summary="Create an API token",
+    response_model=APITokenCreated,
+    status_code=201,
+    responses=std_responses(AUTH_ERRORS),
+)
 async def create_token(
     data: APITokenCreate,
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new API token (admin only). The plaintext token is returned only once."""
+    """Create an API token with the given permissions (admin only).
+
+    The plaintext token is in the response and is never shown again; only a
+    hash is stored. Send it as `Authorization: Bearer <token>`.
+    """
     plaintext, token_hash = generate_token()
 
     expires_at = None
@@ -292,13 +367,18 @@ async def create_token(
     )
 
 
-@router.delete("/tokens/{token_id}", status_code=204)
+@router.delete(
+    "/tokens/{token_id}",
+    summary="Revoke an API token",
+    status_code=204,
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND),
+)
 async def revoke_token(
     token_id: uuid.UUID,
     user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
-    """Revoke an API token (admin only)."""
+    """Permanently revoke an API token (admin only); it stops working immediately."""
     result = await db.execute(select(APIToken).where(APIToken.id == token_id))
     token = result.scalar_one_or_none()
     if token is None:
