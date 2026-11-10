@@ -10,7 +10,7 @@
 #   backend                          (discover devices)
 #   backend job-id user title copies options [file]
 
-PAPYRUS_API="http://localhost:8080/api/jobs/internal/ingest"
+PAPYRUS_API="http://localhost:8080/api/v1/jobs/internal/ingest"
 UPLOAD_DIR="${PAPYRUS_UPLOAD_DIR:-/app/data/uploads}"
 # F7: shared secret written by docker/entrypoint.sh; overridable so tests can
 # point at a temp file instead of the real root-owned path.

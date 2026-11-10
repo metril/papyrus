@@ -203,6 +203,9 @@ def install_openapi(app: FastAPI) -> None:
             webhooks=app.webhooks.routes,
         )
         _swap_validation_refs(schema["paths"])
+        for hook in schema.get("webhooks", {}).values():
+            for op in hook.values():
+                op.get("responses", {}).pop("422", None)  # receivers, not an API we validate
         _add_rate_limited(schema["paths"])
         comps = schema.setdefault("components", {}).setdefault("schemas", {})
         _register_ws_schemas(comps)

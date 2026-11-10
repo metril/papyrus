@@ -280,3 +280,24 @@ async def user_client(client, regular_user):
     """`client` with get_current_user overridden to the seeded regular user."""
     app.dependency_overrides[get_current_user] = lambda: regular_user
     return client
+
+
+def pytest_addoption(parser):
+    parser.addoption(
+        "--shard", default=None, metavar="I/N",
+        help="run only shard I (0-based) of N; test files are assigned by a stable hash",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    spec = config.getoption("--shard")
+    if not spec:
+        return
+    import zlib
+
+    index, total = (int(x) for x in spec.split("/"))
+    keep, drop = [], []
+    for item in items:
+        (keep if zlib.crc32(str(item.path).encode()) % total == index else drop).append(item)
+    items[:] = keep
+    config.hook.pytest_deselected(items=drop)
