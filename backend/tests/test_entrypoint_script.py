@@ -35,9 +35,12 @@ pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not a
 # kill the sleep child: an orphaned /bin/sleep keeps the inherited
 # stdout/stderr pipes open, and Popen.communicate() would block on pipe EOF
 # long after the entrypoint itself exited.
+# The trap is installed BEFORE the .started marker: tests send SIGTERM as soon
+# as the marker appears, and on a loaded machine the default TERM action would
+# otherwise kill the shim (exit 143) before its trap exists.
 _DAEMON_SHIM = """#!/bin/bash
-touch "{marker_dir}/{name}.started"
 trap 'touch "{marker_dir}/{name}.termed"; kill "$CHILD" 2>/dev/null; exit 0' TERM
+touch "{marker_dir}/{name}.started"
 /bin/sleep 30 &
 CHILD=$!
 wait "$CHILD"
