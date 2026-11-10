@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import FileResponse
 
+from app.api_docs import TAGS_METADATA, generate_unique_id
 from app.config import settings, validate_runtime_secrets
 from app.exceptions import register_exception_handlers
 from app.logging_config import setup_logging
@@ -441,6 +442,10 @@ app = FastAPI(
     description="Web-based print and scan server",
     version="1.3.0",
     lifespan=lifespan,
+    openapi_tags=TAGS_METADATA,
+    contact={"name": "Papyrus", "url": "https://github.com/metril/papyrus"},
+    servers=[{"url": "/", "description": "This server"}],
+    generate_unique_id_function=generate_unique_id,
 )
 
 # Global exception handlers: domain PapyrusError -> its status_code + curated

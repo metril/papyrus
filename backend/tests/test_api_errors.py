@@ -91,7 +91,7 @@ async def test_deep_runtime_error_is_sanitized_500(admin_client, monkeypatch):
     body = resp.json()
     # Exactly these two keys: curated generic detail plus the correlation id,
     # no leaked exception text riding along.
-    assert set(body) == {"detail", "request_id"}
+    assert set(body) == {"detail", "code", "request_id"}
     assert body["detail"] == "Internal server error"
     assert "boom" not in resp.text
 

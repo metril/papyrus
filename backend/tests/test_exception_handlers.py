@@ -99,3 +99,40 @@ def test_bare_exception_returns_generic_500_without_leaking(client, caplog):
     assert "secret internal detail" not in resp.text
     # ...but it must be logged with a traceback for operators.
     assert any(record.exc_info for record in caplog.records)
+
+
+def test_validation_error_envelope_strips_input_and_ctx():
+    from pydantic import BaseModel, Field
+
+    class Body(BaseModel):
+        n: int = Field(ge=5)
+
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.post("/v")
+    async def _v(body: Body):
+        return {}
+
+    r = TestClient(app).post("/v", json={"n": 1, "secret": "x"})
+    body = r.json()
+    assert r.status_code == 422
+    assert body["detail"] == "Request validation failed"
+    assert body["code"] == "validation_error"
+    assert body["errors"] and all(set(e) == {"loc", "msg", "type"} for e in body["errors"])
+
+
+def test_http_exception_envelope_preserves_headers():
+    from fastapi import HTTPException
+
+    app = FastAPI()
+    register_exception_handlers(app)
+
+    @app.get("/h")
+    async def _h():
+        raise HTTPException(401, "nope", headers={"WWW-Authenticate": "Bearer"})
+
+    r = TestClient(app).get("/h")
+    assert r.status_code == 401
+    assert r.headers["www-authenticate"] == "Bearer"
+    assert r.json()["detail"] == "nope" and r.json()["code"] == "unauthorized"
