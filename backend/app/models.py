@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     BigInteger,
@@ -318,4 +318,40 @@ class Scanner(Base):
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_deliver: Mapped[bool] = mapped_column(Boolean, default=False)
     post_scan_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Contact(Base):
+    """Shared address-book entry (kiosk email targets)."""
+
+    __tablename__ = "contacts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+class Kiosk(Base):
+    """A kiosk identity: a non-login service user, its API token and when it was last seen."""
+
+    __tablename__ = "kiosks"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    token_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("api_tokens.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    service_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(),
+        default=lambda: datetime.now(timezone.utc),
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -1,15 +1,37 @@
+import time
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyCookie, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.tokens import validate_token
 from app.database import get_db
-from app.models import User
+from app.models import Kiosk, User
 
 ALL_PERMISSIONS = ["print", "scan", "files", "admin", "email", "device"]
+
+# Process-local throttle for kiosk last_seen_at: token id -> monotonic time of the last check.
+# Most authenticated requests skip the DB entirely; one lookup/write per token per window.
+KIOSK_SEEN_INTERVAL = 30.0
+_seen_checked: dict[uuid.UUID, float] = {}
+
+
+async def _touch_kiosk(db: AsyncSession, token_id: uuid.UUID) -> None:
+    now = time.monotonic()
+    last = _seen_checked.get(token_id)
+    if last is not None and now - last < KIOSK_SEEN_INTERVAL:
+        return
+    if len(_seen_checked) > 10_000:
+        _seen_checked.clear()
+    _seen_checked[token_id] = now
+    await db.execute(
+        update(Kiosk).where(Kiosk.token_id == token_id)
+        .values(last_seen_at=datetime.now(timezone.utc))
+    )
+    await db.commit()
 
 
 # Schema-only: these document the auth schemes in OpenAPI. Actual
@@ -56,6 +78,7 @@ async def get_current_user(
         # Attach token permissions to request state for downstream checks
         request.state.token_permissions = token.permissions
         request.state.token_id = token.id
+        await _touch_kiosk(db, token.id)
         return user
 
     # Check for session cookie
