@@ -44,7 +44,8 @@ TAGS_METADATA: list[dict[str, str]] = [
     {"name": "webhooks", "description": "Outgoing webhook configuration (admin)."},
     {"name": "kiosks", "description": "Managed kiosks: config, service user and token (admin), "
         "plus the kiosk's own config pull."},
-    {"name": "contacts", "description": "Personal address book (own contacts only; session or `scan` token)."},
+    {"name": "contacts",
+     "description": "Personal address book (own contacts only; session or `scan` token)."},
 ]
 
 
