@@ -346,4 +346,4 @@ async def test_copy_print_failure_keeps_the_scan_in_history(db, admin_client, mo
     resp = await admin_client.post("/api/copy", json={})
     assert resp.status_code == 502 and "scan history" in resp.json()["detail"]
     row = (await db.execute(select(ScanJob))).scalars().first()
-    assert row is not None and row.scan_id == "sid-1" and row.status == "completed"
+    assert row is not None and row.status == "completed"

@@ -706,6 +706,7 @@ class ScanService:
         height_mm: float | None = None,
         page_count_callback: Callable[[int], None] | None = None,
         feeder_callback: Callable[[], None] | None = None,
+        live_pages_callback: Callable[[int], None] | None = None,
     ) -> tuple[str, str]:
         """Perform a scan.
 
@@ -766,6 +767,7 @@ class ScanService:
                     progress_callback=progress_callback,
                     glass_request=glass_over_feeder,
                     glass_fmt=fmt,
+                    live_pages_callback=live_pages_callback,
                 )
                 if page_count_callback is not None:
                     page_count_callback(count)
@@ -843,6 +845,7 @@ class ScanService:
         progress_callback: Callable[[str, float], Awaitable[None]] | None,
         glass_request: bool = False,
         glass_fmt: str = "pdf",
+        live_pages_callback: Callable[[int], None] | None = None,
     ) -> tuple[str, int, bool]:
         """Scan every sheet in the feeder into one PDF. Caller holds the lock.
 
@@ -853,6 +856,22 @@ class ScanService:
         page_dir = os.path.join(scan_dir, f"batch_{scan_id}")
         pdf_file = os.path.join(scan_dir, f"{scan_id}.pdf")
         os.makedirs(page_dir, exist_ok=True)
+
+        if live_pages_callback is not None:
+            # Both backends write one TIFF per sheet into page_dir, so the file count
+            # on each progress tick is the live sheet count (current sheet included).
+            inner_progress, seen = progress_callback, [0]
+
+            async def progress_callback(sid: str, percent: float) -> None:  # noqa: F811
+                try:
+                    n = sum(1 for f in os.listdir(page_dir) if f.endswith(".tiff"))
+                except OSError:
+                    n = 0
+                if n > seen[0]:
+                    seen[0] = n
+                    live_pages_callback(n)
+                if inner_progress is not None:
+                    await inner_progress(sid, percent)
 
         success = False
         try:
@@ -985,6 +1004,7 @@ class ScanService:
         progress_callback: Callable[[str, float], Awaitable[None]] | None = None,
         device: str | None = None,
         scan_dir: str | None = None,
+        live_pages_callback: Callable[[int], None] | None = None,
     ) -> tuple[str, str, int]:
         """Perform a multi-page ADF batch scan, merging pages into a single PDF.
 
@@ -1003,6 +1023,7 @@ class ScanService:
                 scan_dir=scan_dir or self._scan_dir,
                 scan_id=scan_id,
                 progress_callback=progress_callback,
+                live_pages_callback=live_pages_callback,
             )
             return scan_id, pdf_file, count
 

@@ -30,6 +30,9 @@ class CopyService:
         progress_callback=None,
         scan_dir: str | None = None,
         on_scanned=None,
+        run_scan=None,
+        on_page_count=None,
+        on_cups_job=None,
     ) -> dict:
         """Perform a copy: scan a page then print it.
 
@@ -40,6 +43,10 @@ class CopyService:
         (F10), and `scan_dir` was silently ignored (falling back to the
         `scan_service` singleton's default) since copy() never passed it
         through (F43).
+
+        `run_scan(coro)` (optional) awaits the scan coroutine on the caller's behalf, e.g. as a
+        registered cancellable task; `on_page_count(n)` mirrors live sheet counts and
+        `on_cups_job(id)` receives the CUPS job id as soon as it exists.
 
         Returns dict with scan_id and cups_job_id.
         """
@@ -52,6 +59,8 @@ class CopyService:
         def set_page_count(count: int) -> None:
             nonlocal page_count
             page_count = count
+            if on_page_count is not None:
+                on_page_count(count)
 
         def set_fed_by_feeder() -> None:
             nonlocal fed_source
@@ -59,7 +68,7 @@ class CopyService:
 
         # Step 1: Scan
         try:
-            scan_id, filepath = await scan_service.scan(
+            scan_coro = scan_service.scan(
                 resolution=resolution,
                 mode=mode,
                 fmt=fmt,  # TIFF for best print quality
@@ -70,9 +79,11 @@ class CopyService:
                 ),
                 source=source,
                 progress_callback=progress_callback,
+                **({"live_pages_callback": on_page_count} if on_page_count else {}),
                 device=device,
                 scan_dir=scan_dir,
             )
+            scan_id, filepath = await (run_scan(scan_coro) if run_scan else scan_coro)
         except ScanError as e:
             logger.warning("Copy: scan step failed: %s", e)
             raise CopyError("Scan failed while making a copy")
@@ -98,6 +109,8 @@ class CopyService:
                 duplex=duplex,
                 media=media,
             )
+            if on_cups_job is not None:
+                on_cups_job(cups_job_id)
             await cups.release_job(cups_job_id)
         except Exception as e:
             logger.warning("Copy: print step failed: %s", e)

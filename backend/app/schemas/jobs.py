@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -104,6 +105,21 @@ class CopyRequest(BaseModel):
     copies: int = Field(default=1, ge=1, le=99, description="Copies to print.", examples=[1])
     duplex: bool = Field(default=False, description="Print on both sides.")
     media: str = Field(default="A4", description="Paper size.", examples=["A4"])
+    copy_id: uuid.UUID | None = Field(default=None, description=(
+        "Client-chosen id to poll or cancel the copy while it runs (generated when absent). "
+        "409 if already in use."))
+
+
+class CopyStatus(BaseModel):
+    """Live state of a copy."""
+
+    copy_id: str = Field(description="Copy identifier.")
+    phase: Literal["scanning", "printing", "done", "failed", "cancelled"] = Field(
+        description="Current phase; done, failed and cancelled are terminal.")
+    progress_pct: int | None = Field(description="Scan progress 0-100 while scanning, 100 when "
+        "done, null otherwise.", examples=[40])
+    scan_id: str | None = Field(description="Id of the scan row, once the scan starts.")
+    job_id: int | None = Field(description="Print job id, once the print job exists.")
 
 
 class CopyResponse(BaseModel):
@@ -112,6 +128,7 @@ class CopyResponse(BaseModel):
     message: str = Field(description="Status message.", examples=["Copy initiated"])
     scan_id: str = Field(description="Id of the scan that was created.", examples=["a1b2c3d4"])
     cups_job_id: int = Field(description="CUPS job id of the print.", examples=[18])
+    copy_id: str | None = Field(default=None, description="Id for GET /copy/{copy_id}.")
 
 
 class MarkerLevel(BaseModel):

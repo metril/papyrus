@@ -434,7 +434,8 @@ class UsageStats(BaseModel):
         examples=[{"held": 0, "completed": 20}],
     )
     scan_counts: dict[str, int] = Field(description="Scan jobs per status (completed, failed, "
-        "scanning), zero-filled.", examples=[{"completed": 15, "failed": 1, "scanning": 0}])
+        "scanning, cancelled), zero-filled.",
+        examples=[{"completed": 15, "failed": 1, "scanning": 0, "cancelled": 0}])
     trend_30d: list[TrendPoint] = Field(description="Last 30 UTC days, oldest first, zero-filled.")
     per_user: list[UserUsage] = Field(description="Top 10 users by total jobs plus an 'Other' row.")
 

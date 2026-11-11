@@ -254,3 +254,44 @@ def register_exception_handlers(app) -> None:
                         "request_id": get_request_id(),
                     },
                 )
+
+
+class ScanCancelledError(PapyrusError):
+    """The scan (or the copy's scan stage) was cancelled by the user."""
+
+    status_code = 409
+    code = "scan_cancelled"
+
+    def __init__(self, detail: str = "Scan was cancelled"):
+        super().__init__(detail)
+
+
+class ScanNotRunningError(PapyrusError):
+    """Cancel requested for a scan that is not currently scanning."""
+
+    status_code = 409
+    code = "scan_not_running"
+
+
+class CopyIdInUseError(PapyrusError):
+    """A client-supplied copy_id is already registered."""
+
+    status_code = 409
+    code = "copy_id_in_use"
+
+
+class CopyNotRunningError(PapyrusError):
+    """Cancel requested for a copy that already finished."""
+
+    status_code = 409
+    code = "copy_not_running"
+
+
+class CopyCancelledError(PapyrusError):
+    """The copy was cancelled while printing."""
+
+    status_code = 409
+    code = "copy_cancelled"
+
+    def __init__(self, detail: str = "Copy was cancelled"):
+        super().__init__(detail)
