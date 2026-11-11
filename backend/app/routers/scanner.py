@@ -4,9 +4,17 @@ import os
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import FileResponse, Response
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_docs import (
@@ -58,6 +66,7 @@ from app.services.cloud_service import cloud_service
 from app.services.email_service import email_service
 from app.services.file_locks import lock_for
 from app.services.file_service import cleanup_file, sanitize_filename
+from app.services.scan_access import scan_access
 from app.services.scan_service import (
     get_default_scanner,
     get_default_scanner_device,
@@ -75,6 +84,42 @@ from app.services.ws_manager import ws_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+
+def _scan_access(user: User, perms: list[str] | None, job: ScanJob) -> bool:
+    """Visibility rule for a scan. `perms` is the token's permission list, None for a session."""
+    return scan_access(user, perms, job.user_id)
+
+
+def can_access_scan(user: User, request: Request, job: ScanJob) -> bool:
+    """Whether the caller may see/act on `job`: its owner, an admin (session, or token with the
+    `admin` permission), or any session user for a null-owner network scan (API tokens never see
+    those)."""
+    return _scan_access(user, getattr(request.state, "token_permissions", None), job)
+
+
+def _scan_visibility(user: User, request: Request):
+    """SQL clause equivalent of `can_access_scan`, or None when everything is visible."""
+    perms = getattr(request.state, "token_permissions", None)
+    if perms is None:
+        if user.role == "admin":
+            return None
+        return or_(ScanJob.user_id == user.id, ScanJob.user_id.is_(None))
+    if user.role == "admin" and "admin" in perms:
+        return ScanJob.user_id.is_not(None)
+    return ScanJob.user_id == user.id
+
+
+async def _get_accessible_scan(
+    db: AsyncSession, request: Request, user: User, scan_id: str
+) -> ScanJob:
+    """Load a scan by id; unknown and inaccessible both raise the same 404."""
+    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
+    job = result.scalar_one_or_none()
+    if job is None or not can_access_scan(user, request, job):
+        raise NotFoundError("Scan not found")
+    return job
 
 
 BAD_REQUEST = error_group(400, "The scan is not available (not completed) or the request does not "
@@ -223,10 +268,10 @@ async def initiate_scan(
             "type": "scan_completed",
             "data": {"scan_id": job.scan_id},
         })
-        await ws_manager.broadcast("scans", {
+        await ws_manager.broadcast_scan({
             "type": "scan_completed",
             "data": serialize_scan_job(job),
-        })
+        }, job.user_id)
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
                         detail={"format": job.format, "resolution": request.resolution})
@@ -338,10 +383,10 @@ async def initiate_batch_scan(
             "type": "scan_completed",
             "data": {"scan_id": job.scan_id, "page_count": page_count},
         })
-        await ws_manager.broadcast("scans", {
+        await ws_manager.broadcast_scan({
             "type": "scan_completed",
             "data": serialize_scan_job(job),
-        })
+        }, job.user_id)
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
                         detail={"format": request.format, "pages": page_count})
@@ -388,20 +433,33 @@ async def initiate_batch_scan(
     responses=std_responses(AUTH_ERRORS, VALIDATION),
 )
 async def list_scans(
+    request: Request,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    mine: bool = Query(default=False, description="Only scans created by the caller."),
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
     """List scans, newest first, with limit/offset pagination.
 
-    Requires the `scan` permission.
+    Requires the `scan` permission. Callers see their own scans; admins (session, or a token with
+    the `admin` permission) see all; sessions also see network (eSCL) scans, which have no owner.
+    With `mine=true` only scans owned by the caller are listed.
     """
-    count_result = await db.execute(select(func.count(ScanJob.id)))
+    count_q = select(func.count(ScanJob.id))
+    list_q = select(ScanJob)
+    visible = _scan_visibility(user, request)
+    if visible is not None:
+        count_q = count_q.where(visible)
+        list_q = list_q.where(visible)
+    if mine:
+        count_q = count_q.where(ScanJob.user_id == user.id)
+        list_q = list_q.where(ScanJob.user_id == user.id)
+    count_result = await db.execute(count_q)
     total = count_result.scalar() or 0
 
     result = await db.execute(
-        select(ScanJob).order_by(ScanJob.created_at.desc()).limit(limit).offset(offset)
+        list_q.order_by(ScanJob.created_at.desc()).limit(limit).offset(offset)
     )
     scans = result.scalars().all()
     return Page[ScanResponse](items=scans, total=total, limit=limit, offset=offset)
@@ -419,6 +477,7 @@ async def list_scans(
 )
 async def download_scan(
     scan_id: str,
+    request: Request,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -427,10 +486,7 @@ async def download_scan(
     Requires the `scan` permission. 400 when the scan is not completed; 404 when unknown or the file
     is gone.
     """
-    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
-    job = result.scalar_one_or_none()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    job = await _get_accessible_scan(db, request, user, scan_id)
     if job.status != "completed" or not job.filepath:
         raise HTTPException(status_code=400, detail="Scan is not available for download")
     if not os.path.exists(job.filepath):
@@ -453,6 +509,7 @@ async def download_scan(
 )
 async def get_scan_thumbnail(
     scan_id: str,
+    request: Request,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -461,10 +518,7 @@ async def get_scan_thumbnail(
     Requires the `scan` permission. Generated on first request and cached; much cheaper than the
     full file in list views.
     """
-    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
-    job = result.scalar_one_or_none()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    job = await _get_accessible_scan(db, request, user, scan_id)
     if job.status != "completed" or not job.filepath:
         raise HTTPException(status_code=404, detail="Scan is not available")
     if not os.path.exists(job.filepath):
@@ -491,6 +545,7 @@ async def get_scan_thumbnail(
 )
 async def email_scan(
     scan_id: str,
+    request: Request,
     data: EmailSendRequest,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
@@ -499,10 +554,7 @@ async def email_scan(
 
     Requires the `scan` permission.
     """
-    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
-    job = result.scalar_one_or_none()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    job = await _get_accessible_scan(db, request, user, scan_id)
     if job.status != "completed" or not job.filepath:
         raise HTTPException(status_code=400, detail="Scan is not available")
 
@@ -522,6 +574,14 @@ async def email_scan(
     return {"message": f"Scan emailed to {data.to}"}
 
 
+def _cloud_path(folder: str) -> str:
+    """Normalise a Dropbox/OneDrive folder path to `/a/b` (no `..` segments)."""
+    parts = [p for p in folder.split("/") if p]
+    if ".." in parts:
+        raise HTTPException(status_code=400, detail="Invalid folder path")
+    return "/" + "/".join(parts)
+
+
 @router.post(
     "/scans/{scan_id}/cloud",
     summary="Upload a scan to cloud storage",
@@ -531,7 +591,13 @@ async def email_scan(
 )
 async def upload_scan_to_cloud(
     scan_id: str,
+    request: Request,
     provider_id: int,
+    folder_id: str | None = Query(
+        default=None, max_length=512,
+        description="Destination folder: a folder id for Google Drive, a path (e.g. "
+        "`/Receipts`) for Dropbox and OneDrive. Omit for the default `Papyrus Scans` folder.",
+    ),
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -539,12 +605,9 @@ async def upload_scan_to_cloud(
     Dropbox or OneDrive).
 
     Requires the `scan` permission. The response carries `file_id` (Drive, OneDrive) or `path`
-    (Dropbox).
+    (Dropbox). `folder_id` is honoured by all three (id on Drive, path on Dropbox/OneDrive).
     """
-    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
-    job = result.scalar_one_or_none()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    job = await _get_accessible_scan(db, request, user, scan_id)
     if job.status != "completed" or not job.filepath:
         raise HTTPException(status_code=400, detail="Scan is not available")
 
@@ -572,6 +635,7 @@ async def upload_scan_to_cloud(
             filepath=job.filepath,
             filename=filename,
             access_token=access_token,
+            folder_id=folder_id or None,
         )
         return {"message": "Uploaded to Google Drive", "file_id": file_id}
     elif provider.provider == "dropbox":
@@ -579,6 +643,7 @@ async def upload_scan_to_cloud(
             filepath=job.filepath,
             filename=filename,
             access_token=access_token,
+            **({"remote_path": _cloud_path(folder_id)} if folder_id else {}),
         )
         return {"message": "Uploaded to Dropbox", "path": path}
     else:
@@ -586,6 +651,7 @@ async def upload_scan_to_cloud(
             filepath=job.filepath,
             filename=filename,
             access_token=access_token,
+            **({"folder_path": _cloud_path(folder_id)} if folder_id else {}),
         )
         return {"message": "Uploaded to OneDrive", "file_id": file_id}
 
@@ -598,6 +664,7 @@ async def upload_scan_to_cloud(
 )
 async def send_scan_to_paperless(
     scan_id: str,
+    request: Request,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -605,10 +672,7 @@ async def send_scan_to_paperless(
 
     Requires the `scan` permission. 400 when Paperless-ngx is not configured.
     """
-    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
-    job = result.scalar_one_or_none()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    job = await _get_accessible_scan(db, request, user, scan_id)
     if job.status != "completed" or not job.filepath:
         raise HTTPException(status_code=400, detail="Scan is not available")
 
@@ -642,6 +706,7 @@ async def send_scan_to_paperless(
 )
 async def apply_ocr_to_scan(
     scan_id: str,
+    request: Request,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -649,10 +714,7 @@ async def apply_ocr_to_scan(
 
     Requires the `scan` permission. PDF only (400 otherwise). Invalidates the cached thumbnail.
     """
-    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
-    job = result.scalar_one_or_none()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    job = await _get_accessible_scan(db, request, user, scan_id)
     if job.status != "completed" or not job.filepath:
         raise HTTPException(status_code=400, detail="Scan is not available")
     if job.format != "pdf":
@@ -680,6 +742,7 @@ async def apply_ocr_to_scan(
 )
 async def enhance_scan(
     scan_id: str,
+    request: Request,
     body: EnhanceRequest,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
@@ -690,10 +753,7 @@ async def enhance_scan(
     Requires the `scan` permission. Image scans only (png/jpeg/tiff); PDFs return 400. Invalidates
     the cached thumbnail.
     """
-    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
-    job = result.scalar_one_or_none()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    job = await _get_accessible_scan(db, request, user, scan_id)
     if job.status != "completed" or not job.filepath:
         raise HTTPException(status_code=400, detail="Scan is not available")
     if job.format == "pdf":
@@ -735,6 +795,7 @@ _BACKS_KEPT_MESSAGE = (
 )
 async def scan_backs(
     scan_id: str,
+    request: Request,
     body: BacksRequest,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
@@ -750,10 +811,7 @@ async def scan_backs(
     """
     from app.routers.settings import get_setting
 
-    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
-    job = result.scalar_one_or_none()
-    if job is None or (job.user_id not in (None, user.id) and user.role != "admin"):
-        raise NotFoundError("Scan not found")
+    job = await _get_accessible_scan(db, request, user, scan_id)
     if (
         job.status != "completed"
         or job.source != "ADF"
@@ -818,20 +876,23 @@ async def scan_backs(
             duplex_source_scan_id=front_scan_id,
         )
 
+    owners: dict[str, uuid.UUID | None] = {}
+
     async def snapshot(row: ScanJob) -> ScanResponse | None:
         """Fresh copy of a row, or None if it was deleted meanwhile."""
         try:
             await db.refresh(row)
         except Exception:
             return None
+        owners[row.scan_id] = row.user_id
         return ScanResponse.model_validate(row, from_attributes=True)
 
     async def broadcast(*rows: ScanResponse | None) -> None:
         for row in rows:
             if row is not None:
-                await ws_manager.broadcast("scans", {
+                await ws_manager.broadcast_scan({
                     "type": "scan_completed", "data": row.model_dump(mode="json")
-                })
+                }, owners.get(row.scan_id))
 
     async def keep_backs_only() -> None:
         kept = await new_row(backs_id, backs_path, backs_count, False)
@@ -928,6 +989,7 @@ async def scan_backs(
 )
 async def save_scan_to_smb(
     scan_id: str,
+    request: Request,
     share_id: int,
     remote_path: str = "/",
     user: User = Depends(require_permission("scan")),
@@ -937,10 +999,7 @@ async def save_scan_to_smb(
 
     Requires the `scan` permission.
     """
-    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
-    job = result.scalar_one_or_none()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    job = await _get_accessible_scan(db, request, user, scan_id)
     if job.status != "completed" or not job.filepath:
         raise HTTPException(status_code=400, detail="Scan is not available")
 
@@ -973,16 +1032,19 @@ async def save_scan_to_smb(
 )
 async def bulk_delete_scans(
     body: BulkDeleteScansRequest,
+    request: Request,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
-    """Delete scans and their files by scan id; unknown ids are ignored.
+    """Delete scans and their files by scan id; unknown and inaccessible ids are ignored.
 
     Requires the `scan` permission. Broadcasts `scan_deleted` per id (and `scan_completed` for
     fronts freed from a duplex merge).
     """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id.in_(body.scan_ids)))
-    jobs = result.scalars().all()
+    jobs = [j for j in result.scalars().all() if can_access_scan(user, request, j)]
+    deleted_ids = [j.scan_id for j in jobs]
+    deleted_owners = {j.scan_id: j.user_id for j in jobs}
 
     deleted = 0
     filepaths: list[str] = []
@@ -1001,14 +1063,14 @@ async def bulk_delete_scans(
     for filepath in filepaths:
         await asyncio.to_thread(cleanup_file, filepath)
 
-    for scan_id in body.scan_ids:
-        await ws_manager.broadcast("scans", {
+    for scan_id in deleted_ids:
+        await ws_manager.broadcast_scan({
             "type": "scan_deleted", "data": {"scan_id": scan_id}
-        })
+        }, deleted_owners[scan_id])
     for fronts in freed:
-        await ws_manager.broadcast("scans", {
+        await ws_manager.broadcast_scan({
             "type": "scan_completed", "data": serialize_scan_job(fronts)
-        })
+        }, fronts.user_id)
 
     return BulkDeleteResponse(deleted=deleted)
 
@@ -1069,6 +1131,7 @@ def _collate_pdfs_sync(page_specs: list[tuple[str, int]], out_path: str) -> None
 )
 async def collate_scans(
     body: CollateRequest,
+    request: Request,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1079,7 +1142,9 @@ async def collate_scans(
     import uuid as _uuid
 
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id.in_(body.scan_ids)))
-    jobs_map = {j.scan_id: j for j in result.scalars().all()}
+    jobs_map = {
+        j.scan_id: j for j in result.scalars().all() if can_access_scan(user, request, j)
+    }
 
     # Preserve order from request
     ordered_jobs = []
@@ -1127,9 +1192,9 @@ async def collate_scans(
     await db.commit()
     await db.refresh(merged_job)
 
-    await ws_manager.broadcast("scans", {
+    await ws_manager.broadcast_scan({
         "type": "scan_completed", "data": serialize_scan_job(merged_job)
-    })
+    }, merged_job.user_id)
 
     return merged_job
 
@@ -1142,6 +1207,7 @@ async def collate_scans(
 )
 async def delete_scan(
     scan_id: str,
+    request: Request,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1150,13 +1216,11 @@ async def delete_scan(
     Requires the `scan` permission. Fires the `scan.delete` webhook and broadcasts `scan_deleted` on
     the `scans` channel.
     """
-    result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
-    job = result.scalar_one_or_none()
-    if job is None:
-        raise HTTPException(status_code=404, detail="Scan not found")
+    job = await _get_accessible_scan(db, request, user, scan_id)
 
     filepath = job.filepath
     scan_id_copy = job.scan_id
+    owner_id = job.user_id
     await db.delete(job)
     freed = await duplex_service.release_fronts(db, [job])
     # F44: commit before unlinking, so a slow/failing unlink can never leave
@@ -1170,13 +1234,13 @@ async def delete_scan(
     await db.commit()
     await dispatch_webhook(db, "scan.delete", {"scan_id": scan_id_copy})
 
-    await ws_manager.broadcast("scans", {
+    await ws_manager.broadcast_scan({
         "type": "scan_deleted", "data": {"scan_id": scan_id_copy}
-    })
+    }, owner_id)
     for fronts in freed:
-        await ws_manager.broadcast("scans", {
+        await ws_manager.broadcast_scan({
             "type": "scan_completed", "data": serialize_scan_job(fronts)
-        })
+        }, fronts.user_id)
 
 
 # --- Scan Profiles ---
@@ -1309,6 +1373,15 @@ async def scan_progress_ws(websocket: WebSocket, scan_id: str):
     async with async_session() as db:
         identity = await authenticate_websocket(websocket, db)
     if identity is None or not has_ws_permission(identity, "scan"):
+        await websocket.close(code=1008)
+        return
+    # The id may not exist yet (the client opens this before POSTing /scans); an existing scan
+    # must be visible to this identity.
+    async with async_session() as db:
+        existing = (await db.execute(
+            select(ScanJob).where(ScanJob.scan_id == scan_id)
+        )).scalar_one_or_none()
+    if existing is not None and not _scan_access(identity.user, identity.permissions, existing):
         await websocket.close(code=1008)
         return
     channel = f"scan:{scan_id}"

@@ -4,9 +4,12 @@ This codebase's router tests call the endpoint function directly with a
 fake AsyncSession stand-in rather than spinning up a TestClient (see
 test_settings_cache.py's `_CountingSession` for precedent).
 """
+from types import SimpleNamespace
+
 import pytest
 from fastapi import HTTPException
 
+from app.exceptions import NotFoundError
 from app.routers.scanner import get_scan_thumbnail
 
 
@@ -26,8 +29,13 @@ class _FakeSession:
         return _FakeResult(self._value)
 
 
+_USER = SimpleNamespace(id=1, role="user")
+_REQUEST = SimpleNamespace(state=SimpleNamespace(token_permissions=None))
+
+
 class _FakeJob:
     def __init__(self, status="completed", filepath=None, format="png"):
+        self.user_id = 1
         self.status = status
         self.filepath = filepath
         self.format = format
@@ -36,8 +44,8 @@ class _FakeJob:
 async def test_thumbnail_404_when_scan_not_found():
     db = _FakeSession(None)
 
-    with pytest.raises(HTTPException) as exc_info:
-        await get_scan_thumbnail("missing-scan-id", user=None, db=db)
+    with pytest.raises((HTTPException, NotFoundError)) as exc_info:
+        await get_scan_thumbnail("missing-scan-id", _REQUEST, user=_USER, db=db)
 
     assert exc_info.value.status_code == 404
 
@@ -47,7 +55,7 @@ async def test_thumbnail_404_when_scan_not_completed():
     db = _FakeSession(job)
 
     with pytest.raises(HTTPException) as exc_info:
-        await get_scan_thumbnail("scan-id", user=None, db=db)
+        await get_scan_thumbnail("scan-id", _REQUEST, user=_USER, db=db)
 
     assert exc_info.value.status_code == 404
 
@@ -57,6 +65,6 @@ async def test_thumbnail_404_when_file_missing_on_disk(tmp_path):
     db = _FakeSession(job)
 
     with pytest.raises(HTTPException) as exc_info:
-        await get_scan_thumbnail("scan-id", user=None, db=db)
+        await get_scan_thumbnail("scan-id", _REQUEST, user=_USER, db=db)
 
     assert exc_info.value.status_code == 404

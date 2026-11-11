@@ -190,6 +190,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/device/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve or deny a device request
+         * @description Approve or deny a pending device request as the signed-in user (session only; API-token
+         *     callers get 403).
+         *
+         *     404 when the code is unknown or expired, 409 when it was already decided. Limited to 20
+         *     requests/minute per user.
+         */
+        post: operations["auth_approve_device"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/device/code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request a device code
+         * @description Start a device authorization (API token with the `device` permission only; sessions get
+         *     403).
+         *
+         *     Show `verification_uri_complete` as a QR code and `user_code` as text, then poll
+         *     `POST /auth/device/token` every `interval` seconds. Limited to 10 requests/minute per token.
+         */
+        post: operations["auth_request_device_code"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/device/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Poll for the device token
+         * @description Exchange an approved `device_code` for a 15-minute API token owned by the approving user
+         *     (print, scan, files, email). Single use.
+         *
+         *     Must be called by the same API token that requested the code. Polling faster than `interval`
+         *     returns `slow_down` and lengthens the interval by 5s. Errors are HTTP 400 with `code` =
+         *     `authorization_pending`, `slow_down`, `access_denied`, `expired_token` or `invalid_grant`.
+         *     Limited to 60 requests/minute per token.
+         */
+        post: operations["auth_poll_device_token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/device/{user_code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Look up a device code
+         * @description Describe a pending device request for the approval page (signed-in session only).
+         *
+         *     404 when the code is unknown or expired. Limited to 20 requests/minute per user.
+         */
+        get: operations["auth_lookup_device_code"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/local-login": {
         parameters: {
             query?: never;
@@ -225,7 +321,8 @@ export interface paths {
          * Start OIDC login
          * @description Redirect the browser to the OIDC provider to authenticate (public endpoint).
          *
-         *     In dev mode this signs in a built-in admin and redirects to `/` instead.
+         *     In dev mode this signs in a built-in admin and redirects to `/` instead. `next` is an optional
+         *     same-origin path (e.g. `/device?code=ABCD-EFGH`) to return to after sign-in.
          *     503 when OIDC is not enabled or configured.
          */
         get: operations["auth_oidc_login"];
@@ -340,7 +437,10 @@ export interface paths {
         post?: never;
         /**
          * Revoke an API token
-         * @description Permanently revoke an API token (admin only); it stops working immediately.
+         * @description Permanently revoke an API token; it stops working immediately.
+         *
+         *     Allowed for admins, for a token revoking itself, and for a `device`-permission token revoking
+         *     a token minted from its own device authorizations.
          */
         delete: operations["auth_revoke_token"];
         options?: never;
@@ -1533,7 +1633,9 @@ export interface paths {
          * List scans
          * @description List scans, newest first, with limit/offset pagination.
          *
-         *     Requires the `scan` permission.
+         *     Requires the `scan` permission. Callers see their own scans; admins (session, or a token with
+         *     the `admin` permission) see all; sessions also see network (eSCL) scans, which have no owner.
+         *     With `mine=true` only scans owned by the caller are listed.
          */
         get: operations["scanner_list_scans"];
         put?: never;
@@ -1593,7 +1695,7 @@ export interface paths {
         put?: never;
         /**
          * Delete several scans
-         * @description Delete scans and their files by scan id; unknown ids are ignored.
+         * @description Delete scans and their files by scan id; unknown and inaccessible ids are ignored.
          *
          *     Requires the `scan` permission. Broadcasts `scan_deleted` per id (and `scan_completed` for
          *     fronts freed from a duplex merge).
@@ -1692,7 +1794,7 @@ export interface paths {
          *     Dropbox or OneDrive).
          *
          *     Requires the `scan` permission. The response carries `file_id` (Drive, OneDrive) or `path`
-         *     (Dropbox).
+         *     (Dropbox). `folder_id` is honoured by all three (id on Drive, path on Dropbox/OneDrive).
          */
         post: operations["scanner_upload_scan_to_cloud"];
         delete?: never;
@@ -2936,6 +3038,155 @@ export interface components {
              * @example a1b2c3d4
              */
             scan_id: string;
+        };
+        /** DeviceApproveRequest */
+        DeviceApproveRequest: {
+            /**
+             * Approve
+             * @description True to approve, false to deny.
+             */
+            approve: boolean;
+            /**
+             * User Code
+             * @description The code shown on the device (dash optional).
+             */
+            user_code: string;
+        };
+        /** DeviceApproveResponse */
+        DeviceApproveResponse: {
+            /**
+             * Status
+             * @description approved or denied.
+             */
+            status: string;
+        };
+        /** DeviceCodeRequest */
+        DeviceCodeRequest: {
+            /**
+             * Client Name
+             * @description Name shown to the approving user.
+             * @example Front-desk kiosk
+             */
+            client_name?: string | null;
+        };
+        /** DeviceCodeResponse */
+        DeviceCodeResponse: {
+            /**
+             * Device Code
+             * @description Secret the device polls with; never shown to the user.
+             */
+            device_code: string;
+            /**
+             * Expires In
+             * @description Seconds until the request expires.
+             * @example 300
+             */
+            expires_in: number;
+            /**
+             * Interval
+             * @description Minimum seconds between token polls.
+             * @example 5
+             */
+            interval: number;
+            /**
+             * User Code
+             * @description Short code the user confirms, formatted XXXX-XXXX.
+             * @example WDJB-MJHT
+             */
+            user_code: string;
+            /**
+             * Verification Uri
+             * @description Page where the user enters the code.
+             */
+            verification_uri: string;
+            /**
+             * Verification Uri Complete
+             * @description Verification URI with the code embedded (for a QR code).
+             */
+            verification_uri_complete: string;
+        };
+        /** DeviceLookupResponse */
+        DeviceLookupResponse: {
+            /**
+             * Client Name
+             * @description Name of the requesting device.
+             */
+            client_name: string;
+            /**
+             * Expires At
+             * Format: date-time
+             * @description When the pending request expires.
+             */
+            expires_at: string;
+            /**
+             * Scopes
+             * @description Permissions the issued token will carry.
+             */
+            scopes: string[];
+            /**
+             * Status
+             * @description pending, approved, denied or consumed.
+             */
+            status: string;
+            /**
+             * Token Ttl Minutes
+             * @description Lifetime of the issued token in minutes.
+             */
+            token_ttl_minutes: number;
+        };
+        /** DeviceTokenRequest */
+        DeviceTokenRequest: {
+            /**
+             * Device Code
+             * @description The device_code from the code request.
+             */
+            device_code: string;
+        };
+        /** DeviceTokenResponse */
+        DeviceTokenResponse: {
+            /**
+             * Access Token
+             * @description Short-lived API token owned by the approving user.
+             */
+            access_token: string;
+            /**
+             * Expires At
+             * Format: date-time
+             * @description Token expiry.
+             */
+            expires_at: string;
+            /**
+             * Scopes
+             * @description Permissions granted.
+             */
+            scopes: string[];
+            /**
+             * Token Id
+             * Format: uuid
+             * @description Id of the token, for DELETE /auth/tokens/{id}.
+             */
+            token_id: string;
+            /** @description The approving user. */
+            user: components["schemas"]["DeviceTokenUser"];
+        };
+        /** DeviceTokenUser */
+        DeviceTokenUser: {
+            /**
+             * Display Name
+             * @description User display name.
+             */
+            display_name: string;
+            /**
+             * Email
+             * @description User email.
+             */
+            email: string;
+            /**
+             * Id
+             * Format: uuid
+             * @description User id.
+             */
+            id: string;
         };
         /**
          * DiscoverPrintersResponse
@@ -6063,7 +6314,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Signed in; redirect to /. */
+            /** @description Signed in; redirect to the original page (or /). */
             302: {
                 headers: {
                     /** @description Target URL. */
@@ -6074,6 +6325,288 @@ export interface operations {
             };
             /** @description Not authenticated or invalid credentials. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    auth_approve_device: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceApproveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceApproveResponse"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicts with the current state of the resource. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    auth_request_device_code: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["DeviceCodeRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceCodeResponse"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    auth_poll_device_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeviceTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceTokenResponse"];
+                };
+            };
+            /** @description Protocol error; the envelope `code` is one of authorization_pending, slow_down, access_denied, expired_token, invalid_grant. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    auth_lookup_device_code: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceLookupResponse"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6158,7 +6691,9 @@ export interface operations {
     };
     auth_oidc_login: {
         parameters: {
-            query?: never;
+            query?: {
+                next?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -6173,6 +6708,15 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
             /** @description Too many requests. */
             429: {
@@ -10328,6 +10872,8 @@ export interface operations {
             query?: {
                 limit?: number;
                 offset?: number;
+                /** @description Only scans created by the caller. */
+                mine?: boolean;
             };
             header?: never;
             path?: never;
@@ -10857,6 +11403,8 @@ export interface operations {
         parameters: {
             query: {
                 provider_id: number;
+                /** @description Destination folder: a folder id for Google Drive, a path (e.g. `/Receipts`) for Dropbox and OneDrive. Omit for the default `Papyrus Scans` folder. */
+                folder_id?: string | null;
             };
             header?: never;
             path: {

@@ -40,6 +40,23 @@ Creating a token: an admin calls `POST /api/v1/auth/tokens` with `name`, `permis
 one) and optionally `expires_in_days`. The plaintext token is in that response only; Papyrus stores
 a hash. Tokens can be listed and revoked (`GET`/`DELETE /auth/tokens`), also from the Settings UI.
 
+### Device sign-in (kiosks)
+
+A kiosk holding a shared API token with the `device` permission can have a user sign it in from
+their phone (RFC 8628 style):
+
+1. `POST /auth/device/code` (optional `{client_name}`) returns `device_code`, `user_code`
+   (`XXXX-XXXX`), `verification_uri_complete` (render as a QR code), `interval` (5s) and
+   `expires_in` (300s).
+2. The user opens the URL, signs in and approves on the `/device` page (session only;
+   `POST /auth/device/approve {user_code, approve}`).
+3. The kiosk polls `POST /auth/device/token {device_code}` (same token that requested it). Errors
+   are HTTP 400 whose `code` is `authorization_pending`, `slow_down` (interval grows by 5s),
+   `access_denied`, `expired_token` or `invalid_grant`. On success it gets a single-use
+   `access_token` owned by the user (permissions print, scan, files, email; 15-minute expiry).
+4. Revoke early with `DELETE /auth/tokens/{token_id}`, authenticated by the minted token itself or
+   by the kiosk's `device` token. Scans created this way can be listed with `GET /scans?mine=true`.
+
 ## Errors
 
 Every error body is an `ErrorResponse`:

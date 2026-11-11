@@ -40,7 +40,7 @@ A web-based print and scan server for network-connected multifunction printers. 
 - **Structured Logging**: JSON (or plain dev-mode) logs with a per-request `X-Request-ID`, echoed to the client and included in every log line and error response for easy correlation
 - **PWA Support**: Installable as a Progressive Web App on mobile and desktop; share files into Papyrus directly from the OS share sheet (Android/Chromium only — iOS Safari ignores the manifest's `share_target`, so iPhone users use the in-app upload flow instead). Shared files are held without a release PIN even when `require_release_pin` is on — the share flow has no way to display a generated PIN
 - **Responsive Design**: Works on phones, tablets, and desktops, with light and dark themes; the mobile nav bar shows the most-used sections plus a "More" sheet for the rest
-- **Authentication**: OIDC (Authentik/Keycloak) with group-based role mapping, API tokens with fine-grained permissions
+- **Authentication**: OIDC (Authentik/Keycloak) with group-based role mapping, API tokens with fine-grained permissions, per-user scan ownership enforced on every scan route, device sign-in (QR code approval on a phone mints a short-lived per-user token for kiosks)
 - **User Management**: Admin user list with role management, user profile display with logout
 - **Login Screen**: Clean SSO login page for unauthenticated users
 

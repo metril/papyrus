@@ -122,7 +122,7 @@ async def test_broadcasts_scan_completed_per_row(db, user_client, monkeypatch, t
     _patch(monkeypatch, tmp_path, BACKS)
     sent = []
 
-    async def fake_broadcast(channel, message):
+    async def fake_broadcast(channel, message, owner_id=None):
         sent.append((channel, message))
 
     monkeypatch.setattr(scanner_router.ws_manager, "broadcast", fake_broadcast)

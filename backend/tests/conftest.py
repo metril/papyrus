@@ -57,6 +57,7 @@ from app.database import Base, async_session, engine
 from app.main import app
 from app.models import User
 from app.routers import auth as auth_router
+from app.routers import device as device_router
 from app.routers import email as email_router
 from app.routers import jobs as jobs_router
 from app.services import settings_cache
@@ -210,6 +211,9 @@ def _reset_process_local_throttles():
     auth_router._login_throttle._entries.clear()
     jobs_router._release_pin_throttle._entries.clear()
     email_router._webhook_requests.clear()
+    for lim in (device_router._code_limiter, device_router._poll_limiter,
+                device_router._approve_limiter):
+        lim.clear()
     yield
 
 

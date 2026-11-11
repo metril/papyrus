@@ -182,7 +182,7 @@ function LoginScreen() {
 
         {providers.oidc_enabled && (
           <button
-            onClick={() => { window.location.href = '/api/v1/auth/login'; }}
+            onClick={() => { window.location.href = `/api/v1/auth/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`; }}
             className="w-full px-4 py-2.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-900 dark:text-gray-100 font-medium rounded-lg transition-colors border border-gray-300 dark:border-gray-600"
           >
             Sign in with SSO

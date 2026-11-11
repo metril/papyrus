@@ -9,7 +9,7 @@ from app.auth.tokens import validate_token
 from app.database import get_db
 from app.models import User
 
-ALL_PERMISSIONS = ["print", "scan", "files", "admin", "email"]
+ALL_PERMISSIONS = ["print", "scan", "files", "admin", "email", "device"]
 
 
 # Schema-only: these document the auth schemes in OpenAPI. Actual
@@ -55,6 +55,7 @@ async def get_current_user(
             )
         # Attach token permissions to request state for downstream checks
         request.state.token_permissions = token.permissions
+        request.state.token_id = token.id
         return user
 
     # Check for session cookie
@@ -69,6 +70,7 @@ async def get_current_user(
             user = result.scalar_one_or_none()
             if user:
                 request.state.token_permissions = None  # Full access via session
+                request.state.token_id = None
                 return user
 
     raise HTTPException(
