@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_docs import AUTH_ERRORS, NOT_FOUND, VALIDATION, std_responses
-from app.auth.dependencies import get_current_user, require_admin
+from app.auth.dependencies import require_admin, require_permission
 from app.database import get_db
 from app.exceptions import NotFoundError
 from app.models import Contact, User
@@ -26,9 +26,9 @@ async def _get(db: AsyncSession, contact_id: uuid.UUID) -> Contact:
 @router.get("", summary="List contacts", response_model=list[ContactResponse],
             responses=std_responses(AUTH_ERRORS))
 async def list_contacts(
-    user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
+    user: User = Depends(require_permission("scan")), db: AsyncSession = Depends(get_db)
 ):
-    """List the address book, by name (any signed-in user)."""
+    """List the address book, by name (sessions, or tokens with `scan`)."""
     return (await db.execute(select(Contact).order_by(Contact.name, Contact.email))).scalars().all()
 
 

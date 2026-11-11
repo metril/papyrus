@@ -6617,7 +6617,7 @@
     },
     "/api/v1/admin/users/{user_id}": {
       "delete": {
-        "description": "Delete a user and cascade their cloud/SMB connections (admin only). 400 when targeting\nyourself.",
+        "description": "Delete a user and cascade their cloud/SMB connections; their scan and print jobs are\nreassigned to the acting admin (admin only). 400 when targeting yourself.",
         "operationId": "admin_delete_user",
         "parameters": [
           {
@@ -8594,7 +8594,7 @@
     },
     "/api/v1/contacts": {
       "get": {
-        "description": "List the address book, by name (any signed-in user).",
+        "description": "List the address book, by name (sessions, or tokens with `scan`).",
         "operationId": "contacts_list_contacts",
         "responses": {
           "200": {
@@ -11238,7 +11238,7 @@
     },
     "/api/v1/kiosks/{kiosk_id}": {
       "delete": {
-        "description": "Revoke the kiosk's token and delete the kiosk and its service user (admin).",
+        "description": "Revoke the kiosk's token and delete the kiosk and its service user; the kiosk's scan and\nprint jobs are reassigned to the acting admin (admin).",
         "operationId": "kiosks_delete_kiosk",
         "parameters": [
           {

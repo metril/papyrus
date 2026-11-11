@@ -25,6 +25,7 @@ from app.schemas.kiosks import (
     KioskUpdate,
 )
 from app.services.audit_service import log_event
+from app.services.user_deletion import reassign_jobs
 
 router = APIRouter()
 
@@ -125,12 +126,14 @@ async def update_kiosk(
 async def delete_kiosk(
     kiosk_id: uuid.UUID, user: User = Depends(require_admin), db: AsyncSession = Depends(get_db)
 ):
-    """Revoke the kiosk's token and delete the kiosk and its service user (admin)."""
+    """Revoke the kiosk's token and delete the kiosk and its service user; the kiosk's scan and
+    print jobs are reassigned to the acting admin (admin)."""
     k = await _get(db, kiosk_id)
     svc = (await db.execute(select(User).where(User.id == k.service_user_id))).scalar_one_or_none()
     await log_event(db, "kiosk.delete", "kiosk", str(k.id), user_id=user.id,
                     detail={"name": k.name})
     if svc is not None:
+        await reassign_jobs(db, svc.id, user.id)
         await db.delete(svc)  # cascades to its tokens and (by FK) the kiosk row
     else:
         await db.delete(k)

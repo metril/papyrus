@@ -153,8 +153,8 @@ export interface paths {
         post?: never;
         /**
          * Delete a user
-         * @description Delete a user and cascade their cloud/SMB connections (admin only). 400 when targeting
-         *     yourself.
+         * @description Delete a user and cascade their cloud/SMB connections; their scan and print jobs are
+         *     reassigned to the acting admin (admin only). 400 when targeting yourself.
          */
         delete: operations["admin_delete_user"];
         options?: never;
@@ -594,7 +594,7 @@ export interface paths {
         };
         /**
          * List contacts
-         * @description List the address book, by name (any signed-in user).
+         * @description List the address book, by name (sessions, or tokens with `scan`).
          */
         get: operations["contacts_list_contacts"];
         put?: never;
@@ -1149,7 +1149,8 @@ export interface paths {
         post?: never;
         /**
          * Delete a kiosk
-         * @description Revoke the kiosk's token and delete the kiosk and its service user (admin).
+         * @description Revoke the kiosk's token and delete the kiosk and its service user; the kiosk's scan and
+         *     print jobs are reassigned to the acting admin (admin).
          */
         delete: operations["kiosks_delete_kiosk"];
         options?: never;

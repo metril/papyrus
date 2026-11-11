@@ -111,6 +111,55 @@ async def test_last_seen_updates_and_is_throttled(admin_client, client, db):
 
 async def test_last_seen_ignores_other_tokens(client, db, admin_user):
     db.add(APIToken(user_id=admin_user.id, name="p", token_hash=hash_token("pprs_p"),
-                    permissions=["print"]))
+                    permissions=["scan"]))
     await db.commit()
     assert (await client.get("/api/v1/contacts", headers=_h("pprs_p"))).status_code == 200
+
+
+async def _seed_jobs(db, owner_id):
+    from app.models import PrintJob, ScanJob
+    db.add(ScanJob(user_id=owner_id, scan_id="s-1", status="completed", format="pdf",
+                   filepath="/tmp/x.pdf", file_size=1))
+    db.add(PrintJob(user_id=owner_id, title="t", filename="f.pdf", filepath="/tmp/f.pdf",
+                    file_size=1, mime_type="application/pdf", status="held"))
+    await db.commit()
+
+
+async def _assert_reassigned(db, admin_user, regular_user, client):
+    from app.auth.dependencies import get_current_user
+    from app.models import PrintJob, ScanJob
+    opt = {"populate_existing": True}
+    scan = (await db.execute(select(ScanJob).execution_options(**opt))).scalar_one()
+    pj = (await db.execute(select(PrintJob).execution_options(**opt))).scalar_one()
+    assert scan.user_id == admin_user.id and pj.user_id == admin_user.id
+    app.dependency_overrides[get_current_user] = lambda: regular_user
+    r = await client.get("/api/v1/scans")
+    assert r.status_code == 200 and r.json()["total"] == 0
+
+
+async def test_delete_kiosk_reassigns_jobs_to_admin(admin_client, db, admin_user, regular_user):
+    kid = (await _mk(admin_client))["kiosk"]["id"]
+    svc = (await db.execute(select(User).where(User.username == "kiosk-front"))).scalar_one()
+    await _seed_jobs(db, svc.id)
+    assert (await admin_client.delete(f"{K}/{kid}")).status_code == 204
+    await _assert_reassigned(db, admin_user, regular_user, admin_client)
+
+
+async def test_admin_delete_user_reassigns_jobs(admin_client, db, admin_user, regular_user):
+    victim = User(email="v@example.com", display_name="V", role="user", is_local=True,
+                  username="victim")
+    db.add(victim)
+    await db.commit()
+    await db.refresh(victim)
+    await _seed_jobs(db, victim.id)
+    assert (await admin_client.delete(f"/api/v1/admin/users/{victim.id}")).status_code == 204
+    await _assert_reassigned(db, admin_user, regular_user, admin_client)
+
+
+async def test_non_kiosk_token_never_queries_again(client, db, admin_user):
+    db.add(APIToken(user_id=admin_user.id, name="p", token_hash=hash_token("pprs_nk"),
+                    permissions=["scan"]))
+    await db.commit()
+    await client.get("/api/v1/contacts", headers=_h("pprs_nk"))
+    entries = [v for v in deps._seen_checked.values()]
+    assert entries and entries[-1][0] is False

@@ -13,20 +13,26 @@ from app.models import Kiosk, User
 
 ALL_PERMISSIONS = ["print", "scan", "files", "admin", "email", "device"]
 
-# Process-local throttle for kiosk last_seen_at: token id -> monotonic time of the last check.
-# Most authenticated requests skip the DB entirely; one lookup/write per token per window.
+# Process-local kiosk last_seen tracking: token id -> (is_kiosk, monotonic time of last check).
+# A non-kiosk token is looked up once and never touches the DB for this again; a kiosk token is
+# written at most once per interval.
 KIOSK_SEEN_INTERVAL = 30.0
-_seen_checked: dict[uuid.UUID, float] = {}
+_seen_checked: dict[uuid.UUID, tuple[bool, float]] = {}
 
 
 async def _touch_kiosk(db: AsyncSession, token_id: uuid.UUID) -> None:
     now = time.monotonic()
-    last = _seen_checked.get(token_id)
-    if last is not None and now - last < KIOSK_SEEN_INTERVAL:
+    entry = _seen_checked.get(token_id)
+    if entry is not None and (not entry[0] or now - entry[1] < KIOSK_SEEN_INTERVAL):
         return
     if len(_seen_checked) > 10_000:
         _seen_checked.clear()
-    _seen_checked[token_id] = now
+    if entry is None:
+        found = await db.execute(select(Kiosk.id).where(Kiosk.token_id == token_id))
+        if found.first() is None:
+            _seen_checked[token_id] = (False, now)
+            return
+    _seen_checked[token_id] = (True, now)
     await db.execute(
         update(Kiosk).where(Kiosk.token_id == token_id)
         .values(last_seen_at=datetime.now(timezone.utc))
