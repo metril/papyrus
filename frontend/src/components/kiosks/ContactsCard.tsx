@@ -7,13 +7,11 @@ import EmptyState from '../common/EmptyState';
 import { inputCls } from './fields';
 import { createContact, deleteContact, updateContact } from '../../api/kiosks';
 import { queryKeys, useContacts } from '../../api/queries';
-import { useAuthStore } from '../../store/authStore';
 import { useToast } from '../../hooks/useToast';
 
 export default function ContactsCard() {
   const toast = useToast();
   const queryClient = useQueryClient();
-  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
   const { data: contacts = [] } = useContacts();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -40,9 +38,9 @@ export default function ContactsCard() {
   });
 
   return (
-    <Card title="Address book" description="Shared contacts, used as email targets (kiosks link here).">
+    <Card title="Address book" description="Your personal contacts, used as email targets (kiosks link here).">
       <div className="space-y-4">
-        {isAdmin && (
+        {(
           <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); if (name.trim() && email.trim()) save.mutate(); }}>
             <input aria-label="Contact name" className={`${inputCls} flex-1 min-w-40`} placeholder="Name" value={name}
               onChange={(e) => setName(e.target.value)} />
@@ -62,7 +60,7 @@ export default function ContactsCard() {
                   <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{c.name}</div>
                   <div className="font-mono text-xs text-gray-500 dark:text-gray-400">{c.email}</div>
                 </div>
-                {isAdmin && (
+                {(
                   <div className="flex gap-2">
                     <Button size="sm" variant="secondary" onClick={() => { setEditId(c.id); setName(c.name); setEmail(c.email); }}>Edit</Button>
                     <Button size="sm" variant="danger-ghost" onClick={() => remove.mutate(c.id)}>Delete</Button>

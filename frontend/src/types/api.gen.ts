@@ -594,13 +594,13 @@ export interface paths {
         };
         /**
          * List contacts
-         * @description List the address book, by name (sessions, or tokens with `scan`).
+         * @description List your own contacts, by name (sessions, or tokens with `scan`).
          */
         get: operations["contacts_list_contacts"];
         put?: never;
         /**
          * Add a contact
-         * @description Add an address-book contact (admin).
+         * @description Add a contact to your address book (sessions, or tokens with `scan`).
          */
         post: operations["contacts_create_contact"];
         delete?: never;
@@ -619,13 +619,13 @@ export interface paths {
         get?: never;
         /**
          * Update a contact
-         * @description Replace a contact's name and email (admin).
+         * @description Replace a contact's name and email (own contacts only; sessions or `scan` tokens).
          */
         put: operations["contacts_update_contact"];
         post?: never;
         /**
          * Delete a contact
-         * @description Delete a contact (admin).
+         * @description Delete a contact (own contacts only; sessions or `scan` tokens).
          */
         delete: operations["contacts_delete_contact"];
         options?: never;
