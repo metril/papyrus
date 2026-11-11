@@ -450,7 +450,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Papyrus",
     description="Web-based print and scan server",
-    version="1.6.0",
+    version="1.7.0",
     lifespan=lifespan,
     openapi_tags=TAGS_METADATA,
     contact={"name": "Papyrus", "url": "https://github.com/metril/papyrus"},

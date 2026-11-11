@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { useSettingsQuery, queryKeys } from '../api/queries';
@@ -26,9 +26,10 @@ import WebhooksCard from '../components/settings/WebhooksCard';
 import BackupRestoreCard from '../components/settings/BackupRestoreCard';
 import ApiTokensCard from '../components/settings/ApiTokensCard';
 import KiosksCard from '../components/kiosks/KiosksCard';
+import ContactsCard from '../components/kiosks/ContactsCard';
 import { useAuthStore } from '../store/authStore';
 
-const TABS = [['general', 'General'], ['kiosks', 'Kiosks']] as const;
+const TABS = [['general', 'General'], ['kiosks', 'Kiosks'], ['contacts', 'Address book']] as const;
 type Tab = (typeof TABS)[number][0];
 
 interface ApiErrorResponse {
@@ -59,15 +60,17 @@ function describeSettingsLoadError(error: unknown): string | null {
 }
 
 export default function SettingsPage() {
-  const { data, isLoading, isError, error } = useSettingsQuery();
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, 'saving' | 'saved' | 'error'>>({});
   const queryClient = useQueryClient();
   const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
+  const { data, isLoading, isError, error } = useSettingsQuery(isAdmin);
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get('tab');
-  // Unknown ids (and the admin-only Kiosks tab for non-admins) fall back to General.
-  const tab: Tab = requested === 'kiosks' && isAdmin ? 'kiosks' : 'general';
+  // General and Kiosks are admin-only; everyone has Address book. Unknown or
+  // disallowed ids fall back to the first visible tab.
+  const visibleTabs = TABS.filter(([id]) => isAdmin || id === 'contacts');
+  const tab: Tab = visibleTabs.find(([id]) => id === requested)?.[0] ?? visibleTabs[0][0];
   const setTab = (id: Tab) =>
     setSearchParams(id === 'general' ? {} : { tab: id }, { replace: true });
 
@@ -122,9 +125,7 @@ export default function SettingsPage() {
       <div className="flex flex-wrap items-center gap-4">
         <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Settings</h2>
         <div role="tablist" className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
-          {TABS
-            .filter(([id]) => id !== 'kiosks' || isAdmin)
-            .map(([id, label]) => (
+          {visibleTabs.map(([id, label]) => (
               <button
                 key={id}
                 role="tab"
@@ -140,12 +141,10 @@ export default function SettingsPage() {
               </button>
             ))}
         </div>
-        <Link to="/contacts" className="text-sm font-medium text-ink-600 hover:text-ink-700 dark:text-ink-400">
-          Address book
-        </Link>
       </div>
 
       {tab === 'kiosks' && isAdmin && <KiosksCard />}
+      {tab === 'contacts' && <ContactsCard />}
       {tab === 'general' && (<>
 
       {isLoading && (

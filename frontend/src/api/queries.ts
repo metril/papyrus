@@ -141,10 +141,11 @@ export function useScanProfiles() {
   });
 }
 
-export function useSettingsQuery() {
+export function useSettingsQuery(enabled = true) {
   return useQuery({
     queryKey: queryKeys.settings,
     queryFn: () => getSettings(),
+    enabled,
   });
 }
 

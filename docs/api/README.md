@@ -69,8 +69,9 @@ Admin routes manage kiosk identities; each kiosk is a non-login service user wit
   revokes the old token and returns a new `{kiosk, token}`.
 - `last_seen_at` is updated by any authenticated request made with the kiosk's token (at most one
   write per 30 s).
-- `GET /contacts` (sessions, or tokens with `scan`) lists `{id, name, email, created_at, updated_at}`;
-  `POST /contacts`, `PUT /contacts/{id}` and `DELETE /contacts/{id}` need an admin.
+- The address book is personal. `GET /contacts` lists the caller's own `{id, name, email, created_at, updated_at}`;
+  `POST /contacts`, `PUT /contacts/{id}` and `DELETE /contacts/{id}` act on them. All four need a session or a
+  token with `scan`; another user's contact id returns 404 (no admin override).
 
 ## Errors
 

@@ -38,8 +38,12 @@ function mockAncillaryEndpoints() {
   );
 }
 
+const adminUser = { id: '1', email: 'a@x.io', display_name: 'A', role: 'admin' } as const;
+const plainUser = { id: '2', email: 'u@x.io', display_name: 'U', role: 'user' } as const;
+
 describe('SettingsPage', () => {
   beforeEach(() => {
+    useAuthStore.setState({ user: adminUser });
     mockAncillaryEndpoints();
   });
 
@@ -149,6 +153,47 @@ describe('SettingsPage', () => {
       render(<SettingsPage />, { wrapper: makeWrapper('/settings?tab=bogus') });
       expect(await screen.findByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
       expect(screen.queryByLabelText('New kiosk name')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Address book tab', () => {
+    type C = { id: string; name: string; email: string; created_at: string; updated_at: string };
+    let store: C[];
+    beforeEach(() => {
+      store = [{ id: 'c1', name: 'Ann', email: 'ann@x.io', created_at: '', updated_at: '' }];
+      server.use(
+        http.get('/api/v1/settings', () => HttpResponse.json({})),
+        http.get('/api/v1/contacts', () => HttpResponse.json(store)),
+        http.post('/api/v1/contacts', async ({ request }) => {
+          const b = (await request.json()) as { name: string; email: string };
+          const c = { id: 'c2', created_at: '', updated_at: '', ...b };
+          store = [...store, c];
+          return HttpResponse.json(c, { status: 201 });
+        }),
+        http.delete('/api/v1/contacts/:id', ({ params }) => {
+          store = store.filter((c) => c.id !== params.id);
+          return new HttpResponse(null, { status: 204 });
+        }),
+      );
+    });
+
+    it('lists, adds and deletes own contacts from ?tab=contacts', async () => {
+      render(<SettingsPage />, { wrapper: makeWrapper('/settings?tab=contacts') });
+      expect(await screen.findByText('Ann')).toBeInTheDocument();
+      await userEvent.type(screen.getByLabelText('Contact name'), 'Bob');
+      await userEvent.type(screen.getByLabelText('Contact email'), 'bob@x.io');
+      await userEvent.click(screen.getByRole('button', { name: 'Add' }));
+      expect(await screen.findByText('bob@x.io')).toBeInTheDocument();
+      await userEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0]);
+      await waitFor(() => expect(screen.queryByText('Ann')).not.toBeInTheDocument());
+    });
+
+    it('shows only Address book to a non-admin and defaults to it', async () => {
+      useAuthStore.setState({ user: plainUser });
+      render(<SettingsPage />, { wrapper: makeWrapper('/settings?tab=kiosks') });
+      expect(await screen.findByText('Ann')).toBeInTheDocument();
+      expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Address book']);
+      expect(screen.queryByText('Loading settings...')).not.toBeInTheDocument();
     });
   });
 });

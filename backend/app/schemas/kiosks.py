@@ -1,4 +1,4 @@
-"""Schemas for kiosks (identities) and the shared address book."""
+"""Schemas for kiosks (identities) and the personal address book."""
 import re
 import uuid
 from datetime import datetime
