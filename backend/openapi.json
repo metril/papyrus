@@ -6098,7 +6098,7 @@
     },
     "description": "Web-based print and scan server",
     "title": "Papyrus",
-    "version": "1.6.0"
+    "version": "1.7.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -8594,7 +8594,7 @@
     },
     "/api/v1/contacts": {
       "get": {
-        "description": "List the address book, by name (sessions, or tokens with `scan`).",
+        "description": "List your own contacts, by name (sessions, or tokens with `scan`).",
         "operationId": "contacts_list_contacts",
         "responses": {
           "200": {
@@ -8664,7 +8664,7 @@
         ]
       },
       "post": {
-        "description": "Add an address-book contact (admin).",
+        "description": "Add a contact to your address book (sessions, or tokens with `scan`).",
         "operationId": "contacts_create_contact",
         "requestBody": {
           "content": {
@@ -8752,7 +8752,7 @@
     },
     "/api/v1/contacts/{contact_id}": {
       "delete": {
-        "description": "Delete a contact (admin).",
+        "description": "Delete a contact (own contacts only; sessions or `scan` tokens).",
         "operationId": "contacts_delete_contact",
         "parameters": [
           {
@@ -8843,7 +8843,7 @@
         ]
       },
       "put": {
-        "description": "Replace a contact's name and email (admin).",
+        "description": "Replace a contact's name and email (own contacts only; sessions or `scan` tokens).",
         "operationId": "contacts_update_contact",
         "parameters": [
           {
@@ -17603,7 +17603,7 @@
       "name": "kiosks"
     },
     {
-      "description": "Shared address book (read: any user; write: admin).",
+      "description": "Personal address book (own contacts only; session or `scan` token).",
       "name": "contacts"
     }
   ],
