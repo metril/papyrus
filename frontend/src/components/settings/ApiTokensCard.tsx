@@ -15,9 +15,9 @@ export default function ApiTokensCard() {
   const [newTokenExpiry, setNewTokenExpiry] = useState<number | null>(null);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
 
-  const allPermissions = ['print', 'scan', 'files', 'admin', 'email'] as const;
+  const allPermissions = ['print', 'scan', 'files', 'admin', 'email', 'device'] as const;
   const permissionLabels: Record<string, string> = {
-    print: 'Print', scan: 'Scan', files: 'Files', admin: 'Admin', email: 'Email',
+    print: 'Print', scan: 'Scan', files: 'Files', admin: 'Admin', email: 'Email', device: 'Device sign-in',
   };
 
   const togglePermission = (perm: string) => {

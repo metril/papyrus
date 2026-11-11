@@ -8,6 +8,7 @@ import { listScanners } from './scanners';
 import { listProviders } from './cloud';
 import { listWebhooks, listWebhookEvents } from './webhooks';
 import { listApiTokens } from './tokens';
+import { lookupDeviceCode } from './device';
 import { getDashboardStats, listUsers } from './admin';
 
 /**
@@ -55,6 +56,7 @@ export const queryKeys = {
   webhooks: ['webhooks'] as const,
   webhookEvents: ['webhookEvents'] as const,
   apiTokens: ['apiTokens'] as const,
+  deviceCode: (code: string) => ['deviceCode', code] as const,
 } as const;
 
 /**
@@ -183,6 +185,15 @@ export function useWebhookEvents() {
   return useQuery({
     queryKey: queryKeys.webhookEvents,
     queryFn: () => listWebhookEvents(),
+  });
+}
+
+export function useDeviceCode(code: string) {
+  return useQuery({
+    queryKey: queryKeys.deviceCode(code),
+    queryFn: () => lookupDeviceCode(code),
+    enabled: code.length > 0,
+    retry: false,
   });
 }
 

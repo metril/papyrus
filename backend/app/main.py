@@ -23,9 +23,9 @@ from app.rate_limit_middleware import RateLimitMiddleware
 from app.routers import (
     admin,
     auth,
-    device,
     cloud,
     copy,
+    device,
     email,
     escl,
     jobs,

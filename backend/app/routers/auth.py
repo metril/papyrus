@@ -239,7 +239,8 @@ async def oidc_login(
     response_class=RedirectResponse,
     status_code=302,
     responses=std_responses(
-        {302: {"description": "Signed in; redirect to the original page (or /).", "headers": _REDIRECT_HDR}},
+        {302: {"description": "Signed in; redirect to the original page (or /).",
+            "headers": _REDIRECT_HDR}},
         _UNAUTH,
     ),
 )
@@ -296,7 +297,8 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
     await db.refresh(user)
 
     request.session["user_id"] = str(user.id)
-    return RedirectResponse(url=_safe_next(request.session.pop("login_next", None)), status_code=302)
+    next_url = _safe_next(request.session.pop("login_next", None))
+    return RedirectResponse(url=next_url, status_code=302)
 
 
 @router.post(

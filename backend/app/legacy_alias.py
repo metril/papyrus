@@ -28,6 +28,10 @@ GET /auth/providers
 POST /auth/local-login
 GET /auth/login !
 GET /auth/callback !
+POST /auth/device/code
+GET /auth/device/{user_code}
+POST /auth/device/approve
+POST /auth/device/token
 POST /auth/logout
 GET /auth/me
 GET /auth/tokens
