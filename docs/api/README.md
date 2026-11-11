@@ -57,6 +57,21 @@ their phone (RFC 8628 style):
 4. Revoke early with `DELETE /auth/tokens/{token_id}`, authenticated by the minted token itself or
    by the kiosk's `device` token. Scans created this way can be listed with `GET /scans?mine=true`.
 
+### Kiosks and address book
+
+Admin routes manage kiosk identities; each kiosk is a non-login service user with its own token.
+
+- `GET /kiosks` lists `{id, name, token_id, last_seen_at, created_at, updated_at}`;
+  `GET|PUT|DELETE /kiosks/{id}` (PUT `{name}` renames; DELETE revokes the token and removes the
+  service user).
+- `POST /kiosks {name}` returns `{kiosk, token}`; the plaintext `token` (permissions `print`,
+  `scan`, `device`, no expiry) is shown only in this response. `POST /kiosks/{id}/rotate-token`
+  revokes the old token and returns a new `{kiosk, token}`.
+- `last_seen_at` is updated by any authenticated request made with the kiosk's token (at most one
+  write per 30 s).
+- `GET /contacts` (any signed-in user) lists `{id, name, email, created_at, updated_at}`;
+  `POST /contacts`, `PUT /contacts/{id}` and `DELETE /contacts/{id}` need an admin.
+
 ## Errors
 
 Every error body is an `ErrorResponse`:
