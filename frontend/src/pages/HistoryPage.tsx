@@ -21,7 +21,7 @@ import HistoryRow from '../components/history/HistoryRow';
 import type { PrintJob, ScanJob } from '../types';
 
 type Tab = 'all' | 'print' | 'scan';
-type StatusFilter = 'all' | 'completed' | 'failed' | 'held' | 'scanning';
+type StatusFilter = 'all' | 'completed' | 'failed' | 'held' | 'scanning' | 'cancelled';
 type DateFilter = 'all' | 'today' | 'week' | 'month';
 
 export interface HistoryItem {
@@ -311,6 +311,7 @@ export default function HistoryPage() {
           <option value="failed">Failed</option>
           <option value="held">Held</option>
           <option value="scanning">Scanning</option>
+          <option value="cancelled">Cancelled</option>
         </select>
 
         {/* Date filter */}

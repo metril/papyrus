@@ -6209,7 +6209,7 @@
     },
     "description": "Web-based print and scan server",
     "title": "Papyrus",
-    "version": "1.7.0"
+    "version": "1.8.0"
   },
   "openapi": "3.1.0",
   "paths": {
