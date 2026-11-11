@@ -42,6 +42,9 @@ TAGS_METADATA: list[dict[str, str]] = [
     {"name": "admin", "description": "Users, statistics, audit log, backup and restore (admin)."},
     {"name": "webdav", "description": "WebDAV (Nextcloud and compatible) browsing and transfer."},
     {"name": "webhooks", "description": "Outgoing webhook configuration (admin)."},
+    {"name": "kiosks", "description": "Managed kiosks: config, service user and token (admin), "
+        "plus the kiosk's own config pull."},
+    {"name": "contacts", "description": "Shared address book (read: any user; write: admin)."},
 ]
 
 

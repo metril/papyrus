@@ -132,6 +132,16 @@ GET /webhooks
 POST /webhooks
 PUT /webhooks/{webhook_id}
 DELETE /webhooks/{webhook_id}
+GET /kiosks
+POST /kiosks
+GET /kiosks/{kiosk_id}
+PUT /kiosks/{kiosk_id}
+DELETE /kiosks/{kiosk_id}
+POST /kiosks/{kiosk_id}/rotate-token
+GET /contacts
+POST /contacts
+PUT /contacts/{contact_id}
+DELETE /contacts/{contact_id}
 """
 
 _PARAM = re.compile(r"\{(\w+)\}")

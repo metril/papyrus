@@ -30,6 +30,7 @@ from app.schemas import (
     UserRoleUpdate,
 )
 from app.services import settings_cache
+from app.services.user_deletion import reassign_jobs
 
 router = APIRouter()
 
@@ -441,12 +442,13 @@ async def delete_user(
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    """Delete a user and cascade their cloud/SMB connections (admin only). 400 when targeting
-    yourself."""
+    """Delete a user and cascade their cloud/SMB connections; their scan and print jobs are
+    reassigned to the acting admin (admin only). 400 when targeting yourself."""
     target = await db.get(User, user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
     if target.id == _user.id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    await reassign_jobs(db, target.id, _user.id)
     await db.delete(target)
     await db.commit()

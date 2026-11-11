@@ -24,11 +24,13 @@ from app.routers import (
     admin,
     auth,
     cloud,
+    contacts,
     copy,
     device,
     email,
     escl,
     jobs,
+    kiosks,
     printer,
     printers,
     scanner,
@@ -448,7 +450,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Papyrus",
     description="Web-based print and scan server",
-    version="1.5.0",
+    version="1.6.0",
     lifespan=lifespan,
     openapi_tags=TAGS_METADATA,
     contact={"name": "Papyrus", "url": "https://github.com/metril/papyrus"},
@@ -551,6 +553,8 @@ app.include_router(scanners.router, prefix=f"{V1}/scanners", tags=["scanners"])
 app.include_router(admin.router, prefix=f"{V1}/admin", tags=["admin"])
 app.include_router(webdav.router, prefix=f"{V1}/webdav", tags=["webdav"])
 app.include_router(webhooks.router, prefix=f"{V1}/webhooks", tags=["webhooks"])
+app.include_router(kiosks.router, prefix=f"{V1}/kiosks", tags=["kiosks"])
+app.include_router(contacts.router, prefix=f"{V1}/contacts", tags=["contacts"])
 
 # eSCL scanner protocol (no /api prefix — clients expect /eSCL/ at root)
 app.include_router(escl.router, tags=["escl"], include_in_schema=False)

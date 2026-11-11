@@ -4,13 +4,19 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import type { ReactNode } from 'react';
+import { MemoryRouter } from 'react-router-dom';
 import { server } from '../test/mocks/server';
 import SettingsPage from './SettingsPage';
+import { useAuthStore } from '../store/authStore';
 
-function makeWrapper() {
+function makeWrapper(entry = '/settings') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    return (
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={[entry]}>{children}</MemoryRouter>
+      </QueryClientProvider>
+    );
   };
 }
 
@@ -116,5 +122,33 @@ describe('SettingsPage', () => {
     await waitFor(() =>
       expect(screen.getByDisplayValue('https://new.example.com')).toBeInTheDocument()
     );
+  });
+
+  describe('tab deep links', () => {
+    const admin = { id: '1', email: 'a@x.io', display_name: 'A', role: 'admin' } as const;
+
+    beforeEach(() => {
+      server.use(
+        http.get('/api/v1/settings', () => HttpResponse.json({})),
+        http.get('/api/v1/kiosks', () => HttpResponse.json([])),
+      );
+    });
+
+    it('opens the Kiosks tab from ?tab=kiosks and syncs clicks to the URL', async () => {
+      useAuthStore.setState({ user: admin });
+      render(<SettingsPage />, { wrapper: makeWrapper('/settings?tab=kiosks') });
+      expect(await screen.findByLabelText('New kiosk name')).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: 'Kiosks' })).toHaveAttribute('aria-selected', 'true');
+      await userEvent.click(screen.getByRole('tab', { name: 'General' }));
+      expect(screen.queryByLabelText('New kiosk name')).not.toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
+    });
+
+    it('falls back to General for an unknown tab id', async () => {
+      useAuthStore.setState({ user: admin });
+      render(<SettingsPage />, { wrapper: makeWrapper('/settings?tab=bogus') });
+      expect(await screen.findByRole('tab', { name: 'General' })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.queryByLabelText('New kiosk name')).not.toBeInTheDocument();
+    });
   });
 });

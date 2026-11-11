@@ -47,3 +47,7 @@ export interface Page<T> {
   limit: number;
   offset: number;
 }
+
+export type Contact = S['ContactResponse'];
+export type KioskResponse = S['KioskResponse'];
+export type KioskTokenResponse = S['KioskTokenResponse'];
