@@ -40,7 +40,7 @@ export default function ContactsCard() {
   return (
     <Card title="Address book" description="Your personal contacts, used as email targets (kiosks link here).">
       <div className="space-y-4">
-        {(
+
           <form className="flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); if (name.trim() && email.trim()) save.mutate(); }}>
             <input aria-label="Contact name" className={`${inputCls} flex-1 min-w-40`} placeholder="Name" value={name}
               onChange={(e) => setName(e.target.value)} />
@@ -49,7 +49,7 @@ export default function ContactsCard() {
             <Button type="submit" disabled={!name.trim() || !email.trim() || save.isPending}>{editId ? 'Save' : 'Add'}</Button>
             {editId && <Button type="button" variant="secondary" onClick={() => { setEditId(null); setName(''); setEmail(''); }}>Cancel</Button>}
           </form>
-        )}
+
         {contacts.length === 0 ? (
           <EmptyState icon={BookUser} title="No contacts yet" />
         ) : (
@@ -60,12 +60,12 @@ export default function ContactsCard() {
                   <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{c.name}</div>
                   <div className="font-mono text-xs text-gray-500 dark:text-gray-400">{c.email}</div>
                 </div>
-                {(
+
                   <div className="flex gap-2">
                     <Button size="sm" variant="secondary" onClick={() => { setEditId(c.id); setName(c.name); setEmail(c.email); }}>Edit</Button>
                     <Button size="sm" variant="danger-ghost" onClick={() => remove.mutate(c.id)}>Delete</Button>
                   </div>
-                )}
+
               </div>
             ))}
           </div>
