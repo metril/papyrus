@@ -47,6 +47,7 @@ from app.schemas.jobs import (  # noqa: F401
     BulkDeleteJobsRequest,
     CopyRequest,
     CopyResponse,
+    CopyStatus,
     DiscoveredPrinter,
     DiscoverPrintersResponse,
     LoadedPaper,

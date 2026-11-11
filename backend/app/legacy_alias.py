@@ -61,6 +61,8 @@ POST /scanner/scan/batch -> /scans/batch
 GET /scanner/scans -> /scans
 POST /scanner/scans/bulk-delete -> /scans/bulk-delete
 POST /scanner/collate -> /scans/collate
+GET /scanner/scans/{scan_id} -> /scans/{scan_id}
+POST /scanner/scans/{scan_id}/cancel -> /scans/{scan_id}/cancel
 GET /scanner/scans/{scan_id}/download -> /scans/{scan_id}/download
 GET /scanner/scans/{scan_id}/thumbnail -> /scans/{scan_id}/thumbnail
 POST /scanner/scans/{scan_id}/email -> /scans/{scan_id}/email
@@ -77,6 +79,8 @@ PUT /scanner/profiles/{profile_id} -> /scan-profiles/{profile_id}
 DELETE /scanner/profiles/{profile_id} -> /scan-profiles/{profile_id}
 WS /scanner/ws/scan/{scan_id} -> /ws/scans/{scan_id}
 POST /copy
+GET /copy/{copy_id}
+POST /copy/{copy_id}/cancel
 GET /smb/shares
 POST /smb/shares
 DELETE /smb/shares/{share_id}

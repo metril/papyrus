@@ -97,7 +97,7 @@ async def get_audit_log(
 # --- Usage Stats ---
 
 PRINT_JOB_STATUSES = ["held", "converting", "printing", "completed", "failed", "cancelled"]
-SCAN_JOB_STATUSES = ["completed", "failed", "scanning"]
+SCAN_JOB_STATUSES = ["completed", "failed", "scanning", "cancelled"]
 
 TREND_DAYS = 30
 PER_USER_TOP_N = 10

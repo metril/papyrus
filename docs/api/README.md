@@ -115,3 +115,17 @@ additionally use an in-memory lockout.
 
 `/docs`, `/redoc` and `/openapi.json` require a signed-in session or Bearer token unless the admin
 enables `public_api_docs` (Settings > API).
+
+## Scan and copy progress / cancel
+
+- `GET /scans/{scan_id}` returns the scan; while `status` is `scanning`, `progress_pct` (0-100) and
+  `page_count` (feeder sheets so far) are live. The same overlay is applied in `GET /scans`.
+- `POST /scans/{scan_id}/cancel` (`scan` permission, owner/admin, else 404) answers 202. The
+  original `POST /scans` (or `/scans/batch`) then fails with 409 `scan_cancelled` and the row ends
+  as `cancelled`. A scan not in `scanning` returns 409 `scan_not_running`.
+- `POST /copy` accepts an optional `copy_id` (UUID; 409 `copy_id_in_use` if taken) and returns it.
+  `GET /copy/{copy_id}` gives `{copy_id, phase, progress_pct, scan_id, job_id}` with `phase` one of
+  `scanning`, `printing`, `done`, `failed`, `cancelled` (kept ~10 min after finishing; process
+  memory only). `POST /copy/{copy_id}/cancel` answers 202; a finished copy returns 409
+  `copy_not_running`. Cancelling while scanning fails `POST /copy` with 409 `scan_cancelled`.
+- No WebSocket event is emitted for a cancelled scan; poll the endpoints above.

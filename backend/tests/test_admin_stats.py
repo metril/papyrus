@@ -66,7 +66,7 @@ def test_converting_status_is_counted_not_dropped():
 def test_scan_statuses_mapped_from_group_by_rows():
     rows = [("scanning", 2), ("completed", 7)]
     counts = _zero_filled_status_counts(rows, SCAN_JOB_STATUSES)
-    assert counts == {"completed": 7, "failed": 0, "scanning": 2}
+    assert counts == {"completed": 7, "failed": 0, "scanning": 2, "cancelled": 0}
 
 
 def test_unknown_status_in_rows_is_dropped():

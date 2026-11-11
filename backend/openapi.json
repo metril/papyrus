@@ -1040,6 +1040,19 @@
             "title": "Copies",
             "type": "integer"
           },
+          "copy_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Client-chosen id to poll or cancel the copy while it runs (generated when absent). 409 if already in use.",
+            "title": "Copy Id"
+          },
           "duplex": {
             "default": false,
             "description": "Print on both sides.",
@@ -1093,6 +1106,18 @@
       "CopyResponse": {
         "description": "Result of a started copy.",
         "properties": {
+          "copy_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Id for GET /copy/{copy_id}.",
+            "title": "Copy Id"
+          },
           "cups_job_id": {
             "description": "CUPS job id of the print.",
             "examples": [
@@ -1124,6 +1149,76 @@
           "cups_job_id"
         ],
         "title": "CopyResponse",
+        "type": "object"
+      },
+      "CopyStatus": {
+        "description": "Live state of a copy.",
+        "properties": {
+          "copy_id": {
+            "description": "Copy identifier.",
+            "title": "Copy Id",
+            "type": "string"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Print job id, once the print job exists.",
+            "title": "Job Id"
+          },
+          "phase": {
+            "description": "Current phase; done, failed and cancelled are terminal.",
+            "enum": [
+              "scanning",
+              "printing",
+              "done",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Phase",
+            "type": "string"
+          },
+          "progress_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Scan progress 0-100 while scanning, 100 when done, null otherwise.",
+            "examples": [
+              40
+            ],
+            "title": "Progress Pct"
+          },
+          "scan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Id of the scan row, once the scan starts.",
+            "title": "Scan Id"
+          }
+        },
+        "required": [
+          "copy_id",
+          "phase",
+          "progress_pct",
+          "scan_id",
+          "job_id"
+        ],
+        "title": "CopyStatus",
         "type": "object"
       },
       "DeviceApproveRequest": {
@@ -4656,12 +4751,27 @@
             "type": "string"
           },
           "page_count": {
-            "description": "Number of pages in the file.",
+            "description": "Number of pages in the file (live sheet count while scanning a feeder batch).",
             "examples": [
               1
             ],
             "title": "Page Count",
             "type": "integer"
+          },
+          "progress_pct": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Scan progress 0-100 while status is scanning and the scan runs in this process; null otherwise.",
+            "examples": [
+              40
+            ],
+            "title": "Progress Pct"
           },
           "resolution": {
             "description": "Resolution in dpi.",
@@ -4688,7 +4798,7 @@
             "type": "string"
           },
           "status": {
-            "description": "Lifecycle state: scanning, completed or failed.",
+            "description": "Lifecycle state: scanning, completed, failed or cancelled.",
             "examples": [
               "completed"
             ],
@@ -5434,9 +5544,10 @@
             "additionalProperties": {
               "type": "integer"
             },
-            "description": "Scan jobs per status (completed, failed, scanning), zero-filled.",
+            "description": "Scan jobs per status (completed, failed, scanning, cancelled), zero-filled.",
             "examples": [
               {
+                "cancelled": 0,
                 "completed": 15,
                 "failed": 1,
                 "scanning": 0
@@ -6098,7 +6209,7 @@
     },
     "description": "Web-based print and scan server",
     "title": "Papyrus",
-    "version": "1.7.0"
+    "version": "1.8.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -8953,7 +9064,7 @@
     },
     "/api/v1/copy": {
       "post": {
-        "description": "Scan a document and immediately print it (copy workflow).\n\nRequires the `print` permission. Side effects: creates a ScanJob and a PrintJob\n(broadcast as `scan_completed` / `job_created` WebSocket events). Returns 409 when a\nfeeder request finds the feeder empty and 503 when the scanner or printer is\nunavailable.\n\nResolves the default printer's release queue and default scanner device\nfrom the DB (F10) — the service used to fall back to never-configured\nmodule singletons (empty printer name, empty scanner device), so every\ncopy failed. No progress broadcast (F139): nothing consumed the old\n`copy_progress` jobs-channel frames, which also violated the\nfull-serialized-object WS contract.",
+        "description": "Scan a document and immediately print it (copy workflow).\n\nRequires the `print` permission. Side effects: creates a ScanJob and a PrintJob\n(broadcast as `scan_completed` / `job_created` WebSocket events). Returns 409 when a\nfeeder request finds the feeder empty (or the supplied `copy_id` is in use, code\n`copy_id_in_use`), 409 `scan_cancelled` when cancelled while scanning (see\n`POST /copy/{copy_id}/cancel`), and 503 when the scanner or printer is unavailable.\n\nPoll `GET /copy/{copy_id}` for the phase and scan progress; the response carries `copy_id`.",
         "operationId": "copy_create_copy",
         "requestBody": {
           "content": {
@@ -9064,6 +9175,216 @@
           }
         ],
         "summary": "Copy a document",
+        "tags": [
+          "copy"
+        ]
+      }
+    },
+    "/api/v1/copy/{copy_id}": {
+      "get": {
+        "description": "Phase, scan progress and ids of a copy started with `POST /copy`.\n\nRequires the `print` permission; the owner or an admin only (404 otherwise, also for an unknown\nor expired id). Finished copies stay queryable for about 10 minutes. State is kept in process\nmemory, so it is lost on restart.",
+        "operationId": "copy_get_copy_status",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "copy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Copy Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CopyStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated but lacking the required role or permission."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not found."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Get copy status",
+        "tags": [
+          "copy"
+        ]
+      }
+    },
+    "/api/v1/copy/{copy_id}/cancel": {
+      "post": {
+        "description": "Cancel a copy that is scanning or printing.\n\nRequires the `print` permission; owner or admin only (404 otherwise). While scanning the scan\nis cancelled (the original `POST /copy` fails with 409 `scan_cancelled`); while printing the\nCUPS job is cancelled and the print job marked `cancelled`. A finished copy returns 409\n(`copy_not_running`).",
+        "operationId": "copy_cancel_copy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "copy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Copy Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CopyStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated but lacking the required role or permission."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflicts with the current state of the resource."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Cancel a copy",
         "tags": [
           "copy"
         ]
@@ -14909,6 +15230,103 @@
         "tags": [
           "scanner"
         ]
+      },
+      "get": {
+        "description": "Return one scan; poll this for progress while it is scanning.\n\nRequires the `scan` permission and access to the scan (404 otherwise). While `status` is\n`scanning`, `progress_pct` and `page_count` carry live values.",
+        "operationId": "scanner_get_scan",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scan_id",
+            "required": true,
+            "schema": {
+              "title": "Scan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated but lacking the required role or permission."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not found."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Get a scan",
+        "tags": [
+          "scanner"
+        ]
       }
     },
     "/api/v1/scans/{scan_id}/backs": {
@@ -15045,6 +15463,115 @@
           }
         ],
         "summary": "Scan the back sides of a feeder PDF",
+        "tags": [
+          "scanner"
+        ]
+      }
+    },
+    "/api/v1/scans/{scan_id}/cancel": {
+      "post": {
+        "description": "Cancel a scan that is currently scanning.\n\nRequires the `scan` permission and access to the scan (404 otherwise). Returns 409\n(`scan_not_running`) when the scan is not scanning. The cancel is asynchronous: the response\nmay still show `scanning`; the final `cancelled` state is visible via `GET /scans/{scan_id}`,\nand the original `POST /scans` request fails with 409 `scan_cancelled`. A `scanning` row with\nno running task that predates this server process is marked cancelled immediately; a live scan\nnot started through the scan routes (eSCL) returns 409 `scan_not_cancellable`.",
+        "operationId": "scanner_cancel_scan",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "scan_id",
+            "required": true,
+            "schema": {
+              "title": "Scan Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated but lacking the required role or permission."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflicts with the current state of the resource."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Cancel a running scan",
         "tags": [
           "scanner"
         ]

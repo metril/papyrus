@@ -648,17 +648,62 @@ export interface paths {
          *
          *     Requires the `print` permission. Side effects: creates a ScanJob and a PrintJob
          *     (broadcast as `scan_completed` / `job_created` WebSocket events). Returns 409 when a
-         *     feeder request finds the feeder empty and 503 when the scanner or printer is
-         *     unavailable.
+         *     feeder request finds the feeder empty (or the supplied `copy_id` is in use, code
+         *     `copy_id_in_use`), 409 `scan_cancelled` when cancelled while scanning (see
+         *     `POST /copy/{copy_id}/cancel`), and 503 when the scanner or printer is unavailable.
          *
-         *     Resolves the default printer's release queue and default scanner device
-         *     from the DB (F10) — the service used to fall back to never-configured
-         *     module singletons (empty printer name, empty scanner device), so every
-         *     copy failed. No progress broadcast (F139): nothing consumed the old
-         *     `copy_progress` jobs-channel frames, which also violated the
-         *     full-serialized-object WS contract.
+         *     Poll `GET /copy/{copy_id}` for the phase and scan progress; the response carries `copy_id`.
          */
         post: operations["copy_create_copy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/copy/{copy_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get copy status
+         * @description Phase, scan progress and ids of a copy started with `POST /copy`.
+         *
+         *     Requires the `print` permission; the owner or an admin only (404 otherwise, also for an unknown
+         *     or expired id). Finished copies stay queryable for about 10 minutes. State is kept in process
+         *     memory, so it is lost on restart.
+         */
+        get: operations["copy_get_copy_status"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/copy/{copy_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a copy
+         * @description Cancel a copy that is scanning or printing.
+         *
+         *     Requires the `print` permission; owner or admin only (404 otherwise). While scanning the scan
+         *     is cancelled (the original `POST /copy` fails with 409 `scan_cancelled`); while printing the
+         *     CUPS job is cancelled and the print job marked `cancelled`. A finished copy returns 409
+         *     (`copy_not_running`).
+         */
+        post: operations["copy_cancel_copy"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1860,7 +1905,14 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get a scan
+         * @description Return one scan; poll this for progress while it is scanning.
+         *
+         *     Requires the `scan` permission and access to the scan (404 otherwise). While `status` is
+         *     `scanning`, `progress_pct` and `page_count` carry live values.
+         */
+        get: operations["scanner_get_scan"];
         put?: never;
         post?: never;
         /**
@@ -1897,6 +1949,33 @@ export interface paths {
          *     (only the backs row is added) or the feeder is empty.
          */
         post: operations["scanner_scan_backs"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scans/{scan_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a running scan
+         * @description Cancel a scan that is currently scanning.
+         *
+         *     Requires the `scan` permission and access to the scan (404 otherwise). Returns 409
+         *     (`scan_not_running`) when the scan is not scanning. The cancel is asynchronous: the response
+         *     may still show `scanning`; the final `cancelled` state is visible via `GET /scans/{scan_id}`,
+         *     and the original `POST /scans` request fails with 409 `scan_cancelled`. A `scanning` row with
+         *     no running task that predates this server process is marked cancelled immediately; a live scan
+         *     not started through the scan routes (eSCL) returns 409 `scan_not_cancellable`.
+         */
+        post: operations["scanner_cancel_scan"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3151,6 +3230,11 @@ export interface components {
              */
             copies?: number;
             /**
+             * Copy Id
+             * @description Client-chosen id to poll or cancel the copy while it runs (generated when absent). 409 if already in use.
+             */
+            copy_id?: string | null;
+            /**
              * Duplex
              * @description Print on both sides.
              * @default false
@@ -3191,6 +3275,11 @@ export interface components {
          */
         CopyResponse: {
             /**
+             * Copy Id
+             * @description Id for GET /copy/{copy_id}.
+             */
+            copy_id?: string | null;
+            /**
              * Cups Job Id
              * @description CUPS job id of the print.
              * @example 18
@@ -3208,6 +3297,39 @@ export interface components {
              * @example a1b2c3d4
              */
             scan_id: string;
+        };
+        /**
+         * CopyStatus
+         * @description Live state of a copy.
+         */
+        CopyStatus: {
+            /**
+             * Copy Id
+             * @description Copy identifier.
+             */
+            copy_id: string;
+            /**
+             * Job Id
+             * @description Print job id, once the print job exists.
+             */
+            job_id: number | null;
+            /**
+             * Phase
+             * @description Current phase; done, failed and cancelled are terminal.
+             * @enum {string}
+             */
+            phase: "scanning" | "printing" | "done" | "failed" | "cancelled";
+            /**
+             * Progress Pct
+             * @description Scan progress 0-100 while scanning, 100 when done, null otherwise.
+             * @example 40
+             */
+            progress_pct: number | null;
+            /**
+             * Scan Id
+             * @description Id of the scan row, once the scan starts.
+             */
+            scan_id: string | null;
         };
         /** DeviceApproveRequest */
         DeviceApproveRequest: {
@@ -5255,10 +5377,16 @@ export interface components {
             mode: string;
             /**
              * Page Count
-             * @description Number of pages in the file.
+             * @description Number of pages in the file (live sheet count while scanning a feeder batch).
              * @example 1
              */
             page_count: number;
+            /**
+             * Progress Pct
+             * @description Scan progress 0-100 while status is scanning and the scan runs in this process; null otherwise.
+             * @example 40
+             */
+            progress_pct?: number | null;
             /**
              * Resolution
              * @description Resolution in dpi.
@@ -5279,7 +5407,7 @@ export interface components {
             source: string;
             /**
              * Status
-             * @description Lifecycle state: scanning, completed or failed.
+             * @description Lifecycle state: scanning, completed, failed or cancelled.
              * @example completed
              */
             status: string;
@@ -5675,8 +5803,9 @@ export interface components {
             };
             /**
              * Scan Counts
-             * @description Scan jobs per status (completed, failed, scanning), zero-filled.
+             * @description Scan jobs per status (completed, failed, scanning, cancelled), zero-filled.
              * @example {
+             *       "cancelled": 0,
              *       "completed": 15,
              *       "failed": 1,
              *       "scanning": 0
@@ -8060,6 +8189,153 @@ export interface operations {
             /** @description Service or device unavailable. */
             503: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    copy_get_copy_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                copy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CopyStatus"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    copy_cancel_copy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                copy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CopyStatus"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicts with the current state of the resource. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {
@@ -12122,6 +12398,75 @@ export interface operations {
             };
         };
     };
+    scanner_get_scan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanResponse"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     scanner_delete_scan: {
         parameters: {
             query?: never;
@@ -12281,6 +12626,84 @@ export interface operations {
             /** @description The scanner is busy or unreachable. */
             503: {
                 headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    scanner_cancel_scan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scan_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanResponse"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicts with the current state of the resource. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
                     [name: string]: unknown;
                 };
                 content: {

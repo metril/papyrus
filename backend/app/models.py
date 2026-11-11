@@ -137,7 +137,7 @@ class ScanJob(Base):
     )
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default="scanning"
-    )  # scanning, completed, failed, deleted
+    )  # scanning, completed, failed, cancelled, deleted
     resolution: Mapped[int] = mapped_column(Integer, default=300)
     mode: Mapped[str] = mapped_column(String(20), default="Color")
     format: Mapped[str] = mapped_column(String(10), default="pdf")

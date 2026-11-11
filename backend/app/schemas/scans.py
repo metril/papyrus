@@ -51,7 +51,8 @@ class ScanResponse(BaseModel):
         examples=["3f2b8c1e-9a4d-4e57-8f0a-1c2d3e4f5a6b"],
     )
     status: str = Field(
-        description="Lifecycle state: scanning, completed or failed.", examples=["completed"]
+        description="Lifecycle state: scanning, completed, failed or cancelled.",
+        examples=["completed"]
     )
     resolution: int = Field(description="Resolution in dpi.", examples=[300])
     mode: str = Field(description="Colour mode.", examples=["Color"])
@@ -60,7 +61,10 @@ class ScanResponse(BaseModel):
     source: str = Field(
         description="Paper source actually used (Flatbed or ADF).", examples=["Flatbed"]
     )
-    page_count: int = Field(description="Number of pages in the file.", examples=[1])
+    page_count: int = Field(description="Number of pages in the file (live sheet count while "
+        "scanning a feeder batch).", examples=[1])
+    progress_pct: int | None = Field(default=None, description="Scan progress 0-100 while "
+        "status is scanning and the scan runs in this process; null otherwise.", examples=[40])
     file_size: int | None = Field(
         description="File size in bytes once completed.", examples=[482113]
     )
@@ -76,6 +80,18 @@ class ScanResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+def overlay_live(resp: "ScanResponse") -> "ScanResponse":
+    """Overlay live progress/page_count from the scan registry onto a scanning row."""
+    if resp.status == "scanning":
+        from app.services import scan_tasks
+
+        pct, pages = scan_tasks.snapshot(resp.scan_id)
+        resp.progress_pct = pct
+        if pages is not None:
+            resp.page_count = pages
+    return resp
+
+
 def serialize_scan_job(scan) -> dict:
     """Serialize a ScanJob ORM object into the exact JSON shape returned by the
     scan list endpoint (``ScanResponse``).
@@ -83,7 +99,8 @@ def serialize_scan_job(scan) -> dict:
     Reused for WebSocket broadcasts so realtime payloads match the REST shape
     field-for-field.
     """
-    return ScanResponse.model_validate(scan, from_attributes=True).model_dump(mode="json")
+    resp = overlay_live(ScanResponse.model_validate(scan, from_attributes=True))
+    return resp.model_dump(mode="json")
 
 
 class ScanProfileCreate(BaseModel):
