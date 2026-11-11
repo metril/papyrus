@@ -18,6 +18,7 @@ const AuditPage = lazy(() => import('./pages/AuditPage'));
 const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const UsersPage = lazy(() => import('./pages/UsersPage'));
 const DevicePage = lazy(() => import('./pages/DevicePage'));
+const ContactsPage = lazy(() => import('./pages/ContactsPage'));
 
 // Dev-only: lazily loaded and gated on import.meta.env.DEV so it is dead-code
 // eliminated from the production bundle.
@@ -61,6 +62,7 @@ export default function App() {
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/users" element={<UsersPage />} />
               <Route path="/device" element={<DevicePage />} />
+              <Route path="/contacts" element={<ContactsPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

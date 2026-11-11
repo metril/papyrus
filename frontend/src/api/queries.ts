@@ -8,6 +8,7 @@ import { listScanners } from './scanners';
 import { listProviders } from './cloud';
 import { listWebhooks, listWebhookEvents } from './webhooks';
 import { listApiTokens } from './tokens';
+import { listKiosks, listContacts } from './kiosks';
 import { lookupDeviceCode } from './device';
 import { getDashboardStats, listUsers } from './admin';
 
@@ -57,6 +58,8 @@ export const queryKeys = {
   webhookEvents: ['webhookEvents'] as const,
   apiTokens: ['apiTokens'] as const,
   deviceCode: (code: string) => ['deviceCode', code] as const,
+  kiosks: ['kiosks'] as const,
+  contacts: ['contacts'] as const,
 } as const;
 
 /**
@@ -220,4 +223,13 @@ export function useUsers() {
     queryFn: () => listUsers(),
     meta: { suppressGlobalError: true },
   });
+}
+
+export function useKiosks() {
+  return useQuery({ queryKey: queryKeys.kiosks, queryFn: () => listKiosks() });
+}
+
+/** The shared address book (readable by every signed-in user). */
+export function useContacts() {
+  return useQuery({ queryKey: queryKeys.contacts, queryFn: () => listContacts() });
 }

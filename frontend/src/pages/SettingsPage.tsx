@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import { useSettingsQuery, queryKeys } from '../api/queries';
@@ -24,6 +25,11 @@ import FtpCard from '../components/settings/FtpCard';
 import WebhooksCard from '../components/settings/WebhooksCard';
 import BackupRestoreCard from '../components/settings/BackupRestoreCard';
 import ApiTokensCard from '../components/settings/ApiTokensCard';
+import KiosksCard from '../components/kiosks/KiosksCard';
+import { useAuthStore } from '../store/authStore';
+
+const TABS = [['general', 'General'], ['kiosks', 'Kiosks']] as const;
+type Tab = (typeof TABS)[number][0];
 
 interface ApiErrorResponse {
   detail?: string;
@@ -57,6 +63,13 @@ export default function SettingsPage() {
   const [appSettings, setAppSettings] = useState<AppSettings | null>(null);
   const [saveStatus, setSaveStatus] = useState<Record<string, 'saving' | 'saved' | 'error'>>({});
   const queryClient = useQueryClient();
+  const isAdmin = useAuthStore((s) => s.user?.role === 'admin');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requested = searchParams.get('tab');
+  // Unknown ids (and the admin-only Kiosks tab for non-admins) fall back to General.
+  const tab: Tab = requested === 'kiosks' && isAdmin ? 'kiosks' : 'general';
+  const setTab = (id: Tab) =>
+    setSearchParams(id === 'general' ? {} : { tab: id }, { replace: true });
 
   // Seed the local draft from the query once data first arrives. Adjusting
   // state during render (rather than in an effect) avoids an extra
@@ -106,7 +119,34 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Settings</h2>
+      <div className="flex flex-wrap items-center gap-4">
+        <h2 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-50">Settings</h2>
+        <div role="tablist" className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+          {TABS
+            .filter(([id]) => id !== 'kiosks' || isAdmin)
+            .map(([id, label]) => (
+              <button
+                key={id}
+                role="tab"
+                aria-selected={tab === id}
+                onClick={() => setTab(id)}
+                className={`px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
+                  tab === id
+                    ? 'bg-ink-600 text-white shadow-sm dark:bg-ink-500'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+        </div>
+        <Link to="/contacts" className="text-sm font-medium text-ink-600 hover:text-ink-700 dark:text-ink-400">
+          Address book
+        </Link>
+      </div>
+
+      {tab === 'kiosks' && isAdmin && <KiosksCard />}
+      {tab === 'general' && (<>
 
       {isLoading && (
         <div className="bg-ink-50 dark:bg-ink-950/40 border border-ink-200 dark:border-ink-800 text-ink-700 dark:text-ink-300 px-4 py-3 rounded-lg text-sm">
@@ -141,6 +181,7 @@ export default function SettingsPage() {
       <WebhooksCard />
       <BackupRestoreCard />
       <ApiTokensCard />
+      </>)}
     </div>
   );
 }
