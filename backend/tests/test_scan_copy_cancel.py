@@ -146,7 +146,9 @@ async def test_cancel_foreign_404(db, user_client, regular_user):
 
 
 async def test_cancel_stale_scanning_row(db, user_client, regular_user):
-    db.add(ScanJob(user_id=regular_user.id, scan_id=SID, status="scanning"))
+    from datetime import datetime, timedelta, timezone
+    db.add(ScanJob(user_id=regular_user.id, scan_id=SID, status="scanning",
+                   created_at=datetime.now(timezone.utc) - timedelta(days=1)))
     await db.commit()
     r = await user_client.post(f"/api/v1/scans/{SID}/cancel")
     assert r.status_code == 202
@@ -236,5 +238,133 @@ async def test_copy_foreign_404(db, user_client, admin_user):
 @pytest.fixture(autouse=True)
 def _clean_registry():
     scan_tasks._copies.clear()
+    scan_tasks._reserved.clear()
     yield
     scan_tasks._copies.clear()
+    scan_tasks._reserved.clear()
+
+
+# ---- review regressions ----
+async def test_live_unregistered_scanning_row_not_cancellable(db, user_client, regular_user):
+    """An eSCL-style row created in this process isn't cancellable (and stays scanning)."""
+    db.add(ScanJob(user_id=regular_user.id, scan_id=SID, status="scanning"))
+    await db.commit()
+    r = await user_client.post(f"/api/v1/scans/{SID}/cancel")
+    assert r.status_code == 409 and r.json()["code"] == "scan_not_cancellable"
+    assert (await user_client.get(f"/api/v1/scans/{SID}")).json()["status"] == "scanning"
+
+
+async def test_cancel_of_reserved_unstarted_scan(db, user_client, regular_user, hang):
+    """Cancel between reservation and task start: the scan never runs."""
+    from app.routers.scanner import run_scan_task
+
+    scan_tasks.reserve(SID)
+    job = ScanJob(user_id=regular_user.id, scan_id=SID, status="scanning")
+    db.add(job)
+    await db.commit()
+    assert (await user_client.post(f"/api/v1/scans/{SID}/cancel")).status_code == 202
+    from app.exceptions import ScanCancelledError
+    with pytest.raises(ScanCancelledError):
+        await run_scan_task(db, job, hang.scan(progress_callback=_noop))
+    scan_tasks.unregister(SID)
+    assert not hang.started.is_set()
+    assert (await user_client.get(f"/api/v1/scans/{SID}")).json()["status"] == "cancelled"
+
+
+async def _noop(*a):
+    pass
+
+
+async def test_late_cancel_does_not_override_completed(db, user_client, hang):
+    """Cancel flagged after the scan finished leaves the completed row alone."""
+    hang.release.set()
+    r = await user_client.post("/api/v1/scans", json={"scan_id": SID})
+    assert r.json()["status"] == "completed"
+    assert (await user_client.post(f"/api/v1/scans/{SID}/cancel")).status_code == 409
+    assert (await user_client.get(f"/api/v1/scans/{SID}")).json()["status"] == "completed"
+
+
+async def test_lost_cancel_not_overwritten_by_completion(db, user_client, regular_user, tmp_path):
+    from app.exceptions import ScanCancelledError
+    from app.routers.scanner import _complete_scan
+
+    job = ScanJob(user_id=regular_user.id, scan_id=SID, status="cancelled")
+    db.add(job)
+    await db.commit()
+    f = tmp_path / "x.pdf"
+    f.write_bytes(b"x")
+    with pytest.raises(ScanCancelledError):
+        await _complete_scan(db, job, str(f))
+    assert job.status == "cancelled" and not f.exists()
+
+
+async def test_copy_cancel_before_scan_task_never_prints(db, user_client, hang, cups, monkeypatch):
+    orig = copy_router.get_default_scanner_device
+
+    async def dev_and_cancel(d):
+        # cancel lands after the entry exists but before the scan task is registered
+        e = scan_tasks.get_copy(CID)
+        e.cancel_requested = True
+        return await orig(d)
+
+    monkeypatch.setattr(copy_router, "get_default_scanner_device", dev_and_cancel)
+    r = await user_client.post("/api/v1/copy", json={"copy_id": CID})
+    assert r.status_code == 409 and r.json()["code"] == "scan_cancelled"
+    assert not hang.started.is_set()
+    assert (await user_client.get(f"/api/v1/copy/{CID}")).json()["phase"] == "cancelled"
+    assert (await db.execute(select(PrintJob))).first() is None
+
+
+async def test_copy_cancel_after_scan_finished_never_prints(db, user_client, hang, cups):
+    """Cancel flagged as the scan finishes: phase stays cancelled, nothing is printed."""
+    t = await _start_copy(user_client)
+    await asyncio.wait_for(hang.started.wait(), 5)
+    scan_tasks.get_copy(CID).cancel_requested = True
+    hang.release.set()
+    resp = await t
+    assert resp.status_code == 409 and resp.json()["code"] == "scan_cancelled"
+    assert (await user_client.get(f"/api/v1/copy/{CID}")).json()["phase"] == "cancelled"
+    assert (await db.execute(select(PrintJob))).first() is None
+
+
+async def test_copy_cancel_in_cups_gap_cancels_cups_job(db, user_client, hang, cups):
+    """Cancel flagged before the CUPS job exists: the job is cancelled, never released."""
+    t = await _start_copy(user_client)
+    await asyncio.wait_for(hang.started.wait(), 5)
+    orig = _FakeCups.create_held_job
+
+    async def create(self, **kw):
+        scan_tasks.get_copy(CID).cancel_requested = True
+        return await orig(self, **kw)
+
+    _FakeCups.create_held_job = create
+    try:
+        hang.release.set()
+        resp = await t
+    finally:
+        _FakeCups.create_held_job = orig
+    assert resp.status_code == 409 and resp.json()["code"] == "copy_cancelled"
+    assert cups.cancelled == [77]
+    assert (await user_client.get(f"/api/v1/copy/{CID}")).json()["phase"] == "cancelled"
+
+
+async def test_copy_print_cancel_marks_row_and_sets_job_id(db, user_client, hang, cups):
+    """Cancel arriving after release but before the row exists: row ends cancelled, job_id set."""
+    hang.release.set()
+    cups.gate.set()
+    orig = _FakeCups.release_job
+
+    async def release(self, job_id):
+        await orig(self, job_id)
+        scan_tasks.get_copy(CID).cancel_requested = True
+
+    _FakeCups.release_job = release
+    try:
+        r = await user_client.post("/api/v1/copy", json={"copy_id": CID})
+    finally:
+        _FakeCups.release_job = orig
+    assert r.status_code == 200
+    st = (await user_client.get(f"/api/v1/copy/{CID}")).json()
+    assert st["phase"] == "cancelled" and st["job_id"]
+    assert (await db.execute(select(PrintJob.status))).scalar_one() == "cancelled"
+    assert 77 in cups.cancelled

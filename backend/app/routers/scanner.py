@@ -14,7 +14,7 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi.responses import FileResponse, Response
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_docs import (
@@ -36,6 +36,7 @@ from app.exceptions import (
     NotFoundError,
     PapyrusError,
     ScanCancelledError,
+    ScanNotCancellableError,
     ScanNotRunningError,
     user_message,
 )
@@ -127,23 +128,60 @@ async def _get_accessible_scan(
 
 
 async def _mark_cancelled(db: AsyncSession, job: ScanJob) -> None:
-    """Persist the cancelled state (best effort: the session may be mid-teardown)."""
+    """Persist the cancelled state if the row is still scanning (best effort)."""
     try:
-        job.status = "cancelled"
-        job.error_message = None
+        await db.execute(
+            update(ScanJob).where(ScanJob.id == job.id, ScanJob.status == "scanning")
+            .values(status="cancelled", error_message=None)
+        )
+        await db.commit()
+        await db.refresh(job)
         await db.commit()
     except Exception:
         logger.exception("Could not persist cancelled scan state")
 
 
+async def _complete_scan(db: AsyncSession, job: ScanJob, filepath: str) -> None:
+    """Mark `job` completed only if it is still scanning, so a cancel that won can't be overwritten.
+
+    Raises `ScanCancelledError` (and drops the file) when the row is no longer scanning.
+    """
+    try:
+        size = os.path.getsize(filepath)
+    except OSError:
+        size = None
+    values = dict(
+        filepath=filepath, file_size=size, status="completed",
+        completed_at=datetime.now(timezone.utc), page_count=job.page_count,
+        source=job.source, format=job.format,
+    )
+    res = await db.execute(
+        update(ScanJob).where(ScanJob.id == job.id, ScanJob.status == "scanning").values(**values)
+    )
+    await db.commit()
+    await db.refresh(job)
+    await db.commit()
+    if res.rowcount == 0:
+        try:
+            os.unlink(filepath)
+        except OSError:
+            pass
+        raise ScanCancelledError()
+
+
 async def run_scan_task(db: AsyncSession, job: ScanJob, coro):
     """Run `coro` as a child task registered under the scan id so it can be cancelled.
 
-    A cancel through the registry marks the row cancelled and raises `ScanCancelledError` (409);
-    a cancelled request (client disconnect) cancels the child, waits for its cleanup, marks the row
-    cancelled and re-raises `CancelledError`.
+    The id must have been `scan_tasks.reserve`d by the caller, who also `unregister`s it once the
+    final status is committed. A cancel through the registry marks the row cancelled and raises
+    `ScanCancelledError` (409); a cancelled request (client disconnect) cancels the child, waits
+    for its cleanup, marks the row cancelled and re-raises `CancelledError`.
     """
     sid = job.scan_id
+    if scan_tasks.cancel_requested(sid):
+        coro.close()
+        await _mark_cancelled(db, job)
+        raise ScanCancelledError()
     task = asyncio.create_task(coro)
     scan_tasks.register(sid, task)
     try:
@@ -159,7 +197,7 @@ async def run_scan_task(db: AsyncSession, job: ScanJob, coro):
             raise
         raise ScanCancelledError() from None
     finally:
-        scan_tasks.unregister(sid)
+        scan_tasks.task_done(sid)
 
 
 BAD_REQUEST = error_group(400, "The scan is not available (not completed) or the request does not "
@@ -264,10 +302,15 @@ async def initiate_scan(
         status="scanning",
         scanner_id=scanner.id if scanner else None,
     )
-    db.add(job)
-    await db.commit()
-    await db.refresh(job)
-    await db.commit()  # refresh autobegins; end it before the long scan
+    scan_tasks.reserve(scan_job_id)
+    try:
+        db.add(job)
+        await db.commit()
+        await db.refresh(job)
+        await db.commit()  # refresh autobegins; end it before the long scan
+    except BaseException:
+        scan_tasks.unregister(scan_job_id)
+        raise
 
     async def progress_callback(_scan_id: str, percent: float):
         scan_tasks.set_progress(job.scan_id, percent)
@@ -300,12 +343,7 @@ async def initiate_scan(
             filename_template=filename_template,
         ))
 
-        job.filepath = filepath
-        job.file_size = os.path.getsize(filepath)
-        job.status = "completed"
-        job.completed_at = datetime.now(timezone.utc)
-        await db.commit()
-        await db.refresh(job)
+        await _complete_scan(db, job, filepath)
 
         await ws_manager.broadcast(f"scan:{job.scan_id}", {
             "type": "scan_completed",
@@ -351,6 +389,8 @@ async def initiate_scan(
         # Never leak the raw exception text: the catch-all handler logs the
         # traceback and returns a generic 500.
         raise
+    finally:
+        scan_tasks.unregister(scan_job_id)
 
     return job
 
@@ -396,10 +436,15 @@ async def initiate_batch_scan(
         status="scanning",
         scanner_id=scanner.id if scanner else None,
     )
-    db.add(job)
-    await db.commit()
-    await db.refresh(job)
-    await db.commit()  # refresh autobegins; end it before the long scan
+    scan_tasks.reserve(scan_job_id)
+    try:
+        db.add(job)
+        await db.commit()
+        await db.refresh(job)
+        await db.commit()  # refresh autobegins; end it before the long scan
+    except BaseException:
+        scan_tasks.unregister(scan_job_id)
+        raise
 
     async def progress_callback(_scan_id: str, percent: float):
         scan_tasks.set_progress(job.scan_id, percent)
@@ -421,13 +466,8 @@ async def initiate_batch_scan(
             live_pages_callback=set_batch_pages,
         ))
 
-        job.filepath = filepath
-        job.file_size = os.path.getsize(filepath)
         job.page_count = page_count
-        job.status = "completed"
-        job.completed_at = datetime.now(timezone.utc)
-        await db.commit()
-        await db.refresh(job)
+        await _complete_scan(db, job, filepath)
 
         await ws_manager.broadcast(f"scan:{job.scan_id}", {
             "type": "scan_completed",
@@ -474,6 +514,8 @@ async def initiate_batch_scan(
         # Never leak the raw exception text: the catch-all handler logs the
         # traceback and returns a generic 500.
         raise
+    finally:
+        scan_tasks.unregister(scan_job_id)
 
     return job
 
@@ -558,13 +600,20 @@ async def cancel_scan(
     (`scan_not_running`) when the scan is not scanning. The cancel is asynchronous: the response
     may still show `scanning`; the final `cancelled` state is visible via `GET /scans/{scan_id}`,
     and the original `POST /scans` request fails with 409 `scan_cancelled`. A `scanning` row with
-    no running task (left over from a restart) is marked cancelled immediately.
+    no running task that predates this server process is marked cancelled immediately; a live scan
+    not started through the scan routes (eSCL) returns 409 `scan_not_cancellable`.
     """
     job = await _get_accessible_scan(db, request, user, scan_id)
     if job.status != "scanning":
         raise ScanNotRunningError("This scan is not running")
     if not scan_tasks.cancel(job.scan_id):
-        job.status = "cancelled"
+        created = job.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        if created >= scan_tasks.PROCESS_START:
+            # Live in this process but not started by these routes (e.g. an eSCL scan).
+            raise ScanNotCancellableError("This scan cannot be cancelled from here")
+        job.status = "cancelled"  # left over from before a restart
     await log_event(db, "scan.cancel", "scan_job", job.scan_id, user_id=user.id)
     await db.commit()
     await db.refresh(job)

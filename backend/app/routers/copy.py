@@ -3,7 +3,6 @@ import logging
 import os
 import shutil
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -85,7 +84,7 @@ async def create_copy(
 
     Poll `GET /copy/{copy_id}` for the phase and scan progress; the response carries `copy_id`.
     """
-    from app.routers.scanner import run_scan_task
+    from app.routers.scanner import _complete_scan, run_scan_task
     from app.routers.settings import get_setting
 
     entry = scan_tasks.register_copy(str(request.copy_id) if request.copy_id else None, user.id)
@@ -103,20 +102,23 @@ async def create_copy(
 
         # The scan row exists from the start so the scan can be tracked and cancelled by id.
         scan_job = ScanJob(
-            user_id=user.id, status="scanning", resolution=request.resolution,
-            mode=request.mode, source=request.source,
+            user_id=user.id, status="scanning", scan_id=str(uuid.uuid4()),
+            resolution=request.resolution, mode=request.mode, source=request.source,
             format="pdf" if request.source == "ADF" else "tiff",
         )
+        scan_job_id = scan_job.scan_id
+        scan_tasks.reserve(scan_job_id)
+        entry.scan_id = scan_job_id
         db.add(scan_job)
         await db.commit()
         await db.refresh(scan_job)
-        scan_job_id = scan_job.scan_id
-        entry.scan_id = scan_job_id
         # End the read transaction: the scan below can run for minutes and must
         # not hold an idle-in-transaction session (and its locks) meanwhile.
         await db.commit()
 
         async def run_scan(coro):
+            if entry.cancel_requested:  # cancelled before the scan task existed
+                scan_tasks.cancel(scan_job_id)
             return await run_scan_task(db, scan_job, coro)
 
         async def progress_callback(_scan_id: str, percent: float):
@@ -126,24 +128,24 @@ async def create_copy(
             scan_tasks.set_pages(scan_job_id, count)
 
         async def record_scan(info: dict) -> None:
-            scan_job.status = "completed"
             scan_job.format = info["format"]
             scan_job.page_count = info["page_count"]
             scan_job.source = info["source"]
-            scan_job.filepath = info["filepath"]
-            scan_job.completed_at = datetime.now(timezone.utc)
-            await db.commit()
-            await db.refresh(scan_job)
-            await db.commit()  # refresh reopened a transaction; printing comes next
-            entry.phase = "printing"
-            entry.progress_pct = None
+            await _complete_scan(db, scan_job, info["filepath"])
             await ws_manager.broadcast_scan({
                 "type": "scan_completed",
                 "data": serialize_scan_job(scan_job),
             }, scan_job.user_id)
+            if entry.cancel_requested:  # keep the scan, but don't print
+                raise ScanCancelledError()
+            if entry.phase not in scan_tasks.TERMINAL_PHASES:
+                entry.phase = "printing"
+                entry.progress_pct = None
 
         def on_cups_job(cups_job_id: int) -> None:
             entry.cups_job_id = cups_job_id
+            if entry.cancel_requested:  # abort before release; the handler cancels the CUPS job
+                raise CopyCancelledError()
 
         result = await copy_service.copy(
             cups=cups,
@@ -186,14 +188,20 @@ async def create_copy(
             source_type="upload",
         )
         db.add(print_job)
+        await db.flush()
+        pid = print_job.id
         await db.commit()
+        entry.job_id = pid  # from here a cancel updates the row itself
+        await db.refresh(print_job)
         if entry.cancel_requested:
             await _cancel_cups(db, result["cups_job_id"])
+            if print_job.status != "cancelled":
+                print_job.status = "cancelled"
+                await db.commit()
+                await db.refresh(print_job)
 
         # Surface the print record to connected clients incrementally, or it
         # wouldn't appear until a manual refetch.
-        await db.refresh(print_job)
-        entry.job_id = print_job.id
         await ws_manager.broadcast("jobs", {
             "type": "job_created",
             "data": serialize_print_job(print_job),
@@ -205,7 +213,9 @@ async def create_copy(
         scan_tasks.finish_copy(entry, "cancelled")
         raise
     except Exception as exc:
-        if entry.cancel_requested and isinstance(exc, CopyError):
+        if entry.cancel_requested and isinstance(exc, (CopyError, CopyCancelledError)):
+            if entry.cups_job_id is not None:
+                await _cancel_cups(db, entry.cups_job_id)
             scan_tasks.finish_copy(entry, "cancelled")
             raise CopyCancelledError() from None
         scan_tasks.finish_copy(entry, "failed")
@@ -217,9 +227,11 @@ async def create_copy(
             except Exception:
                 logger.exception("Could not mark copy scan failed")
         raise
+    finally:
+        if scan_job is not None:
+            scan_tasks.unregister(scan_job.scan_id)
 
-    if not entry.cancel_requested:
-        scan_tasks.finish_copy(entry, "done")
+    scan_tasks.finish_copy(entry, "cancelled" if entry.cancel_requested else "done")
     return {
         "message": "Copy initiated",
         "scan_id": scan_job_id,
@@ -280,9 +292,10 @@ async def cancel_copy(
         raise CopyNotRunningError("This copy has already finished")
 
     if entry.phase == "scanning":
+        # The POST /copy handler finishes the entry (also when the scan task isn't up yet).
         entry.cancel_requested = True
-        if not (entry.scan_id and scan_tasks.cancel(entry.scan_id)):
-            scan_tasks.finish_copy(entry, "cancelled")
+        if entry.scan_id:
+            scan_tasks.cancel(entry.scan_id)
     else:
         entry.cancel_requested = True
         scan_tasks.finish_copy(entry, "cancelled")

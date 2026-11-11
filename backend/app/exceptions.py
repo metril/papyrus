@@ -295,3 +295,10 @@ class CopyCancelledError(PapyrusError):
 
     def __init__(self, detail: str = "Copy was cancelled"):
         super().__init__(detail)
+
+
+class ScanNotCancellableError(PapyrusError):
+    """The scan is running but was not started by this server's scan routes (e.g. eSCL)."""
+
+    status_code = 409
+    code = "scan_not_cancellable"

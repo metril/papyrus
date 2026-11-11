@@ -15470,7 +15470,7 @@
     },
     "/api/v1/scans/{scan_id}/cancel": {
       "post": {
-        "description": "Cancel a scan that is currently scanning.\n\nRequires the `scan` permission and access to the scan (404 otherwise). Returns 409\n(`scan_not_running`) when the scan is not scanning. The cancel is asynchronous: the response\nmay still show `scanning`; the final `cancelled` state is visible via `GET /scans/{scan_id}`,\nand the original `POST /scans` request fails with 409 `scan_cancelled`. A `scanning` row with\nno running task (left over from a restart) is marked cancelled immediately.",
+        "description": "Cancel a scan that is currently scanning.\n\nRequires the `scan` permission and access to the scan (404 otherwise). Returns 409\n(`scan_not_running`) when the scan is not scanning. The cancel is asynchronous: the response\nmay still show `scanning`; the final `cancelled` state is visible via `GET /scans/{scan_id}`,\nand the original `POST /scans` request fails with 409 `scan_cancelled`. A `scanning` row with\nno running task that predates this server process is marked cancelled immediately; a live scan\nnot started through the scan routes (eSCL) returns 409 `scan_not_cancellable`.",
         "operationId": "scanner_cancel_scan",
         "parameters": [
           {

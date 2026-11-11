@@ -1972,7 +1972,8 @@ export interface paths {
          *     (`scan_not_running`) when the scan is not scanning. The cancel is asynchronous: the response
          *     may still show `scanning`; the final `cancelled` state is visible via `GET /scans/{scan_id}`,
          *     and the original `POST /scans` request fails with 409 `scan_cancelled`. A `scanning` row with
-         *     no running task (left over from a restart) is marked cancelled immediately.
+         *     no running task that predates this server process is marked cancelled immediately; a live scan
+         *     not started through the scan routes (eSCL) returns 409 `scan_not_cancellable`.
          */
         post: operations["scanner_cancel_scan"];
         delete?: never;

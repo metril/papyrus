@@ -8,13 +8,36 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 COPY_TTL_SECONDS = 600
 TERMINAL_PHASES = frozenset({"done", "failed", "cancelled"})
 
+# Rows still `scanning` that were created before this are leftovers from a previous process.
+PROCESS_START = datetime.now(timezone.utc)
+
 _scans: dict[str, asyncio.Task] = {}
 _progress: dict[str, float] = {}
 _pages: dict[str, int] = {}
+# Reserved ids (value = cancel requested before the task started); held until the request ends.
+_reserved: dict[str, bool] = {}
+
+
+def reserve(scan_id: str) -> None:
+    """Mark `scan_id` as live from before its row is committed until `unregister`."""
+    _reserved[scan_id] = False
+
+
+def is_reserved(scan_id: str) -> bool:
+    return scan_id in _reserved or scan_id in _scans
+
+
+def cancel_requested(scan_id: str) -> bool:
+    return _reserved.get(scan_id, False)
+
+
+def task_done(scan_id: str) -> None:
+    _scans.pop(scan_id, None)
 
 
 def register(scan_id: str, task: asyncio.Task) -> None:
@@ -23,6 +46,7 @@ def register(scan_id: str, task: asyncio.Task) -> None:
 
 def unregister(scan_id: str) -> None:
     _scans.pop(scan_id, None)
+    _reserved.pop(scan_id, None)
     _progress.pop(scan_id, None)
     _pages.pop(scan_id, None)
 
@@ -32,26 +56,29 @@ def is_registered(scan_id: str) -> bool:
 
 
 def cancel(scan_id: str) -> bool:
+    """Cancel a live scan; True when `scan_id` is running or reserved (flagged if not started)."""
     task = _scans.get(scan_id)
-    if task is None or task.done():
-        return False
-    task.cancel()
-    return True
+    if scan_id in _reserved:
+        _reserved[scan_id] = True
+    if task is not None and not task.done():
+        task.cancel()
+        return True
+    return scan_id in _reserved
 
 
 def set_progress(scan_id: str, pct: float) -> None:
-    if scan_id in _scans:
+    if is_reserved(scan_id):
         _progress[scan_id] = pct
 
 
 def set_pages(scan_id: str, n: int) -> None:
-    if scan_id in _scans:
+    if is_reserved(scan_id):
         _pages[scan_id] = n
 
 
 def snapshot(scan_id: str) -> tuple[int | None, int | None]:
     """(progress_pct, page_count) for a running scan; (None, None) otherwise."""
-    if scan_id not in _scans:
+    if not is_reserved(scan_id):
         return None, None
     pct = _progress.get(scan_id)
     return (None if pct is None else int(pct)), _pages.get(scan_id)
@@ -101,6 +128,8 @@ def get_copy(copy_id: str) -> CopyEntry | None:
 
 
 def finish_copy(entry: CopyEntry, phase: str) -> None:
+    if entry.phase in TERMINAL_PHASES:
+        return
     entry.phase = phase
     entry.finished_at = time.monotonic()
     entry.task = None
