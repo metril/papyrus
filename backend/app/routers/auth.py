@@ -23,7 +23,7 @@ from app.auth.oidc import ensure_oidc_registered, oauth
 from app.auth.tokens import generate_token
 from app.config import settings
 from app.database import get_db
-from app.models import APIToken, User
+from app.models import APIToken, DeviceAuthorization, User
 from app.routers.settings import get_setting
 from app.schemas import (
     APITokenCreate,
@@ -49,6 +49,13 @@ _REDIRECT_HDR = {"Location": {"description": "Target URL.", "schema": {"type": "
 # (F68) — this route is unauthenticated, so with no throttle an attacker can
 # script password guesses at full request rate.
 _login_throttle = Throttle(max_failures=5, lockout_seconds=300)
+
+
+def _safe_next(target: str | None) -> str:
+    """A same-origin path to return to after login, else `/` (blocks open redirects)."""
+    if target and target.startswith("/") and not target.startswith("//") and "\\" not in target:
+        return target
+    return "/"
 
 
 @lru_cache(maxsize=1)
@@ -177,10 +184,13 @@ async def local_login(
         _UNAVAILABLE,
     ),
 )
-async def oidc_login(request: Request, db: AsyncSession = Depends(get_db)):
+async def oidc_login(
+    request: Request, next: str | None = None, db: AsyncSession = Depends(get_db)
+):
     """Redirect the browser to the OIDC provider to authenticate (public endpoint).
 
-    In dev mode this signs in a built-in admin and redirects to `/` instead.
+    In dev mode this signs in a built-in admin and redirects to `/` instead. `next` is an optional
+    same-origin path (e.g. `/device?code=ABCD-EFGH`) to return to after sign-in.
     503 when OIDC is not enabled or configured.
     """
     # Dev mode auto-login
@@ -199,7 +209,7 @@ async def oidc_login(request: Request, db: AsyncSession = Depends(get_db)):
             await db.commit()
             await db.refresh(user)
         request.session["user_id"] = str(user.id)
-        return RedirectResponse(url="/", status_code=302)
+        return RedirectResponse(url=_safe_next(next), status_code=302)
 
     # Check OIDC config from DB
     oidc_enabled = (await get_setting(db, "oidc_enabled") or "false").lower() in (
@@ -218,6 +228,7 @@ async def oidc_login(request: Request, db: AsyncSession = Depends(get_db)):
 
     # Registered with the OIDC provider: keep the legacy URL (permanent alias in
     # legacy_alias.py) so the registration never needs changing.
+    request.session["login_next"] = _safe_next(next)
     redirect_uri = f"{settings.base_url}/api/auth/callback"
     return await oauth.papyrus.authorize_redirect(request, redirect_uri)
 
@@ -228,7 +239,7 @@ async def oidc_login(request: Request, db: AsyncSession = Depends(get_db)):
     response_class=RedirectResponse,
     status_code=302,
     responses=std_responses(
-        {302: {"description": "Signed in; redirect to /.", "headers": _REDIRECT_HDR}},
+        {302: {"description": "Signed in; redirect to the original page (or /).", "headers": _REDIRECT_HDR}},
         _UNAUTH,
     ),
 )
@@ -285,7 +296,7 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
     await db.refresh(user)
 
     request.session["user_id"] = str(user.id)
-    return RedirectResponse(url="/", status_code=302)
+    return RedirectResponse(url=_safe_next(request.session.pop("login_next", None)), status_code=302)
 
 
 @router.post(
@@ -383,10 +394,29 @@ async def create_token(
 )
 async def revoke_token(
     token_id: uuid.UUID,
-    user: User = Depends(require_admin),
+    request: Request,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Permanently revoke an API token (admin only); it stops working immediately."""
+    """Permanently revoke an API token; it stops working immediately.
+
+    Allowed for admins, for a token revoking itself, and for a `device`-permission token revoking
+    a token minted from its own device authorizations.
+    """
+    perms = getattr(request.state, "token_permissions", None)
+    caller_token_id = getattr(request.state, "token_id", None)
+    allowed = user.role == "admin" and (perms is None or "admin" in perms)
+    if not allowed and caller_token_id is not None:
+        if caller_token_id == token_id:
+            allowed = True
+        elif perms and "device" in perms:
+            minted = await db.execute(select(DeviceAuthorization.id).where(
+                DeviceAuthorization.requester_token_id == caller_token_id,
+                DeviceAuthorization.minted_token_id == token_id,
+            ))
+            allowed = minted.first() is not None
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Admin access required")
     result = await db.execute(select(APIToken).where(APIToken.id == token_id))
     token = result.scalar_one_or_none()
     if token is None:

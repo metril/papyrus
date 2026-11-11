@@ -390,18 +390,25 @@ async def initiate_batch_scan(
 async def list_scans(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    mine: bool = Query(default=False, description="Only scans created by the caller."),
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
     """List scans, newest first, with limit/offset pagination.
 
-    Requires the `scan` permission.
+    Requires the `scan` permission. With `mine=true` only scans owned by the caller are listed
+    (network eSCL scans have no owner and are excluded).
     """
-    count_result = await db.execute(select(func.count(ScanJob.id)))
+    count_q = select(func.count(ScanJob.id))
+    list_q = select(ScanJob)
+    if mine:
+        count_q = count_q.where(ScanJob.user_id == user.id)
+        list_q = list_q.where(ScanJob.user_id == user.id)
+    count_result = await db.execute(count_q)
     total = count_result.scalar() or 0
 
     result = await db.execute(
-        select(ScanJob).order_by(ScanJob.created_at.desc()).limit(limit).offset(offset)
+        list_q.order_by(ScanJob.created_at.desc()).limit(limit).offset(offset)
     )
     scans = result.scalars().all()
     return Page[ScanResponse](items=scans, total=total, limit=limit, offset=offset)
@@ -522,6 +529,14 @@ async def email_scan(
     return {"message": f"Scan emailed to {data.to}"}
 
 
+def _cloud_path(folder: str) -> str:
+    """Normalise a Dropbox/OneDrive folder path to `/a/b` (no `..` segments)."""
+    parts = [p for p in folder.split("/") if p]
+    if ".." in parts:
+        raise HTTPException(status_code=400, detail="Invalid folder path")
+    return "/" + "/".join(parts)
+
+
 @router.post(
     "/scans/{scan_id}/cloud",
     summary="Upload a scan to cloud storage",
@@ -532,6 +547,11 @@ async def email_scan(
 async def upload_scan_to_cloud(
     scan_id: str,
     provider_id: int,
+    folder_id: str | None = Query(
+        default=None, max_length=512,
+        description="Destination folder: a folder id for Google Drive, a path (e.g. "
+        "`/Receipts`) for Dropbox and OneDrive. Omit for the default `Papyrus Scans` folder.",
+    ),
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -539,7 +559,7 @@ async def upload_scan_to_cloud(
     Dropbox or OneDrive).
 
     Requires the `scan` permission. The response carries `file_id` (Drive, OneDrive) or `path`
-    (Dropbox).
+    (Dropbox). `folder_id` is honoured by all three (id on Drive, path on Dropbox/OneDrive).
     """
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     job = result.scalar_one_or_none()
@@ -572,6 +592,7 @@ async def upload_scan_to_cloud(
             filepath=job.filepath,
             filename=filename,
             access_token=access_token,
+            folder_id=folder_id or None,
         )
         return {"message": "Uploaded to Google Drive", "file_id": file_id}
     elif provider.provider == "dropbox":
@@ -579,6 +600,7 @@ async def upload_scan_to_cloud(
             filepath=job.filepath,
             filename=filename,
             access_token=access_token,
+            **({"remote_path": _cloud_path(folder_id)} if folder_id else {}),
         )
         return {"message": "Uploaded to Dropbox", "path": path}
     else:
@@ -586,6 +608,7 @@ async def upload_scan_to_cloud(
             filepath=job.filepath,
             filename=filename,
             access_token=access_token,
+            **({"folder_path": _cloud_path(folder_id)} if folder_id else {}),
         )
         return {"message": "Uploaded to OneDrive", "file_id": file_id}
 

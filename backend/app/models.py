@@ -57,6 +57,33 @@ class APIToken(Base):
     user: Mapped["User"] = relationship(back_populates="api_tokens")
 
 
+class DeviceAuthorization(Base):
+    """A pending/approved device-grant (RFC 8628) request from a kiosk's API token."""
+
+    __tablename__ = "device_authorizations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    device_code_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    user_code: Mapped[str] = mapped_column(String(9), unique=True, nullable=False)
+    client_name: Mapped[str] = mapped_column(String(64), nullable=False, default="Kiosk")
+    requester_token_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("api_tokens.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending"
+    )  # pending, approved, denied, consumed
+    approved_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True
+    )
+    minted_token_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("api_tokens.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    interval: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class PrintJob(Base):
     __tablename__ = "print_jobs"
 

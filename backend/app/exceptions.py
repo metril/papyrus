@@ -94,6 +94,23 @@ class UploadTooLargeError(PapyrusError):
     code = "upload_too_large"
 
 
+class ConflictError(PapyrusError):
+    """The request conflicts with the resource's current state."""
+
+    status_code = 409
+    code = "conflict"
+
+
+class DeviceGrantError(PapyrusError):
+    """RFC 8628 token-endpoint error; ``code`` is the protocol error string."""
+
+    status_code = 400
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(detail)
+        self.code = code
+
+
 class TooManyAttemptsError(PapyrusError):
     """Raised when a throttle (login, release PIN, ...) is tripped."""
 
