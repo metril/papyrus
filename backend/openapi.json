@@ -13171,7 +13171,7 @@
     },
     "/api/v1/scans": {
       "get": {
-        "description": "List scans, newest first, with limit/offset pagination.\n\nRequires the `scan` permission. With `mine=true` only scans owned by the caller are listed\n(network eSCL scans have no owner and are excluded).",
+        "description": "List scans, newest first, with limit/offset pagination.\n\nRequires the `scan` permission. Callers see their own scans; admins (session, or a token with\nthe `admin` permission) see all; sessions also see network (eSCL) scans, which have no owner.\nWith `mine=true` only scans owned by the caller are listed.",
         "operationId": "scanner_list_scans",
         "parameters": [
           {
@@ -13500,7 +13500,7 @@
     },
     "/api/v1/scans/bulk-delete": {
       "post": {
-        "description": "Delete scans and their files by scan id; unknown ids are ignored.\n\nRequires the `scan` permission. Broadcasts `scan_deleted` per id (and `scan_completed` for\nfronts freed from a duplex merge).",
+        "description": "Delete scans and their files by scan id; unknown and inaccessible ids are ignored.\n\nRequires the `scan` permission. Broadcasts `scan_deleted` per id (and `scan_completed` for\nfronts freed from a duplex merge).",
         "operationId": "scanner_bulk_delete_scans",
         "requestBody": {
           "content": {

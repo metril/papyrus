@@ -214,7 +214,7 @@ async def test_scans_mine_filter(db, client, admin_user, regular_user):
     app.dependency_overrides[get_current_user] = lambda: regular_user
     allr = (await client.get("/api/v1/scans")).json()
     mine = (await client.get("/api/v1/scans?mine=true")).json()
-    assert allr["total"] == 3
+    assert allr["total"] == 2  # own + ownerless network scan, not the admin's
     assert mine["total"] == 1 and mine["items"][0]["id"] is not None
 
 

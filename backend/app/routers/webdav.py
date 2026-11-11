@@ -2,7 +2,7 @@
 
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -149,6 +149,7 @@ async def list_webdav_files(
 async def upload_to_webdav(
     provider_id: int,
     body: WebDAVUploadRequest,
+    request: Request,
     user: User = Depends(require_permission("scan")),
     db: AsyncSession = Depends(get_db),
 ):
@@ -171,9 +172,11 @@ async def upload_to_webdav(
     if not provider:
         raise HTTPException(status_code=404, detail="WebDAV connection not found")
 
+    from app.routers.scanner import can_access_scan
+
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id == scan_id))
     scan = result.scalar_one_or_none()
-    if not scan or not scan.filepath:
+    if not scan or not scan.filepath or not can_access_scan(user, request, scan):
         raise HTTPException(status_code=404, detail="Scan not found")
 
     url, username, password_enc = _parse_webdav_creds(provider)

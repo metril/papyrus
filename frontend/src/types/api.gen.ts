@@ -1633,8 +1633,9 @@ export interface paths {
          * List scans
          * @description List scans, newest first, with limit/offset pagination.
          *
-         *     Requires the `scan` permission. With `mine=true` only scans owned by the caller are listed
-         *     (network eSCL scans have no owner and are excluded).
+         *     Requires the `scan` permission. Callers see their own scans; admins (session, or a token with
+         *     the `admin` permission) see all; sessions also see network (eSCL) scans, which have no owner.
+         *     With `mine=true` only scans owned by the caller are listed.
          */
         get: operations["scanner_list_scans"];
         put?: never;
@@ -1694,7 +1695,7 @@ export interface paths {
         put?: never;
         /**
          * Delete several scans
-         * @description Delete scans and their files by scan id; unknown ids are ignored.
+         * @description Delete scans and their files by scan id; unknown and inaccessible ids are ignored.
          *
          *     Requires the `scan` permission. Broadcasts `scan_deleted` per id (and `scan_completed` for
          *     fronts freed from a duplex merge).
