@@ -241,3 +241,10 @@ async def test_cloud_folder_passthrough(db, client, regular_user, monkeypatch):
     r = await client.post(url)
     assert r.status_code == 200, r.text
     assert seen["folder_id"] == "abc123"
+
+
+async def test_user_code_exhaustion_is_clean_error(db, client, kiosk, monkeypatch):
+    c = await _start(client)
+    monkeypatch.setattr("app.routers.device._new_user_code", lambda: c["user_code"])
+    r = await client.post(f"{BASE}/code", headers=_h(KIOSK))
+    assert r.status_code == 502 and r.json()["code"] == "external_service_error"

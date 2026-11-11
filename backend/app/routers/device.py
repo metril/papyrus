@@ -20,7 +20,7 @@ from app.auth.dependencies import get_current_user, require_permission
 from app.auth.tokens import generate_token, hash_token
 from app.config import settings
 from app.database import get_db
-from app.exceptions import ConflictError, DeviceGrantError, NotFoundError
+from app.exceptions import ConflictError, DeviceGrantError, ExternalServiceError, NotFoundError
 from app.models import APIToken, DeviceAuthorization, User
 from app.schemas.device import (
     DeviceApproveRequest,
@@ -107,12 +107,14 @@ async def request_device_code(
         DeviceAuthorization.expires_at < now - _PRUNE_GRACE))
 
     device_code = secrets.token_urlsafe(32)
-    for _ in range(10):
+    for _ in range(20):
         user_code = _new_user_code()
         taken = await db.execute(select(DeviceAuthorization.id).where(
             DeviceAuthorization.user_code == user_code))
         if taken.first() is None:
             break
+    else:
+        raise ExternalServiceError("Could not allocate a sign-in code. Try again.")
     db.add(DeviceAuthorization(
         device_code_hash=hash_token(device_code),
         user_code=user_code,

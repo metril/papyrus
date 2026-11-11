@@ -221,7 +221,7 @@ async def scans_ws(websocket: WebSocket):
     if identity is None or not has_ws_permission(identity, "scan"):
         await websocket.close(code=1008)
         return
-    await ws_manager.connect("scans", websocket)
+    await ws_manager.connect("scans", websocket, identity)
     try:
         while True:
             await websocket.receive_text()

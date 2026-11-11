@@ -66,6 +66,7 @@ from app.services.cloud_service import cloud_service
 from app.services.email_service import email_service
 from app.services.file_locks import lock_for
 from app.services.file_service import cleanup_file, sanitize_filename
+from app.services.scan_access import scan_access
 from app.services.scan_service import (
     get_default_scanner,
     get_default_scanner_device,
@@ -88,11 +89,7 @@ router = APIRouter()
 
 def _scan_access(user: User, perms: list[str] | None, job: ScanJob) -> bool:
     """Visibility rule for a scan. `perms` is the token's permission list, None for a session."""
-    if job.user_id is None:
-        return perms is None  # network (eSCL) scans: sessions only, never API tokens
-    if job.user_id == user.id:
-        return True
-    return user.role == "admin" and (perms is None or "admin" in perms)
+    return scan_access(user, perms, job.user_id)
 
 
 def can_access_scan(user: User, request: Request, job: ScanJob) -> bool:
@@ -271,10 +268,10 @@ async def initiate_scan(
             "type": "scan_completed",
             "data": {"scan_id": job.scan_id},
         })
-        await ws_manager.broadcast("scans", {
+        await ws_manager.broadcast_scan({
             "type": "scan_completed",
             "data": serialize_scan_job(job),
-        })
+        }, job.user_id)
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
                         detail={"format": job.format, "resolution": request.resolution})
@@ -386,10 +383,10 @@ async def initiate_batch_scan(
             "type": "scan_completed",
             "data": {"scan_id": job.scan_id, "page_count": page_count},
         })
-        await ws_manager.broadcast("scans", {
+        await ws_manager.broadcast_scan({
             "type": "scan_completed",
             "data": serialize_scan_job(job),
-        })
+        }, job.user_id)
 
         await log_event(db, "scan.complete", "scan_job", job.scan_id, user_id=user.id,
                         detail={"format": request.format, "pages": page_count})
@@ -879,20 +876,23 @@ async def scan_backs(
             duplex_source_scan_id=front_scan_id,
         )
 
+    owners: dict[str, uuid.UUID | None] = {}
+
     async def snapshot(row: ScanJob) -> ScanResponse | None:
         """Fresh copy of a row, or None if it was deleted meanwhile."""
         try:
             await db.refresh(row)
         except Exception:
             return None
+        owners[row.scan_id] = row.user_id
         return ScanResponse.model_validate(row, from_attributes=True)
 
     async def broadcast(*rows: ScanResponse | None) -> None:
         for row in rows:
             if row is not None:
-                await ws_manager.broadcast("scans", {
+                await ws_manager.broadcast_scan({
                     "type": "scan_completed", "data": row.model_dump(mode="json")
-                })
+                }, owners.get(row.scan_id))
 
     async def keep_backs_only() -> None:
         kept = await new_row(backs_id, backs_path, backs_count, False)
@@ -1044,6 +1044,7 @@ async def bulk_delete_scans(
     result = await db.execute(select(ScanJob).where(ScanJob.scan_id.in_(body.scan_ids)))
     jobs = [j for j in result.scalars().all() if can_access_scan(user, request, j)]
     deleted_ids = [j.scan_id for j in jobs]
+    deleted_owners = {j.scan_id: j.user_id for j in jobs}
 
     deleted = 0
     filepaths: list[str] = []
@@ -1063,13 +1064,13 @@ async def bulk_delete_scans(
         await asyncio.to_thread(cleanup_file, filepath)
 
     for scan_id in deleted_ids:
-        await ws_manager.broadcast("scans", {
+        await ws_manager.broadcast_scan({
             "type": "scan_deleted", "data": {"scan_id": scan_id}
-        })
+        }, deleted_owners[scan_id])
     for fronts in freed:
-        await ws_manager.broadcast("scans", {
+        await ws_manager.broadcast_scan({
             "type": "scan_completed", "data": serialize_scan_job(fronts)
-        })
+        }, fronts.user_id)
 
     return BulkDeleteResponse(deleted=deleted)
 
@@ -1191,9 +1192,9 @@ async def collate_scans(
     await db.commit()
     await db.refresh(merged_job)
 
-    await ws_manager.broadcast("scans", {
+    await ws_manager.broadcast_scan({
         "type": "scan_completed", "data": serialize_scan_job(merged_job)
-    })
+    }, merged_job.user_id)
 
     return merged_job
 
@@ -1219,6 +1220,7 @@ async def delete_scan(
 
     filepath = job.filepath
     scan_id_copy = job.scan_id
+    owner_id = job.user_id
     await db.delete(job)
     freed = await duplex_service.release_fronts(db, [job])
     # F44: commit before unlinking, so a slow/failing unlink can never leave
@@ -1232,13 +1234,13 @@ async def delete_scan(
     await db.commit()
     await dispatch_webhook(db, "scan.delete", {"scan_id": scan_id_copy})
 
-    await ws_manager.broadcast("scans", {
+    await ws_manager.broadcast_scan({
         "type": "scan_deleted", "data": {"scan_id": scan_id_copy}
-    })
+    }, owner_id)
     for fronts in freed:
-        await ws_manager.broadcast("scans", {
+        await ws_manager.broadcast_scan({
             "type": "scan_completed", "data": serialize_scan_job(fronts)
-        })
+        }, fronts.user_id)
 
 
 # --- Scan Profiles ---

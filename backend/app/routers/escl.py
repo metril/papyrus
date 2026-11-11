@@ -597,6 +597,7 @@ async def _run_scan(job_id: str) -> None:
 
         # Update DB record with completed scan details
         scan_payload: dict | None = None
+        scan_owner = None
         async with async_session() as db:
             result = await db.get(ScanJob, db_job_id)
             if result:
@@ -615,6 +616,7 @@ async def _run_scan(job_id: str) -> None:
                 row_owns_file = True
                 await db.refresh(result)
                 scan_payload = serialize_scan_job(result)
+                scan_owner = result.user_id
 
         # Notify web UI via WebSocket with the full scan object (matches the
         # scan list endpoint shape) so clients can apply it incrementally.
@@ -622,10 +624,10 @@ async def _run_scan(job_id: str) -> None:
         # skip the broadcast entirely rather than violate the full-object
         # invariant the "scans" channel relies on.
         if scan_payload is not None:
-            await ws_manager.broadcast("scans", {
+            await ws_manager.broadcast_scan({
                 "type": "scan_completed",
                 "data": scan_payload,
-            })
+            }, scan_owner)
 
         job["filepath"] = filepath
         job["state"] = "Completed"

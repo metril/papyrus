@@ -74,10 +74,10 @@ async def create_copy(
         await db.commit()
         await db.refresh(scan_job)
         await db.commit()  # refresh reopened a transaction; printing comes next
-        await ws_manager.broadcast("scans", {
+        await ws_manager.broadcast_scan({
             "type": "scan_completed",
             "data": serialize_scan_job(scan_job),
-        })
+        }, scan_job.user_id)
 
     result = await copy_service.copy(
         cups=cups,
