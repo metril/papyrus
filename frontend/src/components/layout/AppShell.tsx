@@ -3,6 +3,7 @@ import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import api from '../../api/client';
 import { useThemeStore } from '../../store/themeStore';
 import { useAuthStore } from '../../store/authStore';
+import KioskApproveModal from '../device/KioskApproveModal';
 import { useRealtimeBridge } from '../../hooks/useRealtimeBridge';
 import Skeleton from '../common/Skeleton';
 import ChunkErrorBoundary from '../common/ChunkErrorBoundary';
@@ -226,6 +227,7 @@ export default function AppShell() {
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex">
       <RealtimeBridge />
+      <KioskApproveModal />
       {/* Desktop sidebar */}
       <aside className="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 bg-white dark:bg-gray-900 border-r border-gray-100 dark:border-gray-800">
         <div className="flex flex-col justify-center h-16 px-6">

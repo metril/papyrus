@@ -5,6 +5,7 @@ import { useWebSocket } from './useWebSocket';
 import { queryKeys } from '../api/queries';
 import { useConnectionStore } from '../store/connectionStore';
 import { showToast } from '../store/toastStore';
+import type { DeviceRequest } from '../api/device';
 import type { PrintJob, ScanJob, WSMessage } from '../types';
 
 /**
@@ -137,6 +138,38 @@ export function applyPrinterEvent(queryClient: QueryClient, msg: WSMessage): voi
   }
 }
 
+/**
+ * Apply a notifications-channel event (this user's sockets only): a kiosk asking for
+ * sign-in approval, its resolution (approved/denied/replaced), or a cleared kiosk PIN.
+ */
+export function applyNotificationEvent(queryClient: QueryClient, msg: WSMessage): void {
+  if (msg.type === 'kiosk_login_request') {
+    const incoming = msg.data as unknown as DeviceRequest;
+    queryClient.setQueryData<DeviceRequest[]>(queryKeys.deviceRequests, (prev) => {
+      const rest = (prev ?? []).filter((r) => r.id !== incoming.id);
+      return [incoming, ...rest];
+    });
+    return;
+  }
+  if (msg.type === 'kiosk_login_resolved') {
+    const id = (msg.data as { id?: string }).id;
+    queryClient.setQueryData<DeviceRequest[]>(queryKeys.deviceRequests, (prev) =>
+      prev ? prev.filter((r) => r.id !== id) : prev,
+    );
+    return;
+  }
+  if (msg.type === 'kiosk_pin_cleared') {
+    queryClient.invalidateQueries({ queryKey: queryKeys.kioskPin });
+    showToast('Your kiosk PIN was removed after too many incorrect attempts.', 'info');
+  }
+}
+
+function invalidateNotifications(queryClient: QueryClient): void {
+  queryClient.invalidateQueries({ queryKey: queryKeys.deviceRequests });
+}
+
+const noopConnected = () => {};
+
 function invalidateJobs(queryClient: QueryClient): void {
   queryClient.invalidateQueries({ queryKey: queryKeys.jobs.list() });
 }
@@ -233,7 +266,7 @@ export function shouldToastScanCompleted(queryClient: QueryClient, msg: WSMessag
 }
 
 /**
- * Opens the three realtime channels and keeps the Query cache live app-wide.
+ * Opens the four realtime channels and keeps the Query cache live app-wide.
  * Mount it once, inside the authenticated branch of the app shell.
  */
 export function useRealtimeBridge(): void {
@@ -273,5 +306,13 @@ export function useRealtimeBridge(): void {
     invalidatePrinters,
     setPrintersConnected,
     queryKeys.printerStatus,
+  );
+  useChannel(
+    '/api/v1/ws/notifications',
+    queryClient,
+    applyNotificationEvent,
+    invalidateNotifications,
+    noopConnected,
+    queryKeys.deviceRequests,
   );
 }
