@@ -160,8 +160,11 @@ export interface paths {
         options?: never;
         head?: never;
         /**
-         * Change a user's role
-         * @description Set a user's role to `user` or `admin` (admin only). 400 when targeting yourself.
+         * Update a user
+         * @description Change a user's `role`, `is_active` and/or `kiosk_enabled` (admin only; omitted fields are
+         *     unchanged). 400 when changing your own role or deactivating yourself, 409 when it would
+         *     deactivate the last active admin. Deactivating a user also denies their pending kiosk
+         *     sign-in requests and blocks every session, token and WebSocket of theirs.
          */
         patch: operations["admin_update_user_role"];
         trace?: never;
@@ -2976,6 +2979,18 @@ export interface components {
              * @example 3f2b8c1e-5a7d-4b9e-8c11-2d6f0a9e4b77
              */
             id: string;
+            /**
+             * Is Active
+             * @description False blocks all sign-in and API access.
+             * @example true
+             */
+            is_active: boolean;
+            /**
+             * Kiosk Enabled
+             * @description Whether the user may sign in at a kiosk.
+             * @example true
+             */
+            kiosk_enabled: boolean;
             /**
              * Last Login
              * @description ISO 8601 time of the last login, null if never.
@@ -6303,8 +6318,20 @@ export interface components {
              */
             id: string;
             /**
+             * Is Active
+             * @description Whether the user is active.
+             * @example true
+             */
+            is_active: boolean;
+            /**
+             * Kiosk Enabled
+             * @description Whether kiosk sign-in is allowed.
+             * @example true
+             */
+            kiosk_enabled: boolean;
+            /**
              * Role
-             * @description The user's new role.
+             * @description The user's role.
              * @example admin
              */
             role: string;
@@ -6312,11 +6339,21 @@ export interface components {
         /** UserRoleUpdate */
         UserRoleUpdate: {
             /**
+             * Is Active
+             * @description Activate or deactivate the user.
+             */
+            is_active?: boolean | null;
+            /**
+             * Kiosk Enabled
+             * @description Allow or forbid kiosk sign-in.
+             */
+            kiosk_enabled?: boolean | null;
+            /**
              * Role
              * @description New role.
              * @example admin
              */
-            role: string;
+            role?: string | null;
         };
         /** UserUsage */
         UserUsage: {
@@ -7091,6 +7128,15 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            /** @description Conflicts with the current state of the resource. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -7133,6 +7179,15 @@ export interface operations {
             };
             /** @description Not authenticated or invalid credentials. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The account is deactivated. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7915,7 +7970,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Local login is disabled. */
+            /** @description Local login is disabled, or the account is deactivated. */
             403: {
                 headers: {
                     [name: string]: unknown;
