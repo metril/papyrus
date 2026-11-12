@@ -462,18 +462,37 @@ async def test_broadcast_user_targets_only_that_user(db, regular_user, admin_use
     assert mine.got == [{"type": "x"}] and theirs.got == []
 
 
-async def test_notifications_ws_rejects_api_tokens(db, admin_user):
+def test_notifications_ws_rejects_api_tokens(migrated_db):
+    from sqlalchemy import delete
     from starlette.websockets import WebSocketDisconnect
-    db.add(APIToken(user_id=admin_user.id, name="w", token_hash=hash_token("pprs_ws"),
-                    permissions=["device", "print"]))
-    await db.commit()
 
-    def attempt():
+    from app.database import async_session, engine
+
+    async def seed():
+        async with async_session() as s:
+            u = User(email="wsn@x", display_name="W", role="user", username="wsn")
+            s.add(u)
+            await s.flush()
+            s.add(APIToken(user_id=u.id, name="w", token_hash=hash_token("pprs_wsn"),
+                           permissions=["device", "print"]))
+            await s.commit()
+        await engine.dispose()
+
+    async def cleanup():
+        async with async_session() as s:
+            await s.execute(delete(APIToken).where(APIToken.name == "w"))
+            await s.execute(delete(User).where(User.username == "wsn"))
+            await s.commit()
+        await engine.dispose()
+
+    asyncio.run(seed())
+    try:
         with pytest.raises(WebSocketDisconnect):
-            with TestClient(app).websocket_connect("/api/v1/ws/notifications?token=pprs_ws"):
+            with TestClient(app).websocket_connect("/api/v1/ws/notifications?token=pprs_wsn"):
                 pass
-
-    await asyncio.to_thread(attempt)
+    finally:
+        asyncio.run(engine.dispose())
+        asyncio.run(cleanup())
 
 
 def test_notifications_ws_rejects_unauthenticated():
