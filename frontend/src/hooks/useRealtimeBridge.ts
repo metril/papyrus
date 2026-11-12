@@ -5,7 +5,7 @@ import { useWebSocket } from './useWebSocket';
 import { queryKeys } from '../api/queries';
 import { useConnectionStore } from '../store/connectionStore';
 import { showToast } from '../store/toastStore';
-import type { DeviceRequest } from '../api/device';
+import type { DeviceRequest, KioskPinStatus } from '../api/device';
 import type { PrintJob, ScanJob, WSMessage } from '../types';
 
 /**
@@ -159,7 +159,9 @@ export function applyNotificationEvent(queryClient: QueryClient, msg: WSMessage)
     return;
   }
   if (msg.type === 'kiosk_pin_cleared') {
-    queryClient.invalidateQueries({ queryKey: queryKeys.kioskPin });
+    queryClient.setQueryData<KioskPinStatus>(queryKeys.kioskPin, (prev) =>
+      prev && { ...prev, has_pin: false },
+    );
     showToast('Your kiosk PIN was removed after too many incorrect attempts.', 'info');
   }
 }

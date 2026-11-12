@@ -249,11 +249,11 @@ async def printers_ws(websocket: WebSocket):
 @ws_router.websocket("/notifications")
 async def notifications_ws(websocket: WebSocket):
     """Per-user WebSocket: kiosk sign-in requests (`kiosk_login_request`/`kiosk_login_resolved`)
-    and `kiosk_pin_cleared`. Any authenticated identity may connect, and only receives messages
-    addressed to its own user. Same short-lived auth session as jobs_ws."""
+    and `kiosk_pin_cleared`. Sessions only (API tokens are closed with 1008); receives only
+    messages addressed to its own user. Same short-lived auth session as jobs_ws."""
     async with async_session() as db:
         identity = await authenticate_websocket(websocket, db)
-    if identity is None:
+    if identity is None or identity.permissions is not None:
         await websocket.close(code=1008)
         return
     await ws_manager.connect("notifications", websocket, identity)

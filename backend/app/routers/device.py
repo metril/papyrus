@@ -197,7 +197,7 @@ async def approve_request(
     if not await kl.flag(db, "kiosk_approve_enabled"):
         raise HTTPException(status_code=403, detail="Tap-to-approve sign-in is disabled")
     _limit(_approve_request_limiter, str(token_id), 5)
-    target = await kl.get_eligible_user(db, data.user_id)
+    target = await kl.get_eligible_user(db, data.user_id, lock=True)
     if target is None:
         raise NotFoundError("User not found")
 

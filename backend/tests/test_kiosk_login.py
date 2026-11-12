@@ -1,5 +1,6 @@
 # ruff: noqa: E501
 """Kiosk sign-in: tap-to-approve, PIN login + lockout, PIN management, settings."""
+import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -459,6 +460,20 @@ async def test_broadcast_user_targets_only_that_user(db, regular_user, admin_use
         ws_manager._identities.pop(mine, None)
         ws_manager._identities.pop(theirs, None)
     assert mine.got == [{"type": "x"}] and theirs.got == []
+
+
+async def test_notifications_ws_rejects_api_tokens(db, admin_user):
+    from starlette.websockets import WebSocketDisconnect
+    db.add(APIToken(user_id=admin_user.id, name="w", token_hash=hash_token("pprs_ws"),
+                    permissions=["device", "print"]))
+    await db.commit()
+
+    def attempt():
+        with pytest.raises(WebSocketDisconnect):
+            with TestClient(app).websocket_connect("/api/v1/ws/notifications?token=pprs_ws"):
+                pass
+
+    await asyncio.to_thread(attempt)
 
 
 def test_notifications_ws_rejects_unauthenticated():
