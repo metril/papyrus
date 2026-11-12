@@ -34,6 +34,16 @@ class ConnectionManager:
         `owner_id` (None = network scan, sessions only)."""
         await self.broadcast("scans", message, owner_id=owner_id)
 
+    async def close_user(self, user_id, code: int = 1008) -> None:
+        """Close and drop every socket (any channel) authenticated as `user_id`."""
+        victims = [(ch, ws) for ch, conns in list(self.active_connections.items())
+                   for ws in list(conns)
+                   if (ident := self._identities.get(ws)) is not None
+                   and ident.user.id == user_id]
+        for channel, ws in victims:
+            self.disconnect(channel, ws)
+        await asyncio.gather(*(ws.close(code=code) for _, ws in victims), return_exceptions=True)
+
     async def broadcast_user(self, user_id, message: dict) -> None:
         """Send a `notifications` message only to sockets authenticated as `user_id`."""
         conns = [

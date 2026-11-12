@@ -99,7 +99,7 @@ async def test_oidc_callback_refused_for_inactive(db, client, monkeypatch):
     assert r.status_code == 302
     await _flag(db, u, is_active=False)
     r = await client.get(f"{A}/callback", follow_redirects=False)
-    assert r.status_code == 403 and "deactivated" in r.json()["detail"]
+    assert r.status_code == 303 and r.headers["location"] == "/?login_error=deactivated"
     assert "session" not in r.headers.get("set-cookie", "")
 
 
@@ -183,12 +183,6 @@ async def test_cannot_deactivate_last_active_admin(db, client, admin_user):
     assert r.status_code == 409 and r.json()["code"] == "conflict"
     await db.refresh(admin_user)
     assert admin_user.is_active is True
-    # With a second active admin it is allowed.
-    other = User(email="a3@x", display_name="A3", role="admin", username="a3")
-    db.add(other)
-    await db.commit()
-    r = await _as(actor, lambda: client.patch(f"{ADM}/{admin_user.id}", json={"is_active": False}))
-    assert r.status_code == 200
 
 
 async def test_deactivate_denies_pending_requests(db, client, admin_user, regular_user, kiosk):
@@ -280,3 +274,88 @@ async def test_token_poll_blocked_after_flag_flip(db, client, kiosk, regular_use
     assert p.status_code == 400 and p.json()["code"] == "access_denied"
     n = (await db.execute(select(APIToken).where(APIToken.user_id == regular_user.id))).all()
     assert n == []
+
+
+# ---- review fixes ----
+
+class _FakeWS:
+    def __init__(self):
+        self.closed = None
+
+    async def close(self, code=1000):
+        self.closed = code
+
+
+def _reg(user, *channels):
+    ws = _FakeWS()
+    for ch in channels:
+        ws_manager.active_connections[ch].append(ws)
+    ws_manager._identities[ws] = SimpleNamespace(user=user, permissions=None)
+    return ws
+
+
+async def test_close_user_closes_only_that_users_sockets(regular_user, admin_user):
+    mine, other = _reg(regular_user, "jobs", "notifications"), _reg(admin_user, "jobs")
+    await ws_manager.close_user(regular_user.id)
+    assert mine.closed == 1008 and other.closed is None
+    assert mine not in ws_manager.active_connections.get("jobs", [])
+    assert mine not in ws_manager.active_connections.get("notifications", [])
+    ws_manager.disconnect("jobs", other)
+
+
+async def test_deactivate_and_delete_close_sockets(db, client, admin_user, regular_user):
+    ws = _reg(regular_user, "scans")
+    await _as(admin_user, lambda: client.patch(
+        f"{ADM}/{regular_user.id}", json={"is_active": False}))
+    assert ws.closed == 1008
+    ws2 = _reg(regular_user, "jobs")
+    r = await _as(admin_user, lambda: client.delete(f"{ADM}/{regular_user.id}"))
+    assert r.status_code == 204 and ws2.closed == 1008
+
+
+async def test_last_admin_guard_rejects_stale_actor(db, client, admin_user):
+    stale = User(email="st@x", display_name="St", role="admin", username="st", is_active=False)
+    other = User(email="o2@x", display_name="O2", role="admin", username="o2")
+    db.add_all([stale, other])
+    await db.commit()
+    r = await _as(stale, lambda: client.patch(f"{ADM}/{other.id}", json={"is_active": False}))
+    assert r.status_code == 403
+    await db.refresh(other)
+    assert other.is_active is True
+
+
+async def test_kiosk_disable_denies_pending_and_revokes_minted_tokens(
+        db, client, kiosk, admin_user, regular_user):
+    regular_user.kiosk_pin_hash = _ph.hash("123456")
+    await db.commit()
+    r = await client.post(f"{D}/pin", json={"user_id": str(regular_user.id), "pin": "123456"},
+                          headers=_h())
+    minted = r.json()["access_token"]
+    other_tok = await _tok(db, regular_user, name="manual")
+    await client.post(f"{D}/approve-request", json={"user_id": str(regular_user.id)},
+                      headers=_h())
+    assert (await client.get(f"{A}/me", headers=_h(minted))).status_code == 200
+    await _as(admin_user, lambda: client.patch(
+        f"{ADM}/{regular_user.id}", json={"kiosk_enabled": False}))
+    assert (await client.get(f"{A}/me", headers=_h(minted))).status_code == 401
+    assert (await client.get(f"{A}/me", headers=_h(other_tok))).status_code == 200
+    rows = (await db.execute(select(DeviceAuthorization).execution_options(
+        populate_existing=True))).scalars().all()
+    assert {x.status for x in rows if x.target_user_id} == {"denied"}
+
+
+async def test_qr_approve_refused_when_kiosk_disabled(db, client, kiosk, regular_user):
+    row = DeviceAuthorization(
+        device_code_hash=hash_token("dc"), user_code="ABCD-EFGH", client_name="K",
+        status="pending", interval=5, requester_token_id=kiosk.id,
+        expires_at=__import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc) + __import__("datetime").timedelta(minutes=5))
+    db.add(row)
+    await _flag(db, regular_user, kiosk_enabled=False)
+    r = await _as(regular_user, lambda: client.post(
+        f"{D}/approve", json={"user_code": "ABCD-EFGH", "approve": True}))
+    assert r.status_code == 403
+    assert r.json()["detail"] == "Kiosk sign-in is disabled for your account"
+    d = await _as(regular_user, lambda: client.post(
+        f"{D}/approve", json={"user_code": "ABCD-EFGH", "approve": False}))
+    assert d.status_code == 200

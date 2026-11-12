@@ -164,7 +164,9 @@ export interface paths {
          * @description Change a user's `role`, `is_active` and/or `kiosk_enabled` (admin only; omitted fields are
          *     unchanged). 400 when changing your own role or deactivating yourself, 409 when it would
          *     deactivate the last active admin. Deactivating a user also denies their pending kiosk
-         *     sign-in requests and blocks every session, token and WebSocket of theirs.
+         *     sign-in requests, closes their open WebSockets and blocks every session and token of theirs.
+         *     Turning off `is_active` or `kiosk_enabled` also denies pending kiosk requests and revokes
+         *     unexpired tokens minted by kiosk sign-in.
          */
         patch: operations["admin_update_user_role"];
         trace?: never;
@@ -182,7 +184,8 @@ export interface paths {
          *
          *     Exchanges the authorization code, creates or updates the user, maps the
          *     configured admin group to the admin role, starts a session and redirects
-         *     to `/`.
+         *     to `/`. A deactivated account is redirected to `/?login_error=deactivated` (303) without a
+         *     session.
          */
         get: operations["auth_oidc_callback"];
         put?: never;
@@ -207,7 +210,8 @@ export interface paths {
          * @description Approve or deny a pending device request as the signed-in user (session only; API-token
          *     callers get 403).
          *
-         *     404 when the code is unknown or expired, 409 when it was already decided. Limited to 20
+         *     404 when the code is unknown or expired, 403 `kiosk_disabled` when approving without kiosk
+         *     sign-in enabled for the account, 409 when it was already decided. Limited to 20
          *     requests/minute per user.
          */
         post: operations["auth_approve_device"];
@@ -7177,17 +7181,17 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Not authenticated or invalid credentials. */
-            401: {
+            /** @description Deactivated account; redirect to `/?login_error=deactivated`. */
+            303: {
                 headers: {
+                    /** @description Target URL. */
+                    Location?: string;
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
+                content?: never;
             };
-            /** @description The account is deactivated. */
-            403: {
+            /** @description Not authenticated or invalid credentials. */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };

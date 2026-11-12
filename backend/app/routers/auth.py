@@ -250,7 +250,8 @@ async def oidc_login(
         {302: {"description": "Signed in; redirect to the original page (or /).",
             "headers": _REDIRECT_HDR}},
         _UNAUTH,
-        error_group(403, "The account is deactivated."),
+        {303: {"description": "Deactivated account; redirect to `/?login_error=deactivated`.",
+            "headers": _REDIRECT_HDR}},
     ),
 )
 async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
@@ -258,7 +259,8 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
 
     Exchanges the authorization code, creates or updates the user, maps the
     configured admin group to the admin role, starts a session and redirects
-    to `/`.
+    to `/`. A deactivated account is redirected to `/?login_error=deactivated` (303) without a
+    session.
     """
     token = await oauth.papyrus.authorize_access_token(request)
     userinfo = token.get("userinfo")
@@ -287,10 +289,7 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
         role = "admin" if admin_group in groups else "user"
 
     if user is not None and not user.is_active:
-        raise HTTPException(
-            status_code=403,
-            detail="This account has been deactivated. Contact an administrator.",
-        )
+        return RedirectResponse(url="/?login_error=deactivated", status_code=303)
 
     if user is None:
         user = User(

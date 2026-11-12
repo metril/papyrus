@@ -74,6 +74,23 @@ describe('AppShell', () => {
       expect(screen.queryByText('Sign in with SSO')).not.toBeInTheDocument();
     });
 
+    it('shows a friendly message for ?login_error=deactivated and strips the param', async () => {
+      window.history.replaceState(null, '', '/?login_error=deactivated');
+      server.use(
+        http.get('/api/v1/auth/me', () => HttpResponse.json({ detail: 'Not authenticated' }, { status: 401 })),
+        http.get('/api/v1/auth/providers', () =>
+          HttpResponse.json({ local_enabled: false, oidc_enabled: true, admin_override: false }),
+        ),
+      );
+
+      const Wrapper = makeWrapper();
+      render(<Wrapper />);
+
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('deactivated'));
+      expect(window.location.search).toBe('');
+      window.history.replaceState(null, '', '/');
+    });
+
     it('shows the SSO button (not a hard redirect) when providers report OIDC as the only method', async () => {
       server.use(
         http.get('/api/v1/auth/me', () => HttpResponse.json({ detail: 'Not authenticated' }, { status: 401 })),
