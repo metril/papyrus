@@ -195,6 +195,39 @@ class ScanDoneMessage(BaseModel):
     data: ScanDoneData
 
 
+class KioskLoginRequestData(BaseModel):
+    id: str = Field(description="Request id (UUID).")
+    client_name: str
+    choices: list[int] = Field(description="Three two-digit numbers; one matches the kiosk.")
+    expires_at: datetime
+
+
+class KioskLoginResolvedData(BaseModel):
+    id: str = Field(description="Request id (UUID).")
+
+
+class KioskPinClearedData(BaseModel):
+    message: str
+
+
+class KioskLoginRequestMessage(BaseModel):
+    """`notifications` channel (this user's sockets only): a kiosk asks the user to sign in."""
+    type: Literal["kiosk_login_request"]
+    data: KioskLoginRequestData
+
+
+class KioskLoginResolvedMessage(BaseModel):
+    """`notifications` channel: a sign-in request was approved, denied, replaced or expired."""
+    type: Literal["kiosk_login_resolved"]
+    data: KioskLoginResolvedData
+
+
+class KioskPinClearedMessage(BaseModel):
+    """`notifications` channel: the user's kiosk PIN was removed after repeated failures."""
+    type: Literal["kiosk_pin_cleared"]
+    data: KioskPinClearedData
+
+
 JobsMessage = Annotated[
     JobCreatedMessage | JobUpdatedMessage | JobDeletedMessage, Field(discriminator="type")
 ]
@@ -208,4 +241,5 @@ WS_MESSAGE_MODELS: dict[str, list[type[BaseModel]]] = {
     "scans": [ScanCompletedMessage, ScanDeletedMessage],
     "printers": [PrinterStatusMessage],
     "scan:{scan_id}": [ScanProgressMessage, ScanDoneMessage],
+    "notifications": [KioskLoginRequestMessage, KioskLoginResolvedMessage, KioskPinClearedMessage],
 }

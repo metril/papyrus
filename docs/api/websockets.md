@@ -8,6 +8,7 @@ incrementally. Clients never send meaningful messages (the server just reads and
 | `/api/v1/ws/jobs` | `print` | `job_created`, `job_updated` (data: `PrintJobResponse`), `job_deleted` (`{id}`) |
 | `/api/v1/ws/scans` | `scan` | `scan_completed` (data: `ScanResponse`; also re-sent when a row changes), `scan_deleted` (`{scan_id}`) |
 | `/api/v1/ws/printers` | `print` | `printer_status` (printer `id`, `cups_name` plus the status fields) |
+| `/api/v1/ws/notifications` | any signed-in identity | per-user only: `kiosk_login_request` (`{id, client_name, choices, expires_at}`), `kiosk_login_resolved` (`{id}`), `kiosk_pin_cleared` (`{message}`) |
 | `/api/v1/ws/scans/{scan_id}` | `scan` | `scan_progress` (`{scan_id, progress}`), `scan_completed` (`{scan_id, page_count?}`) |
 
 Each message is `{"type": "...", "data": {...}}`. The schemas are components in `/openapi.json`:

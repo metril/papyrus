@@ -57,6 +57,29 @@ their phone (RFC 8628 style):
 4. Revoke early with `DELETE /auth/tokens/{token_id}`, authenticated by the minted token itself or
    by the kiosk's `device` token. Scans created this way can be listed with `GET /scans?mine=true`.
 
+#### Tap-to-approve and PIN sign-in
+
+Both are off by default (admin: Settings → Kiosks; `kiosk_approve_enabled`, `kiosk_pin_enabled`,
+`kiosk_pin_length` 4-12). Kiosk calls need the `device` permission.
+
+- `GET /auth/kiosk-login/config` returns `{approve, pin, pin_length}`; `GET /auth/kiosk-login/users`
+  returns `[{id, display_name, has_pin}]` (kiosk service users excluded).
+- `POST /auth/device/approve-request {user_id, client_name}` returns `{device_code, match_code,
+  expires_in, interval}`; show `match_code` (10-99) on the kiosk and poll `POST /auth/device/token`
+  exactly as above. The user's open browser sessions get a prompt (WebSocket `notifications`)
+  with three numbers and must tap `match_code`; a wrong pick or Deny gives `access_denied`.
+  403 when disabled, 404 unknown user, 429 above 5/minute per token; a new request for the same user
+  denies the previous one. Phone side (session only): `GET /auth/device/requests`,
+  `POST /auth/device/requests/{id}/approve {match_code}` (wrong number: request denied, 409
+  `match_code_mismatch`), `POST /auth/device/requests/{id}/deny`.
+- `POST /auth/device/pin {user_id, pin, client_name}` returns the same body as `/auth/device/token`.
+  401 `{detail, code: pin_incorrect, remaining}` wrong PIN; 423 `{detail, code: pin_locked,
+  retry_after}` (also `Retry-After`) after 5 failures (15 minutes); 403 when disabled, the user
+  is unknown or has no PIN (same response either way). 10 failures in a row remove the PIN and
+  notify the user (WebSocket `kiosk_pin_cleared`, plus email when SMTP is set).
+- Users manage their own PIN with `GET|PUT|DELETE /auth/me/kiosk-pin` (session only; digits only,
+  exactly `pin_length`). Changing `kiosk_pin_length` clears every PIN.
+
 ### Kiosks and address book
 
 Admin routes manage kiosk identities; each kiosk is a non-login service user with its own token.

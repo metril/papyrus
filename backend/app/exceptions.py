@@ -28,6 +28,9 @@ class PapyrusError(Exception):
 
     status_code: int = 500
     code: str = "internal_error"
+    # Extra top-level fields merged into the error envelope, and extra response headers.
+    extra: dict | None = None
+    headers: dict | None = None
 
     def __init__(self, detail: str):
         self.detail = detail
@@ -167,10 +170,12 @@ def register_exception_handlers(app) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content={
+                **(exc.extra or {}),
                 "detail": exc.detail,
                 "code": exc.code,
                 "request_id": _request_id(request),
             },
+            headers=exc.headers,
         )
 
     @app.exception_handler(StarletteHTTPException)
@@ -302,3 +307,33 @@ class ScanNotCancellableError(PapyrusError):
 
     status_code = 409
     code = "scan_not_cancellable"
+
+
+class MatchCodeMismatchError(PapyrusError):
+    """The user picked the wrong number on a tap-to-approve request (it is denied)."""
+
+    status_code = 409
+    code = "match_code_mismatch"
+
+
+class KioskPinIncorrectError(PapyrusError):
+    """Wrong kiosk PIN; ``remaining`` is the attempts left before the PIN locks."""
+
+    status_code = 401
+    code = "pin_incorrect"
+
+    def __init__(self, detail: str, remaining: int):
+        super().__init__(detail)
+        self.extra = {"remaining": remaining}
+
+
+class KioskPinLockedError(PapyrusError):
+    """The user's kiosk PIN is locked after repeated failures."""
+
+    status_code = 423
+    code = "pin_locked"
+
+    def __init__(self, detail: str, retry_after: int):
+        super().__init__(detail)
+        self.extra = {"retry_after": retry_after}
+        self.headers = {"Retry-After": str(retry_after)}

@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_docs import AUTH_ERRORS, error_group, std_responses
@@ -90,6 +90,10 @@ CONFIGURABLE: dict[str, tuple[type, bool]] = {
     "oidc_groups_claim": (str, False),
     # Local auth
     "local_auth_enabled": (bool, False),
+    # Kiosk sign-in (routers/kiosk_login.py, routers/device.py)
+    "kiosk_approve_enabled": (bool, False),
+    "kiosk_pin_enabled": (bool, False),
+    "kiosk_pin_length": (int, False),
 }
 
 _PLACEHOLDER = "*set*"
@@ -123,6 +127,9 @@ DEFAULTS: dict[str, str] = {
     "public_api_docs": "false",
     "trusted_proxies": "127.0.0.1/32,::1/128,172.16.0.0/12",
     "local_auth_enabled": "true",
+    "kiosk_approve_enabled": "false",
+    "kiosk_pin_enabled": "false",
+    "kiosk_pin_length": "6",
     "oidc_enabled": "false",
     "oidc_scopes": "openid email profile",
     "oidc_groups_claim": "groups",
@@ -166,6 +173,9 @@ def _coerce_for_storage(key: str, value: Any, type_: type) -> str:
             raise HTTPException(status_code=400, detail=f"Setting {key} must be an integer")
         if key in _POSITIVE_INT_KEYS and number < 1:
             raise HTTPException(status_code=400, detail=f"Setting {key} must be at least 1")
+        if key == "kiosk_pin_length" and not 4 <= number <= 12:
+            raise HTTPException(
+                status_code=400, detail=f"Setting {key} must be between 4 and 12")
         return str(number)
     if key == "trusted_proxies":
         import ipaddress
@@ -298,13 +308,29 @@ async def update_settings(
 
     Admin only. Only keys the server knows are accepted. An empty string or
     null clears a setting back to its default; sending `*set*` for a secret
-    leaves it unchanged. Side effects: invalidates the settings cache, writes
+    leaves it unchanged. Changing `kiosk_pin_length` clears every user's kiosk PIN.
+    Side effects: invalidates the settings cache, writes
     a `settings.update` audit entry and fires the `settings.update` webhook
     (listing the changed keys, never values) when anything changed.
     """
-    for key, value in updates.items():
+    for key in updates:
         if key not in CONFIGURABLE:
             raise HTTPException(status_code=400, detail=f"Unknown setting: {key}")
+
+    pins_cleared = False
+    if "kiosk_pin_length" in updates:
+        raw = updates["kiosk_pin_length"]
+        new_len = int(DEFAULTS["kiosk_pin_length"]) if raw is None or raw == "" else int(
+            _coerce_for_storage("kiosk_pin_length", raw, int))
+        row = await db.get(AppConfig, "kiosk_pin_length")
+        old_len = safe_int_setting(row.value if row else None, int(DEFAULTS["kiosk_pin_length"]))
+        if new_len != old_len:
+            await db.execute(update(User).where(User.kiosk_pin_hash.is_not(None)).values(
+                kiosk_pin_hash=None, kiosk_pin_failures=0, kiosk_pin_consecutive_failures=0,
+                kiosk_pin_locked_until=None))
+            pins_cleared = True
+
+    for key, value in updates.items():
         _type, encrypted = CONFIGURABLE[key]
 
         if encrypted:
@@ -342,6 +368,7 @@ async def update_settings(
     if changed_keys:
         await log_event(db, "settings.update", "settings", detail={
             "keys": changed_keys,
+            **({"kiosk_pins_cleared": True} if pins_cleared else {}),
         }, user_id=_user.id)
         await db.commit()
         await dispatch_webhook(db, "settings.update", {"keys": changed_keys})

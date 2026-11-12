@@ -34,6 +34,18 @@ class ConnectionManager:
         `owner_id` (None = network scan, sessions only)."""
         await self.broadcast("scans", message, owner_id=owner_id)
 
+    async def broadcast_user(self, user_id, message: dict) -> None:
+        """Send a `notifications` message only to sockets authenticated as `user_id`."""
+        conns = [
+            ws for ws in list(self.active_connections.get("notifications", []))
+            if (ident := self._identities.get(ws)) is not None and ident.user.id == user_id
+        ]
+        results = await asyncio.gather(
+            *(ws.send_json(message) for ws in conns), return_exceptions=True)
+        for ws, result in zip(conns, results):
+            if isinstance(result, Exception):
+                self.disconnect("notifications", ws)
+
     async def broadcast(self, channel: str, message: dict, owner_id=_UNSET):
         # Snapshot the connection list so concurrent disconnects during the
         # gather don't mutate what we're iterating.

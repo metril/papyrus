@@ -27,9 +27,11 @@ import BackupRestoreCard from '../components/settings/BackupRestoreCard';
 import ApiTokensCard from '../components/settings/ApiTokensCard';
 import KiosksCard from '../components/kiosks/KiosksCard';
 import ContactsCard from '../components/kiosks/ContactsCard';
+import KioskLoginCard from '../components/kiosks/KioskLoginCard';
+import KioskPinCard from '../components/kiosks/KioskPinCard';
 import { useAuthStore } from '../store/authStore';
 
-const TABS = [['general', 'General'], ['kiosks', 'Kiosks'], ['contacts', 'Address book']] as const;
+const TABS = [['general', 'General'], ['kiosks', 'Kiosks'], ['contacts', 'Address book'], ['account', 'Account']] as const;
 type Tab = (typeof TABS)[number][0];
 
 interface ApiErrorResponse {
@@ -69,7 +71,7 @@ export default function SettingsPage() {
   const requested = searchParams.get('tab');
   // General and Kiosks are admin-only; everyone has Address book. Unknown or
   // disallowed ids fall back to the first visible tab.
-  const visibleTabs = TABS.filter(([id]) => isAdmin || id === 'contacts');
+  const visibleTabs = TABS.filter(([id]) => isAdmin || id === 'contacts' || id === 'account');
   const tab: Tab = visibleTabs.find(([id]) => id === requested)?.[0] ?? visibleTabs[0][0];
   const setTab = (id: Tab) =>
     setSearchParams(id === 'general' ? {} : { tab: id }, { replace: true });
@@ -143,8 +145,12 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      {tab === 'kiosks' && isAdmin && <KiosksCard />}
+      {tab === 'kiosks' && isAdmin && (<>
+        <KiosksCard />
+        <KioskLoginCard />
+      </>)}
       {tab === 'contacts' && <ContactsCard />}
+      {tab === 'account' && <KioskPinCard />}
       {tab === 'general' && (<>
 
       {isLoading && (

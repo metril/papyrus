@@ -32,6 +32,16 @@ POST /auth/device/code
 GET /auth/device/{user_code}
 POST /auth/device/approve
 POST /auth/device/token
+POST /auth/device/approve-request
+GET /auth/device/requests
+POST /auth/device/requests/{request_id}/approve
+POST /auth/device/requests/{request_id}/deny
+POST /auth/device/pin
+GET /auth/kiosk-login/config
+GET /auth/kiosk-login/users
+GET /auth/me/kiosk-pin
+PUT /auth/me/kiosk-pin
+DELETE /auth/me/kiosk-pin
 POST /auth/logout
 GET /auth/me
 GET /auth/tokens

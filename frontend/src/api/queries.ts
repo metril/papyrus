@@ -9,7 +9,7 @@ import { listProviders } from './cloud';
 import { listWebhooks, listWebhookEvents } from './webhooks';
 import { listApiTokens } from './tokens';
 import { listKiosks, listContacts } from './kiosks';
-import { lookupDeviceCode } from './device';
+import { lookupDeviceCode, listDeviceRequests, getKioskPinStatus } from './device';
 import { getDashboardStats, listUsers } from './admin';
 
 /**
@@ -57,6 +57,8 @@ export const queryKeys = {
   webhooks: ['webhooks'] as const,
   webhookEvents: ['webhookEvents'] as const,
   apiTokens: ['apiTokens'] as const,
+  deviceRequests: ['deviceRequests'] as const,
+  kioskPin: ['kioskPin'] as const,
   deviceCode: (code: string) => ['deviceCode', code] as const,
   kiosks: ['kiosks'] as const,
   contacts: ['contacts'] as const,
@@ -233,4 +235,18 @@ export function useKiosks() {
 /** The shared address book (readable by every signed-in user). */
 export function useContacts() {
   return useQuery({ queryKey: queryKeys.contacts, queryFn: () => listContacts() });
+}
+
+/** Tap-to-approve sign-in requests waiting on the signed-in user. Kept live by the
+ * `notifications` channel in useRealtimeBridge. */
+export function useDeviceRequests() {
+  return useQuery({
+    queryKey: queryKeys.deviceRequests,
+    queryFn: () => listDeviceRequests(),
+    meta: { suppressGlobalError: true },
+  });
+}
+
+export function useKioskPinStatus() {
+  return useQuery({ queryKey: queryKeys.kioskPin, queryFn: () => getKioskPinStatus() });
 }

@@ -30,6 +30,7 @@ from app.routers import (
     email,
     escl,
     jobs,
+    kiosk_login,
     kiosks,
     printer,
     printers,
@@ -450,7 +451,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Papyrus",
     description="Web-based print and scan server",
-    version="1.8.0",
+    version="1.9.0",
     lifespan=lifespan,
     openapi_tags=TAGS_METADATA,
     contact={"name": "Papyrus", "url": "https://github.com/metril/papyrus"},
@@ -535,6 +536,7 @@ V1 = "/api/v1"
 app.include_router(system.router, prefix=f"{V1}/system", tags=["system"])
 app.include_router(system.ws_router, prefix=f"{V1}/ws", tags=["system"])
 app.include_router(auth.router, prefix=f"{V1}/auth", tags=["auth"])
+app.include_router(kiosk_login.router, prefix=f"{V1}/auth", tags=["auth"])
 app.include_router(device.router, prefix=f"{V1}/auth/device", tags=["auth"])
 app.include_router(printer.router, prefix=f"{V1}/printers/default", tags=["printer"])
 app.include_router(jobs.router, prefix=f"{V1}/jobs", tags=["jobs"])

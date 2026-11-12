@@ -192,7 +192,7 @@ describe('SettingsPage', () => {
       useAuthStore.setState({ user: plainUser });
       render(<SettingsPage />, { wrapper: makeWrapper('/settings?tab=kiosks') });
       expect(await screen.findByText('Ann')).toBeInTheDocument();
-      expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Address book']);
+      expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Address book', 'Account']);
       expect(screen.queryByText('Loading settings...')).not.toBeInTheDocument();
     });
   });

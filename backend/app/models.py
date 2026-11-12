@@ -34,6 +34,16 @@ class User(Base):
     username: Mapped[str | None] = mapped_column(String(100), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Kiosk PIN sign-in (migration 019). `kiosk_pin_failures` counts since the last lock,
+    # `kiosk_pin_consecutive_failures` since the last success (lock expiry doesn't reset it).
+    kiosk_pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    kiosk_pin_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    kiosk_pin_consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    kiosk_pin_locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     api_tokens: Mapped[list["APIToken"]] = relationship(
         back_populates="user", cascade="all, delete"
@@ -78,6 +88,13 @@ class DeviceAuthorization(Base):
     minted_token_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("api_tokens.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Tap-to-approve (migration 019): bound to one user, answered by picking `match_code`
+    # among `choices`. NULL target_user_id = a QR/user-code request.
+    target_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    match_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    choices: Mapped[list | None] = mapped_column(JSON, nullable=True)
     interval: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
