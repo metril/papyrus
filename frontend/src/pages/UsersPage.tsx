@@ -10,7 +10,8 @@ import ErrorState from '../components/common/ErrorState';
 import { useToast } from '../hooks/useToast';
 import { useAuthStore } from '../store/authStore';
 import { useUsers, queryKeys } from '../api/queries';
-import { updateUserRole, deleteUser } from '../api/admin';
+import Toggle from '../components/common/Toggle';
+import { updateUserRole, updateUser, deleteUser } from '../api/admin';
 
 /** Mirrors the pre-Query users-list failure copy. */
 function describeUsersLoadError(error: unknown): string {
@@ -37,6 +38,18 @@ export default function UsersPage() {
       toast.show('Role updated', 'success');
     },
     onError: () => toast.show('Failed to update role'),
+  });
+
+  const flagMutation = useMutation({
+    mutationFn: ({ userId, patch }: { userId: string; patch: { is_active?: boolean; kiosk_enabled?: boolean } }) =>
+      updateUser(userId, patch),
+    meta: { suppressGlobalError: true },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.users }),
+    onError: (err) => {
+      const detail = axios.isAxiosError(err) ? err.response?.data?.detail : undefined;
+      toast.show(typeof detail === 'string' ? detail : 'Failed to update user');
+      queryClient.invalidateQueries({ queryKey: queryKeys.users });
+    },
   });
 
   const deleteUserMutation = useMutation({
@@ -87,12 +100,13 @@ export default function UsersPage() {
               const isSelf = u.id === currentUser?.id;
               return (
                 <div key={u.id} className="flex flex-col gap-3 rounded-lg border border-gray-200 p-4 dark:border-gray-700 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="min-w-0 flex-1">
+                  <div className={`min-w-0 flex-1 ${u.is_active ? '' : 'opacity-50'}`} data-inactive={!u.is_active}>
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">{u.display_name}</span>
                       <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium ${u.role === 'admin' ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'}`}>
                         {u.role}
                       </span>
+                      {!u.is_active && <span className="text-xs px-1.5 py-0.5 rounded-full font-medium bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300">inactive</span>}
                       {isSelf && <span className="text-xs text-gray-400 dark:text-gray-500">(you)</span>}
                     </div>
                     <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">{u.email}</div>
@@ -101,7 +115,19 @@ export default function UsersPage() {
                       {u.created_at && ` · Joined: ${new Date(u.created_at).toLocaleDateString()}`}
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2 sm:ml-4 sm:shrink-0">
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2 sm:ml-4 sm:shrink-0">
+                    <Toggle
+                      label="Active"
+                      checked={u.is_active}
+                      disabled={isSelf || flagMutation.isPending}
+                      onChange={(v) => flagMutation.mutate({ userId: u.id, patch: { is_active: v } })}
+                    />
+                    <Toggle
+                      label="Kiosk"
+                      checked={u.kiosk_enabled}
+                      disabled={flagMutation.isPending}
+                      onChange={(v) => flagMutation.mutate({ userId: u.id, patch: { kiosk_enabled: v } })}
+                    />
                     {!isSelf && (
                       <>
                         <select

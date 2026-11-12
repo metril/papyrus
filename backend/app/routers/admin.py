@@ -5,11 +5,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import Date, cast, func, select
+from sqlalchemy import Date, cast, delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api_docs import (
     AUTH_ERRORS,
+    CONFLICT,
     NOT_FOUND,
     error_group,
     file_response,
@@ -17,7 +18,8 @@ from app.api_docs import (
 )
 from app.auth.dependencies import require_admin
 from app.database import get_db
-from app.models import AppConfig, AuditEntry, PrintJob, ScanJob, User
+from app.exceptions import ConflictError
+from app.models import APIToken, AppConfig, AuditEntry, DeviceAuthorization, PrintJob, ScanJob, User
 from app.schemas import (
     AdminUserResponse,
     AuditEntryResponse,
@@ -30,7 +32,10 @@ from app.schemas import (
     UserRoleUpdate,
 )
 from app.services import settings_cache
+from app.services.audit_service import log_event
+from app.services.kiosk_login import notify as kiosk_notify
 from app.services.user_deletion import reassign_jobs
+from app.services.ws_manager import ws_manager
 
 router = APIRouter()
 
@@ -401,6 +406,8 @@ async def list_users(
             "email": u.email,
             "display_name": u.display_name,
             "role": u.role,
+            "is_active": u.is_active,
+            "kiosk_enabled": u.kiosk_enabled,
             "created_at": u.created_at.isoformat() if u.created_at else None,
             "last_login": u.last_login.isoformat() if u.last_login else None,
         }
@@ -410,9 +417,9 @@ async def list_users(
 
 @router.patch(
     "/users/{user_id}",
-    summary="Change a user's role",
+    summary="Update a user",
     response_model=UserRoleResult,
-    responses=std_responses(AUTH_ERRORS, NOT_FOUND, _BAD),
+    responses=std_responses(AUTH_ERRORS, NOT_FOUND, CONFLICT, _BAD),
 )
 async def update_user_role(
     user_id: uuid_mod.UUID,
@@ -420,15 +427,78 @@ async def update_user_role(
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
-    """Set a user's role to `user` or `admin` (admin only). 400 when targeting yourself."""
+    """Change a user's `role`, `is_active` and/or `kiosk_enabled` (admin only; omitted fields are
+    unchanged). 400 when changing your own role or deactivating yourself, 409 when it would
+    deactivate the last active admin. Deactivating a user also denies their pending kiosk
+    sign-in requests, closes their open WebSockets and blocks every session and token of theirs.
+    Turning off `is_active` or `kiosk_enabled` also denies pending kiosk requests and revokes
+    unexpired tokens minted by kiosk sign-in."""
     target = await db.get(User, user_id)
     if not target:
         raise HTTPException(status_code=404, detail="User not found")
-    if target.id == _user.id:
+    if body.role is not None and target.id == _user.id and body.role != target.role:
         raise HTTPException(status_code=400, detail="Cannot change your own role")
-    target.role = body.role
+    if body.is_active is False and target.is_active:
+        if target.id == _user.id:
+            raise HTTPException(status_code=400, detail="Cannot deactivate yourself")
+        final_role = body.role if body.role is not None else target.role
+        if target.role == "admin" or final_role == "admin":
+            # Serialise concurrent deactivations: lock every active admin (id order), recount.
+            admins = (await db.execute(
+                select(User).where(User.role == "admin", User.is_active.is_(True))
+                .order_by(User.id).with_for_update()
+                .execution_options(populate_existing=True))).scalars().all()
+            others = [a for a in admins if a.id != target.id]
+            if not others:
+                raise ConflictError("Cannot deactivate the last active admin")
+            if _user.id not in {a.id for a in others}:
+                raise HTTPException(status_code=403, detail="Admin access required")
+    target = (await db.execute(
+        select(User).where(User.id == user_id).with_for_update()
+        .execution_options(populate_existing=True))).scalar_one()
+    deactivating = body.is_active is False and target.is_active
+    blocking = deactivating or (body.kiosk_enabled is False and target.kiosk_enabled)
+
+    changes: dict[str, Any] = {}
+    if body.role is not None and body.role != target.role:
+        changes["role"] = body.role
+    if body.is_active is not None and body.is_active != target.is_active:
+        changes["is_active"] = body.is_active
+    if body.kiosk_enabled is not None and body.kiosk_enabled != target.kiosk_enabled:
+        changes["kiosk_enabled"] = body.kiosk_enabled
+    denied: list[uuid_mod.UUID] = []
+    for field, value in changes.items():
+        setattr(target, field, value)
+    if blocking:
+        denied = list((await db.execute(
+            update(DeviceAuthorization)
+            .where(DeviceAuthorization.target_user_id == target.id,
+                   DeviceAuthorization.status == "pending")
+            .values(status="denied").returning(DeviceAuthorization.id))).scalars().all())
+        minted = select(DeviceAuthorization.minted_token_id).where(
+            DeviceAuthorization.minted_token_id.is_not(None))
+        await db.execute(
+            delete(APIToken).where(
+                APIToken.user_id == target.id, APIToken.id.in_(minted),
+                or_(APIToken.expires_at.is_(None),
+                    APIToken.expires_at > datetime.now(timezone.utc)))
+            .execution_options(synchronize_session=False))
+    audit_actions = {
+        "role": "user.role_change",
+        "is_active": "user.activate" if changes.get("is_active") else "user.deactivate",
+        "kiosk_enabled": "user.kiosk_enable" if changes.get("kiosk_enabled")
+        else "user.kiosk_disable",
+    }
+    for field, value in changes.items():
+        await log_event(db, audit_actions[field], "user", str(target.id), user_id=_user.id,
+                        detail={field: value, "email": target.email})
     await db.commit()
-    return {"id": str(target.id), "role": target.role}
+    for req_id in denied:
+        await kiosk_notify(target.id, "kiosk_login_resolved", {"id": str(req_id)})
+    if deactivating:
+        await ws_manager.close_user(target.id)
+    return {"id": str(target.id), "role": target.role, "is_active": target.is_active,
+            "kiosk_enabled": target.kiosk_enabled}
 
 
 @router.delete(
@@ -452,3 +522,4 @@ async def delete_user(
     await reassign_jobs(db, target.id, _user.id)
     await db.delete(target)
     await db.commit()
+    await ws_manager.close_user(user_id)

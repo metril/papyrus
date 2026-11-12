@@ -309,6 +309,13 @@ class ScanNotCancellableError(PapyrusError):
     code = "scan_not_cancellable"
 
 
+class KioskDisabledError(PapyrusError):
+    """Kiosk sign-in is switched off for this user's account."""
+
+    status_code = 403
+    code = "kiosk_disabled"
+
+
 class MatchCodeMismatchError(PapyrusError):
     """The user picked the wrong number on a tap-to-approve request (it is denied)."""
 

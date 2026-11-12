@@ -33,6 +33,10 @@ class AdminUserResponse(BaseModel):
     email: str = Field(description="Email address.", examples=["alice@example.com"])
     display_name: str = Field(description="Display name.", examples=["Alice Example"])
     role: str = Field(description="Role: 'user' or 'admin'.", examples=["user"])
+    is_active: bool = Field(description="False blocks all sign-in and API access.",
+                            examples=[True])
+    kiosk_enabled: bool = Field(description="Whether the user may sign in at a kiosk.",
+                                examples=[True])
     created_at: str | None = Field(description="ISO 8601 creation time.", examples=[_TS])
     last_login: str | None = Field(
         description="ISO 8601 time of the last login, null if never.", examples=[_TS]
@@ -40,14 +44,20 @@ class AdminUserResponse(BaseModel):
 
 
 class UserRoleUpdate(BaseModel):
-    role: str = Field(pattern=r"^(user|admin)$", description="New role.", examples=["admin"])
+    role: str | None = Field(default=None, pattern=r"^(user|admin)$", description="New role.",
+                             examples=["admin"])
+    is_active: bool | None = Field(default=None, description="Activate or deactivate the user.")
+    kiosk_enabled: bool | None = Field(default=None,
+                                       description="Allow or forbid kiosk sign-in.")
 
 
 class UserRoleResult(BaseModel):
     id: str = Field(
         description="User id (UUID).", examples=["3f2b8c1e-5a7d-4b9e-8c11-2d6f0a9e4b77"]
     )
-    role: str = Field(description="The user's new role.", examples=["admin"])
+    role: str = Field(description="The user's role.", examples=["admin"])
+    is_active: bool = Field(description="Whether the user is active.", examples=[True])
+    kiosk_enabled: bool = Field(description="Whether kiosk sign-in is allowed.", examples=[True])
 
 
 class AuthProviders(BaseModel):

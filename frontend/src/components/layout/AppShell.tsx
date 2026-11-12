@@ -1,5 +1,6 @@
 import { Suspense, useEffect, useState } from 'react';
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
+import axios from 'axios';
 import api from '../../api/client';
 import { useThemeStore } from '../../store/themeStore';
 import { useAuthStore } from '../../store/authStore';
@@ -107,8 +108,22 @@ function LoginScreen() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [notice] = useState(() => {
+    const code = new URLSearchParams(window.location.search).get('login_error');
+    return code === 'deactivated' ? 'This account has been deactivated. Contact an administrator.' : '';
+  });
   const [loggingIn, setLoggingIn] = useState(false);
   const fetchUser = useAuthStore((s) => s.fetchUser);
+
+  useEffect(() => {
+    // Strip the one-shot OIDC error param so a reload doesn't repeat the message.
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('login_error')) {
+      params.delete('login_error');
+      const qs = params.toString();
+      window.history.replaceState(null, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -123,8 +138,9 @@ function LoginScreen() {
     try {
       await api.post('/auth/local-login', { username, password });
       await fetchUser();
-    } catch {
-      setError('Invalid username or password');
+    } catch (err) {
+      const detail = axios.isAxiosError(err) && err.response?.status === 403 ? err.response.data?.detail : undefined;
+      setError(typeof detail === 'string' ? detail : 'Invalid username or password');
     } finally {
       setLoggingIn(false);
     }
@@ -144,6 +160,8 @@ function LoginScreen() {
           <h1 className="text-2xl font-semibold text-gray-900 dark:text-gray-100 tracking-tight">Papyrus</h1>
           <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">Print & Scan Server</p>
         </div>
+
+        {notice && <p role="alert" className="text-sm text-red-600 dark:text-red-400 text-center">{notice}</p>}
 
         {(providers.local_enabled || providers.admin_override) && (
           <form onSubmit={handleLocalLogin} className="space-y-3">

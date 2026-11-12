@@ -78,6 +78,8 @@ export interface UserDetail {
   email: string;
   display_name: string;
   role: string;
+  is_active: boolean;
+  kiosk_enabled: boolean;
   created_at: string | null;
   last_login: string | null;
 }
@@ -89,6 +91,14 @@ export async function listUsers(): Promise<UserDetail[]> {
 
 export async function updateUserRole(userId: string, role: string): Promise<UserDetail> {
   const { data } = await api.patch(`/admin/users/${userId}`, { role });
+  return data;
+}
+
+export async function updateUser(
+  userId: string,
+  patch: { role?: string; is_active?: boolean; kiosk_enabled?: boolean },
+): Promise<{ id: string; role: string; is_active: boolean; kiosk_enabled: boolean }> {
+  const { data } = await api.patch(`/admin/users/${userId}`, patch);
   return data;
 }
 

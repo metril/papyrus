@@ -1540,7 +1540,7 @@ async def scan_progress_ws(websocket: WebSocket, scan_id: str):
         await websocket.close(code=1008)
         return
     channel = f"scan:{scan_id}"
-    await ws_manager.connect(channel, websocket)
+    await ws_manager.connect(channel, websocket, identity)
     try:
         while True:
             await websocket.receive_text()

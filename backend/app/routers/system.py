@@ -204,7 +204,7 @@ async def jobs_ws(websocket: WebSocket):
     if identity is None or not has_ws_permission(identity, "print"):
         await websocket.close(code=1008)
         return
-    await ws_manager.connect("jobs", websocket)
+    await ws_manager.connect("jobs", websocket, identity)
     try:
         while True:
             await websocket.receive_text()
@@ -238,7 +238,7 @@ async def printers_ws(websocket: WebSocket):
     if identity is None or not has_ws_permission(identity, "print"):
         await websocket.close(code=1008)
         return
-    await ws_manager.connect("printers", websocket)
+    await ws_manager.connect("printers", websocket, identity)
     try:
         while True:
             await websocket.receive_text()

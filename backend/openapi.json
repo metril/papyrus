@@ -246,6 +246,22 @@
             "title": "Id",
             "type": "string"
           },
+          "is_active": {
+            "description": "False blocks all sign-in and API access.",
+            "examples": [
+              true
+            ],
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "kiosk_enabled": {
+            "description": "Whether the user may sign in at a kiosk.",
+            "examples": [
+              true
+            ],
+            "title": "Kiosk Enabled",
+            "type": "boolean"
+          },
           "last_login": {
             "anyOf": [
               {
@@ -275,6 +291,8 @@
           "email",
           "display_name",
           "role",
+          "is_active",
+          "kiosk_enabled",
           "created_at",
           "last_login"
         ],
@@ -6053,8 +6071,24 @@
             "title": "Id",
             "type": "string"
           },
+          "is_active": {
+            "description": "Whether the user is active.",
+            "examples": [
+              true
+            ],
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "kiosk_enabled": {
+            "description": "Whether kiosk sign-in is allowed.",
+            "examples": [
+              true
+            ],
+            "title": "Kiosk Enabled",
+            "type": "boolean"
+          },
           "role": {
-            "description": "The user's new role.",
+            "description": "The user's role.",
             "examples": [
               "admin"
             ],
@@ -6064,26 +6098,56 @@
         },
         "required": [
           "id",
-          "role"
+          "role",
+          "is_active",
+          "kiosk_enabled"
         ],
         "title": "UserRoleResult",
         "type": "object"
       },
       "UserRoleUpdate": {
         "properties": {
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Activate or deactivate the user.",
+            "title": "Is Active"
+          },
+          "kiosk_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Allow or forbid kiosk sign-in.",
+            "title": "Kiosk Enabled"
+          },
           "role": {
+            "anyOf": [
+              {
+                "pattern": "^(user|admin)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "description": "New role.",
             "examples": [
               "admin"
             ],
-            "pattern": "^(user|admin)$",
-            "title": "Role",
-            "type": "string"
+            "title": "Role"
           }
         },
-        "required": [
-          "role"
-        ],
         "title": "UserRoleUpdate",
         "type": "object"
       },
@@ -6636,7 +6700,7 @@
     },
     "description": "Web-based print and scan server",
     "title": "Papyrus",
-    "version": "1.9.0"
+    "version": "1.10.0"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -7256,7 +7320,7 @@
         ]
       },
       "patch": {
-        "description": "Set a user's role to `user` or `admin` (admin only). 400 when targeting yourself.",
+        "description": "Change a user's `role`, `is_active` and/or `kiosk_enabled` (admin only; omitted fields are\nunchanged). 400 when changing your own role or deactivating yourself, 409 when it would\ndeactivate the last active admin. Deactivating a user also denies their pending kiosk\nsign-in requests, closes their open WebSockets and blocks every session and token of theirs.\nTurning off `is_active` or `kiosk_enabled` also denies pending kiosk requests and revokes\nunexpired tokens minted by kiosk sign-in.",
         "operationId": "admin_update_user_role",
         "parameters": [
           {
@@ -7331,6 +7395,16 @@
             },
             "description": "Resource not found."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflicts with the current state of the resource."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -7368,7 +7442,7 @@
             "APIKeyCookie": []
           }
         ],
-        "summary": "Change a user's role",
+        "summary": "Update a user",
         "tags": [
           "admin"
         ]
@@ -7376,11 +7450,22 @@
     },
     "/api/v1/auth/callback": {
       "get": {
-        "description": "Complete the OIDC flow (redirect target registered at the provider; browser use only).\n\nExchanges the authorization code, creates or updates the user, maps the\nconfigured admin group to the admin role, starts a session and redirects\nto `/`.",
+        "description": "Complete the OIDC flow (redirect target registered at the provider; browser use only).\n\nExchanges the authorization code, creates or updates the user, maps the\nconfigured admin group to the admin role, starts a session and redirects\nto `/`. A deactivated account is redirected to `/?login_error=deactivated` (303) without a\nsession.",
         "operationId": "auth_oidc_callback",
         "responses": {
           "302": {
             "description": "Signed in; redirect to the original page (or /).",
+            "headers": {
+              "Location": {
+                "description": "Target URL.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "303": {
+            "description": "Deactivated account; redirect to `/?login_error=deactivated`.",
             "headers": {
               "Location": {
                 "description": "Target URL.",
@@ -7427,7 +7512,7 @@
     },
     "/api/v1/auth/device/approve": {
       "post": {
-        "description": "Approve or deny a pending device request as the signed-in user (session only; API-token\ncallers get 403).\n\n404 when the code is unknown or expired, 409 when it was already decided. Limited to 20\nrequests/minute per user.",
+        "description": "Approve or deny a pending device request as the signed-in user (session only; API-token\ncallers get 403).\n\n404 when the code is unknown or expired, 403 `kiosk_disabled` when approving without kiosk\nsign-in enabled for the account, 409 when it was already decided. Limited to 20\nrequests/minute per user.",
         "operationId": "auth_approve_device",
         "requestBody": {
           "content": {
@@ -8506,7 +8591,7 @@
                 }
               }
             },
-            "description": "Local login is disabled."
+            "description": "Local login is disabled, or the account is deactivated."
           },
           "422": {
             "content": {

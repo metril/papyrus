@@ -78,7 +78,7 @@ async def authenticate_websocket(ws: WebSocket, db: AsyncSession) -> WebSocketId
             return None
         result = await db.execute(select(User).where(User.id == token.user_id))
         user = result.scalar_one_or_none()
-        if user is None:
+        if user is None or not user.is_active:
             return None
         return WebSocketIdentity(user=user, permissions=token.permissions)
 
@@ -90,7 +90,7 @@ async def authenticate_websocket(ws: WebSocket, db: AsyncSession) -> WebSocketId
             return None
         result = await db.execute(select(User).where(User.id == session_uuid))
         user = result.scalar_one_or_none()
-        if user is None:
+        if user is None or not user.is_active:
             return None
         return WebSocketIdentity(user=user, permissions=None)
 

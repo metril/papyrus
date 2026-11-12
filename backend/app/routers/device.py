@@ -29,6 +29,7 @@ from app.exceptions import (
     ConflictError,
     DeviceGrantError,
     ExternalServiceError,
+    KioskDisabledError,
     KioskPinIncorrectError,
     KioskPinLockedError,
     MatchCodeMismatchError,
@@ -288,6 +289,12 @@ async def approve_request_match(
     _require_session(request)
     _limit(_approve_limiter, str(user.id), 20)
     row = await _own_pending(db, user, request_id)
+    if await kl.get_eligible_user(db, user.id, lock=True) is None:
+        # Kiosk sign-in was switched off for this user after the request was made.
+        await _decide(db, row, user, False)
+        await db.commit()
+        await kl.notify(user.id, "kiosk_login_resolved", {"id": str(row.id)})
+        raise NotFoundError("Request not found or expired")
     ok = data.match_code == row.match_code
     await _decide(db, row, user, ok)
     await db.commit()
@@ -528,12 +535,15 @@ async def approve_device(
     """Approve or deny a pending device request as the signed-in user (session only; API-token
     callers get 403).
 
-    404 when the code is unknown or expired, 409 when it was already decided. Limited to 20
+    404 when the code is unknown or expired, 403 `kiosk_disabled` when approving without kiosk
+    sign-in enabled for the account, 409 when it was already decided. Limited to 20
     requests/minute per user.
     """
     _require_session(request)
     _limit(_approve_limiter, str(user.id), 20)
     row = await _find_by_user_code(db, data.user_code)
+    if data.approve and await kl.get_eligible_user(db, user.id) is None:
+        raise KioskDisabledError("Kiosk sign-in is disabled for your account")
     new_status = await _decide(db, row, user, data.approve)
     await db.commit()
     return DeviceApproveResponse(status=new_status)
@@ -604,7 +614,12 @@ async def poll_device_token(
         await db.rollback()
         raise DeviceGrantError("invalid_grant", "Invalid device code")
     approved_user_id, client_name = claimed_row
-    owner = (await db.execute(select(User).where(User.id == approved_user_id))).scalar_one()
+    owner = await kl.get_eligible_user(db, approved_user_id, lock=True)
+    if owner is None:
+        # Deactivated or kiosk sign-in switched off since approval: never mint.
+        row.status = "denied"
+        await db.commit()
+        raise DeviceGrantError("access_denied", "The request was denied")
 
     out = await _mint_token(db, owner, client_name, row.id, now)
     await db.commit()
