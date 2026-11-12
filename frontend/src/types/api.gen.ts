@@ -214,6 +214,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/device/approve-request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask a user to approve a kiosk sign-in
+         * @description Start a tap-to-approve sign-in for `user_id` (API token with `device` only).
+         *
+         *     Returns a `device_code` to poll `POST /auth/device/token` with and a two-digit `match_code`
+         *     to show on the kiosk; the user sees three numbers on their phone and must tap that one.
+         *     403 when disabled by the admin, 404 for an unknown user, 429 above 5 requests/minute per
+         *     token. A user has one pending request at a time: a new one denies the old.
+         */
+        post: operations["auth_approve_request"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/device/code": {
         parameters: {
             query?: never;
@@ -232,6 +257,93 @@ export interface paths {
          *     `POST /auth/device/token` every `interval` seconds. Limited to 10 requests/minute per token.
          */
         post: operations["auth_request_device_code"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/device/pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sign in with a kiosk PIN
+         * @description Exchange a user's kiosk PIN for the same 15-minute token as `POST /auth/device/token`
+         *     (API token with `device` only).
+         *
+         *     5 wrong PINs lock that user's PIN for 15 minutes (423); 10 wrong in a row (lock expiry
+         *     does not reset the count) remove the PIN and notify the user. Unknown users and users
+         *     without a PIN get the same 403 after the same argon2 work, so existence is not leaked.
+         */
+        post: operations["auth_pin_login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/device/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List my pending kiosk sign-in requests
+         * @description Tap-to-approve requests waiting on the caller (signed-in session only).
+         */
+        get: operations["auth_list_requests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/device/requests/{request_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Answer a kiosk sign-in request
+         * @description Approve with the number the user picked (session only). The right number approves; a
+         *     wrong one denies the request and returns 409 `match_code_mismatch`. Another user's request
+         *     is 404. Limited to 20 requests/minute per user.
+         */
+        post: operations["auth_approve_request_match"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/device/requests/{request_id}/deny": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Deny a kiosk sign-in request
+         * @description Deny a pending kiosk sign-in request (session only; another user's is 404).
+         */
+        post: operations["auth_deny_request"];
         delete?: never;
         options?: never;
         head?: never;
@@ -278,6 +390,48 @@ export interface paths {
          *     404 when the code is unknown or expired. Limited to 20 requests/minute per user.
          */
         get: operations["auth_lookup_device_code"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/kiosk-login/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Kiosk sign-in options
+         * @description Which kiosk sign-in methods the admin enabled, and the required PIN length. Needs the
+         *     `device` permission.
+         */
+        get: operations["auth_kiosk_login_config"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/kiosk-login/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List users for kiosk sign-in
+         * @description Users who can sign in at a kiosk (kiosk service users excluded), with whether each has
+         *     a PIN. Needs the `device` permission.
+         */
+        get: operations["auth_kiosk_login_users"];
         put?: never;
         post?: never;
         delete?: never;
@@ -369,6 +523,36 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/me/kiosk-pin": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get my kiosk PIN status
+         * @description Whether PIN sign-in is enabled, the required length, and whether the caller has a PIN
+         *     (signed-in session only).
+         */
+        get: operations["auth_get_kiosk_pin_status"];
+        /**
+         * Set my kiosk PIN
+         * @description Set or replace the caller's kiosk PIN (session only): digits only, exactly the
+         *     configured length (422 otherwise). Resets the failure counters and any lock.
+         */
+        put: operations["auth_set_kiosk_pin"];
+        post?: never;
+        /**
+         * Clear my kiosk PIN
+         * @description Remove the caller's kiosk PIN (session only).
+         */
+        delete: operations["auth_clear_kiosk_pin"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2187,7 +2371,8 @@ export interface paths {
          *
          *     Admin only. Only keys the server knows are accepted. An empty string or
          *     null clears a setting back to its default; sending `*set*` for a secret
-         *     leaves it unchanged. Side effects: invalidates the settings cache, writes
+         *     leaves it unchanged. Changing `kiosk_pin_length` clears every user's kiosk PIN.
+         *     Side effects: invalidates the settings cache, writes
          *     a `settings.update` audit entry and fires the `settings.update` webhook
          *     (listing the changed keys, never values) when anything changed.
          */
@@ -2803,6 +2988,46 @@ export interface components {
              * @example user
              */
             role: string;
+        };
+        /** ApproveRequestBody */
+        ApproveRequestBody: {
+            /**
+             * Client Name
+             * @description Name shown on the user's phone.
+             * @default Kiosk
+             */
+            client_name?: string;
+            /**
+             * User Id
+             * Format: uuid
+             * @description The user to ask for approval.
+             */
+            user_id: string;
+        };
+        /** ApproveRequestResponse */
+        ApproveRequestResponse: {
+            /**
+             * Device Code
+             * @description Secret to poll `POST /auth/device/token` with.
+             */
+            device_code: string;
+            /**
+             * Expires In
+             * @description Seconds until the request expires.
+             * @example 300
+             */
+            expires_in: number;
+            /**
+             * Interval
+             * @description Minimum seconds between token polls.
+             * @example 5
+             */
+            interval: number;
+            /**
+             * Match Code
+             * @description Two-digit number to show on the kiosk (10-99); the user must pick it on their phone.
+             */
+            match_code: number;
         };
         /** AuditEntryResponse */
         AuditEntryResponse: {
@@ -3868,6 +4093,175 @@ export interface components {
              */
             name: string;
         };
+        /** KioskLoginConfig */
+        KioskLoginConfig: {
+            /**
+             * Approve
+             * @description Tap-to-approve sign-in is enabled.
+             */
+            approve: boolean;
+            /**
+             * Pin
+             * @description PIN sign-in is enabled.
+             */
+            pin: boolean;
+            /**
+             * Pin Length
+             * @description Required number of digits in a PIN.
+             * @example 6
+             */
+            pin_length: number;
+        };
+        /** KioskLoginRequestData */
+        KioskLoginRequestData: {
+            /**
+             * Choices
+             * @description Three two-digit numbers; one matches the kiosk.
+             */
+            choices: number[];
+            /** Client Name */
+            client_name: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Id
+             * @description Request id (UUID).
+             */
+            id: string;
+        };
+        /**
+         * KioskLoginRequestMessage
+         * @description `notifications` channel (this user's sockets only): a kiosk asks the user to sign in.
+         */
+        KioskLoginRequestMessage: {
+            data: components["schemas"]["KioskLoginRequestData"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "kiosk_login_request";
+        };
+        /** KioskLoginResolvedData */
+        KioskLoginResolvedData: {
+            /**
+             * Id
+             * @description Request id (UUID).
+             */
+            id: string;
+        };
+        /**
+         * KioskLoginResolvedMessage
+         * @description `notifications` channel: a sign-in request was approved, denied, replaced or expired.
+         */
+        KioskLoginResolvedMessage: {
+            data: components["schemas"]["KioskLoginResolvedData"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "kiosk_login_resolved";
+        };
+        /** KioskLoginUser */
+        KioskLoginUser: {
+            /**
+             * Display Name
+             * @description User display name.
+             */
+            display_name: string;
+            /**
+             * Has Pin
+             * @description The user has set a kiosk PIN.
+             */
+            has_pin: boolean;
+            /**
+             * Id
+             * Format: uuid
+             * @description User id.
+             */
+            id: string;
+        };
+        /** KioskPinClearedData */
+        KioskPinClearedData: {
+            /** Message */
+            message: string;
+        };
+        /**
+         * KioskPinClearedMessage
+         * @description `notifications` channel: the user's kiosk PIN was removed after repeated failures.
+         */
+        KioskPinClearedMessage: {
+            data: components["schemas"]["KioskPinClearedData"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "kiosk_pin_cleared";
+        };
+        /**
+         * KioskPinError
+         * @description Error envelope for PIN sign-in failures, with the extra counters.
+         */
+        KioskPinError: {
+            /**
+             * Code
+             * @description Stable snake_case error code.
+             */
+            code: string;
+            /**
+             * Detail
+             * @description Message written for end users.
+             */
+            detail: string;
+            /**
+             * Errors
+             * @description Per-field errors (validation only).
+             */
+            errors?: components["schemas"]["FieldError"][] | null;
+            /**
+             * Remaining
+             * @description 401: attempts left before lock.
+             */
+            remaining?: number | null;
+            /**
+             * Request Id
+             * @description Correlation id, also in X-Request-ID.
+             */
+            request_id?: string | null;
+            /**
+             * Retry After
+             * @description 423: seconds until the PIN unlocks.
+             */
+            retry_after?: number | null;
+        };
+        /** KioskPinSet */
+        KioskPinSet: {
+            /**
+             * Pin
+             * @description Numeric PIN with exactly `pin_length` digits.
+             */
+            pin: string;
+        };
+        /** KioskPinStatus */
+        KioskPinStatus: {
+            /**
+             * Enabled
+             * @description PIN sign-in is enabled by the admin.
+             */
+            enabled: boolean;
+            /**
+             * Has Pin
+             * @description The caller has a PIN set.
+             */
+            has_pin: boolean;
+            /**
+             * Pin Length
+             * @description Required number of digits.
+             */
+            pin_length: number;
+        };
         /** KioskResponse */
         KioskResponse: {
             /**
@@ -3986,6 +4380,14 @@ export interface components {
              */
             name: string;
         };
+        /** MatchApproveBody */
+        MatchApproveBody: {
+            /**
+             * Match Code
+             * @description The number the user picked.
+             */
+            match_code: number;
+        };
         /** NativeScannerStatus */
         NativeScannerStatus: {
             /**
@@ -4082,6 +4484,51 @@ export interface components {
              * @description Total matching rows ignoring limit/offset.
              */
             total: number;
+        };
+        /** PendingRequest */
+        PendingRequest: {
+            /**
+             * Choices
+             * @description Three two-digit numbers; one matches the kiosk.
+             */
+            choices: number[];
+            /**
+             * Client Name
+             * @description Requesting kiosk's name.
+             */
+            client_name: string;
+            /**
+             * Expires At
+             * Format: date-time
+             * @description When the request expires.
+             */
+            expires_at: string;
+            /**
+             * Id
+             * Format: uuid
+             * @description Request id.
+             */
+            id: string;
+        };
+        /** PinLoginRequest */
+        PinLoginRequest: {
+            /**
+             * Client Name
+             * @description Kiosk name for the audit log and token name.
+             * @default Kiosk
+             */
+            client_name?: string;
+            /**
+             * Pin
+             * @description The user's kiosk PIN.
+             */
+            pin: string;
+            /**
+             * User Id
+             * Format: uuid
+             * @description The user signing in.
+             */
+            user_id: string;
         };
         /** PrintDeleteData */
         PrintDeleteData: {
@@ -6786,6 +7233,77 @@ export interface operations {
             };
         };
     };
+    auth_approve_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveRequestBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApproveRequestResponse"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     auth_request_device_code: {
         parameters: {
             query?: never;
@@ -6827,6 +7345,286 @@ export interface operations {
                 };
             };
             /** @description Request validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    auth_pin_login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PinLoginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceTokenResponse"];
+                };
+            };
+            /** @description Wrong PIN; `remaining` attempts left. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KioskPinError"];
+                };
+            };
+            /** @description PIN sign-in disabled, or the user is unknown or has no PIN. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description PIN locked; `retry_after` seconds (also the Retry-After header). */
+            423: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KioskPinError"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    auth_list_requests: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PendingRequest"][];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    auth_approve_request_match: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MatchApproveBody"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceApproveResponse"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicts with the current state of the resource. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    auth_deny_request: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeviceApproveResponse"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflicts with the current state of the resource. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -6968,6 +7766,104 @@ export interface operations {
             };
             /** @description Validation Error */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    auth_kiosk_login_config: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KioskLoginConfig"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    auth_kiosk_login_users: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KioskLoginUser"][];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7157,6 +8053,166 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    auth_get_kiosk_pin_status: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KioskPinStatus"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    auth_set_kiosk_pin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KioskPinSet"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description Not authenticated. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Authenticated but lacking the required role or permission. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Request validation failed. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Too many requests. */
+            429: {
+                headers: {
+                    /** @description Seconds to wait before retrying. */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    auth_clear_kiosk_pin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
                 };
             };
             /** @description Not authenticated. */

@@ -281,6 +281,66 @@
         "title": "AdminUserResponse",
         "type": "object"
       },
+      "ApproveRequestBody": {
+        "properties": {
+          "client_name": {
+            "default": "Kiosk",
+            "description": "Name shown on the user's phone.",
+            "maxLength": 64,
+            "title": "Client Name",
+            "type": "string"
+          },
+          "user_id": {
+            "description": "The user to ask for approval.",
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id"
+        ],
+        "title": "ApproveRequestBody",
+        "type": "object"
+      },
+      "ApproveRequestResponse": {
+        "properties": {
+          "device_code": {
+            "description": "Secret to poll `POST /auth/device/token` with.",
+            "title": "Device Code",
+            "type": "string"
+          },
+          "expires_in": {
+            "description": "Seconds until the request expires.",
+            "examples": [
+              300
+            ],
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "interval": {
+            "description": "Minimum seconds between token polls.",
+            "examples": [
+              5
+            ],
+            "title": "Interval",
+            "type": "integer"
+          },
+          "match_code": {
+            "description": "Two-digit number to show on the kiosk (10-99); the user must pick it on their phone.",
+            "title": "Match Code",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "device_code",
+          "match_code",
+          "expires_in",
+          "interval"
+        ],
+        "title": "ApproveRequestResponse",
+        "type": "object"
+      },
       "AuditEntryResponse": {
         "properties": {
           "action": {
@@ -2152,6 +2212,293 @@
         "title": "KioskCreate",
         "type": "object"
       },
+      "KioskLoginConfig": {
+        "properties": {
+          "approve": {
+            "description": "Tap-to-approve sign-in is enabled.",
+            "title": "Approve",
+            "type": "boolean"
+          },
+          "pin": {
+            "description": "PIN sign-in is enabled.",
+            "title": "Pin",
+            "type": "boolean"
+          },
+          "pin_length": {
+            "description": "Required number of digits in a PIN.",
+            "examples": [
+              6
+            ],
+            "title": "Pin Length",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "approve",
+          "pin",
+          "pin_length"
+        ],
+        "title": "KioskLoginConfig",
+        "type": "object"
+      },
+      "KioskLoginRequestData": {
+        "properties": {
+          "choices": {
+            "description": "Three two-digit numbers; one matches the kiosk.",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "client_name": {
+            "title": "Client Name",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "description": "Request id (UUID).",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "client_name",
+          "choices",
+          "expires_at"
+        ],
+        "title": "KioskLoginRequestData",
+        "type": "object"
+      },
+      "KioskLoginRequestMessage": {
+        "description": "`notifications` channel (this user's sockets only): a kiosk asks the user to sign in.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/KioskLoginRequestData"
+          },
+          "type": {
+            "const": "kiosk_login_request",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "data"
+        ],
+        "title": "KioskLoginRequestMessage",
+        "type": "object"
+      },
+      "KioskLoginResolvedData": {
+        "properties": {
+          "id": {
+            "description": "Request id (UUID).",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "KioskLoginResolvedData",
+        "type": "object"
+      },
+      "KioskLoginResolvedMessage": {
+        "description": "`notifications` channel: a sign-in request was approved, denied, replaced or expired.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/KioskLoginResolvedData"
+          },
+          "type": {
+            "const": "kiosk_login_resolved",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "data"
+        ],
+        "title": "KioskLoginResolvedMessage",
+        "type": "object"
+      },
+      "KioskLoginUser": {
+        "properties": {
+          "display_name": {
+            "description": "User display name.",
+            "title": "Display Name",
+            "type": "string"
+          },
+          "has_pin": {
+            "description": "The user has set a kiosk PIN.",
+            "title": "Has Pin",
+            "type": "boolean"
+          },
+          "id": {
+            "description": "User id.",
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "display_name",
+          "has_pin"
+        ],
+        "title": "KioskLoginUser",
+        "type": "object"
+      },
+      "KioskPinClearedData": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "KioskPinClearedData",
+        "type": "object"
+      },
+      "KioskPinClearedMessage": {
+        "description": "`notifications` channel: the user's kiosk PIN was removed after repeated failures.",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/KioskPinClearedData"
+          },
+          "type": {
+            "const": "kiosk_pin_cleared",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "data"
+        ],
+        "title": "KioskPinClearedMessage",
+        "type": "object"
+      },
+      "KioskPinError": {
+        "description": "Error envelope for PIN sign-in failures, with the extra counters.",
+        "properties": {
+          "code": {
+            "description": "Stable snake_case error code.",
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "description": "Message written for end users.",
+            "title": "Detail",
+            "type": "string"
+          },
+          "errors": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/FieldError"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Per-field errors (validation only).",
+            "title": "Errors"
+          },
+          "remaining": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "401: attempts left before lock.",
+            "title": "Remaining"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Correlation id, also in X-Request-ID.",
+            "title": "Request Id"
+          },
+          "retry_after": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "423: seconds until the PIN unlocks.",
+            "title": "Retry After"
+          }
+        },
+        "required": [
+          "detail",
+          "code"
+        ],
+        "title": "KioskPinError",
+        "type": "object"
+      },
+      "KioskPinSet": {
+        "properties": {
+          "pin": {
+            "description": "Numeric PIN with exactly `pin_length` digits.",
+            "maxLength": 32,
+            "title": "Pin",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pin"
+        ],
+        "title": "KioskPinSet",
+        "type": "object"
+      },
+      "KioskPinStatus": {
+        "properties": {
+          "enabled": {
+            "description": "PIN sign-in is enabled by the admin.",
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "has_pin": {
+            "description": "The caller has a PIN set.",
+            "title": "Has Pin",
+            "type": "boolean"
+          },
+          "pin_length": {
+            "description": "Required number of digits.",
+            "title": "Pin Length",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "enabled",
+          "pin_length",
+          "has_pin"
+        ],
+        "title": "KioskPinStatus",
+        "type": "object"
+      },
       "KioskResponse": {
         "properties": {
           "created_at": {
@@ -2360,6 +2707,20 @@
         "title": "MarkerLevel",
         "type": "object"
       },
+      "MatchApproveBody": {
+        "properties": {
+          "match_code": {
+            "description": "The number the user picked.",
+            "title": "Match Code",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "match_code"
+        ],
+        "title": "MatchApproveBody",
+        "type": "object"
+      },
       "NativeScannerStatus": {
         "properties": {
           "available": {
@@ -2522,6 +2883,72 @@
           "offset"
         ],
         "title": "Page[ScanResponse]",
+        "type": "object"
+      },
+      "PendingRequest": {
+        "properties": {
+          "choices": {
+            "description": "Three two-digit numbers; one matches the kiosk.",
+            "items": {
+              "type": "integer"
+            },
+            "title": "Choices",
+            "type": "array"
+          },
+          "client_name": {
+            "description": "Requesting kiosk's name.",
+            "title": "Client Name",
+            "type": "string"
+          },
+          "expires_at": {
+            "description": "When the request expires.",
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "description": "Request id.",
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "client_name",
+          "choices",
+          "expires_at"
+        ],
+        "title": "PendingRequest",
+        "type": "object"
+      },
+      "PinLoginRequest": {
+        "properties": {
+          "client_name": {
+            "default": "Kiosk",
+            "description": "Kiosk name for the audit log and token name.",
+            "maxLength": 64,
+            "title": "Client Name",
+            "type": "string"
+          },
+          "pin": {
+            "description": "The user's kiosk PIN.",
+            "maxLength": 32,
+            "title": "Pin",
+            "type": "string"
+          },
+          "user_id": {
+            "description": "The user signing in.",
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "pin"
+        ],
+        "title": "PinLoginRequest",
         "type": "object"
       },
       "PrintDeleteData": {
@@ -7106,6 +7533,104 @@
         ]
       }
     },
+    "/api/v1/auth/device/approve-request": {
+      "post": {
+        "description": "Start a tap-to-approve sign-in for `user_id` (API token with `device` only).\n\nReturns a `device_code` to poll `POST /auth/device/token` with and a two-digit `match_code`\nto show on the kiosk; the user sees three numbers on their phone and must tap that one.\n403 when disabled by the admin, 404 for an unknown user, 429 above 5 requests/minute per\ntoken. A user has one pending request at a time: a new one denies the old.",
+        "operationId": "auth_approve_request",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApproveRequestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated but lacking the required role or permission."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not found."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Ask a user to approve a kiosk sign-in",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/auth/device/code": {
       "post": {
         "description": "Start a device authorization (API token with the `device` permission only; sessions get\n403).\n\nShow `verification_uri_complete` as a QR code and `user_code` as text, then poll\n`POST /auth/device/token` every `interval` seconds. Limited to 10 requests/minute per token.",
@@ -7196,6 +7721,406 @@
           }
         ],
         "summary": "Request a device code",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/device/pin": {
+      "post": {
+        "description": "Exchange a user's kiosk PIN for the same 15-minute token as `POST /auth/device/token`\n(API token with `device` only).\n\n5 wrong PINs lock that user's PIN for 15 minutes (423); 10 wrong in a row (lock expiry\ndoes not reset the count) remove the PIN and notify the user. Unknown users and users\nwithout a PIN get the same 403 after the same argon2 work, so existence is not leaked.",
+        "operationId": "auth_pin_login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PinLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KioskPinError"
+                }
+              }
+            },
+            "description": "Wrong PIN; `remaining` attempts left."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "PIN sign-in disabled, or the user is unknown or has no PIN."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "423": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KioskPinError"
+                }
+              }
+            },
+            "description": "PIN locked; `retry_after` seconds (also the Retry-After header)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Sign in with a kiosk PIN",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/device/requests": {
+      "get": {
+        "description": "Tap-to-approve requests waiting on the caller (signed-in session only).",
+        "operationId": "auth_list_requests",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/PendingRequest"
+                  },
+                  "title": "Response Auth List Requests",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated but lacking the required role or permission."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "List my pending kiosk sign-in requests",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/device/requests/{request_id}/approve": {
+      "post": {
+        "description": "Approve with the number the user picked (session only). The right number approves; a\nwrong one denies the request and returns 409 `match_code_mismatch`. Another user's request\nis 404. Limited to 20 requests/minute per user.",
+        "operationId": "auth_approve_request_match",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MatchApproveBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceApproveResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated but lacking the required role or permission."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflicts with the current state of the resource."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Answer a kiosk sign-in request",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/device/requests/{request_id}/deny": {
+      "post": {
+        "description": "Deny a pending kiosk sign-in request (session only; another user's is 404).",
+        "operationId": "auth_deny_request",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Request Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceApproveResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated but lacking the required role or permission."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Resource not found."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflicts with the current state of the resource."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Deny a kiosk sign-in request",
         "tags": [
           "auth"
         ]
@@ -7393,6 +8318,146 @@
           }
         ],
         "summary": "Look up a device code",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/kiosk-login/config": {
+      "get": {
+        "description": "Which kiosk sign-in methods the admin enabled, and the required PIN length. Needs the\n`device` permission.",
+        "operationId": "auth_kiosk_login_config",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KioskLoginConfig"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated but lacking the required role or permission."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Kiosk sign-in options",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/kiosk-login/users": {
+      "get": {
+        "description": "Users who can sign in at a kiosk (kiosk service users excluded), with whether each has\na PIN. Needs the `device` permission.",
+        "operationId": "auth_kiosk_login_users",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/KioskLoginUser"
+                  },
+                  "title": "Response Auth Kiosk Login Users",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated but lacking the required role or permission."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "List users for kiosk sign-in",
         "tags": [
           "auth"
         ]
@@ -7670,6 +8735,226 @@
           }
         ],
         "summary": "Get the current user",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/me/kiosk-pin": {
+      "delete": {
+        "description": "Remove the caller's kiosk PIN (session only).",
+        "operationId": "auth_clear_kiosk_pin",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated but lacking the required role or permission."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Clear my kiosk PIN",
+        "tags": [
+          "auth"
+        ]
+      },
+      "get": {
+        "description": "Whether PIN sign-in is enabled, the required length, and whether the caller has a PIN\n(signed-in session only).",
+        "operationId": "auth_get_kiosk_pin_status",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KioskPinStatus"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated but lacking the required role or permission."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Get my kiosk PIN status",
+        "tags": [
+          "auth"
+        ]
+      },
+      "put": {
+        "description": "Set or replace the caller's kiosk PIN (session only): digits only, exactly the\nconfigured length (422 otherwise). Resets the failure counters and any lock.",
+        "operationId": "auth_set_kiosk_pin",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KioskPinSet"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OkResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not authenticated."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Authenticated but lacking the required role or permission."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Request validation failed."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          },
+          {
+            "APIKeyCookie": []
+          }
+        ],
+        "summary": "Set my kiosk PIN",
         "tags": [
           "auth"
         ]
@@ -16636,7 +17921,7 @@
         ]
       },
       "put": {
-        "description": "Update one or more settings from a flat key/value object.\n\nAdmin only. Only keys the server knows are accepted. An empty string or\nnull clears a setting back to its default; sending `*set*` for a secret\nleaves it unchanged. Side effects: invalidates the settings cache, writes\na `settings.update` audit entry and fires the `settings.update` webhook\n(listing the changed keys, never values) when anything changed.",
+        "description": "Update one or more settings from a flat key/value object.\n\nAdmin only. Only keys the server knows are accepted. An empty string or\nnull clears a setting back to its default; sending `*set*` for a secret\nleaves it unchanged. Changing `kiosk_pin_length` clears every user's kiosk PIN.\nSide effects: invalidates the settings cache, writes\na `settings.update` audit entry and fires the `settings.update` webhook\n(listing the changed keys, never values) when anything changed.",
         "operationId": "settings_update_settings",
         "requestBody": {
           "content": {
