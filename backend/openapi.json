@@ -246,6 +246,22 @@
             "title": "Id",
             "type": "string"
           },
+          "is_active": {
+            "description": "False blocks all sign-in and API access.",
+            "examples": [
+              true
+            ],
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "kiosk_enabled": {
+            "description": "Whether the user may sign in at a kiosk.",
+            "examples": [
+              true
+            ],
+            "title": "Kiosk Enabled",
+            "type": "boolean"
+          },
           "last_login": {
             "anyOf": [
               {
@@ -275,6 +291,8 @@
           "email",
           "display_name",
           "role",
+          "is_active",
+          "kiosk_enabled",
           "created_at",
           "last_login"
         ],
@@ -6053,8 +6071,24 @@
             "title": "Id",
             "type": "string"
           },
+          "is_active": {
+            "description": "Whether the user is active.",
+            "examples": [
+              true
+            ],
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "kiosk_enabled": {
+            "description": "Whether kiosk sign-in is allowed.",
+            "examples": [
+              true
+            ],
+            "title": "Kiosk Enabled",
+            "type": "boolean"
+          },
           "role": {
-            "description": "The user's new role.",
+            "description": "The user's role.",
             "examples": [
               "admin"
             ],
@@ -6064,26 +6098,56 @@
         },
         "required": [
           "id",
-          "role"
+          "role",
+          "is_active",
+          "kiosk_enabled"
         ],
         "title": "UserRoleResult",
         "type": "object"
       },
       "UserRoleUpdate": {
         "properties": {
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Activate or deactivate the user.",
+            "title": "Is Active"
+          },
+          "kiosk_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Allow or forbid kiosk sign-in.",
+            "title": "Kiosk Enabled"
+          },
           "role": {
+            "anyOf": [
+              {
+                "pattern": "^(user|admin)$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "description": "New role.",
             "examples": [
               "admin"
             ],
-            "pattern": "^(user|admin)$",
-            "title": "Role",
-            "type": "string"
+            "title": "Role"
           }
         },
-        "required": [
-          "role"
-        ],
         "title": "UserRoleUpdate",
         "type": "object"
       },
@@ -7256,7 +7320,7 @@
         ]
       },
       "patch": {
-        "description": "Set a user's role to `user` or `admin` (admin only). 400 when targeting yourself.",
+        "description": "Change a user's `role`, `is_active` and/or `kiosk_enabled` (admin only; omitted fields are\nunchanged). 400 when changing your own role or deactivating yourself, 409 when it would\ndeactivate the last active admin. Deactivating a user also denies their pending kiosk\nsign-in requests and blocks every session, token and WebSocket of theirs.",
         "operationId": "admin_update_user_role",
         "parameters": [
           {
@@ -7331,6 +7395,16 @@
             },
             "description": "Resource not found."
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Conflicts with the current state of the resource."
+          },
           "422": {
             "content": {
               "application/json": {
@@ -7368,7 +7442,7 @@
             "APIKeyCookie": []
           }
         ],
-        "summary": "Change a user's role",
+        "summary": "Update a user",
         "tags": [
           "admin"
         ]
@@ -7399,6 +7473,16 @@
               }
             },
             "description": "Not authenticated or invalid credentials."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The account is deactivated."
           },
           "429": {
             "content": {
@@ -8506,7 +8590,7 @@
                 }
               }
             },
-            "description": "Local login is disabled."
+            "description": "Local login is disabled, or the account is deactivated."
           },
           "422": {
             "content": {

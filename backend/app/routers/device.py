@@ -288,6 +288,12 @@ async def approve_request_match(
     _require_session(request)
     _limit(_approve_limiter, str(user.id), 20)
     row = await _own_pending(db, user, request_id)
+    if await kl.get_eligible_user(db, user.id) is None:
+        # Kiosk sign-in was switched off for this user after the request was made.
+        await _decide(db, row, user, False)
+        await db.commit()
+        await kl.notify(user.id, "kiosk_login_resolved", {"id": str(row.id)})
+        raise NotFoundError("Request not found or expired")
     ok = data.match_code == row.match_code
     await _decide(db, row, user, ok)
     await db.commit()
@@ -604,7 +610,12 @@ async def poll_device_token(
         await db.rollback()
         raise DeviceGrantError("invalid_grant", "Invalid device code")
     approved_user_id, client_name = claimed_row
-    owner = (await db.execute(select(User).where(User.id == approved_user_id))).scalar_one()
+    owner = await kl.get_eligible_user(db, approved_user_id)
+    if owner is None:
+        # Deactivated or kiosk sign-in switched off since approval: never mint.
+        row.status = "denied"
+        await db.commit()
+        raise DeviceGrantError("access_denied", "The request was denied")
 
     out = await _mint_token(db, owner, client_name, row.id, now)
     await db.commit()

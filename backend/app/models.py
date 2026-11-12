@@ -12,6 +12,7 @@ from sqlalchemy import (
     Text,
     func,
     text,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -36,6 +37,14 @@ class User(Base):
     last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Kiosk PIN sign-in (migration 019). `kiosk_pin_failures` counts since the last lock,
     # `kiosk_pin_consecutive_failures` since the last success (lock expiry doesn't reset it).
+    # Admin-controlled flags (migration 020): an inactive user is fully blocked; kiosk_enabled
+    # gates kiosk sign-in (tap-to-approve, PIN, device-grant token mint).
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
+    kiosk_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=true()
+    )
     kiosk_pin_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     kiosk_pin_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     kiosk_pin_consecutive_failures: Mapped[int] = mapped_column(

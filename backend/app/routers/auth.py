@@ -108,7 +108,8 @@ async def get_providers(db: AsyncSession = Depends(get_db)) -> dict:
     "/local-login",
     summary="Log in with username and password",
     response_model=LoginResponse,
-    responses=std_responses(_UNAUTH, RATE_LIMITED, error_group(403, "Local login is disabled.")),
+    responses=std_responses(_UNAUTH, RATE_LIMITED, error_group(
+        403, "Local login is disabled, or the account is deactivated.")),
 )
 async def local_login(
     body: LocalLoginRequest,
@@ -158,6 +159,13 @@ async def local_login(
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
     _login_throttle.reset(throttle_key)
+
+    # After the password check so a bad password never reveals the account state.
+    if not user.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail="This account has been deactivated. Contact an administrator.",
+        )
 
     # Rehash if needed (argon2-cffi best practice)
     if _ph.check_needs_rehash(user.password_hash):
@@ -242,6 +250,7 @@ async def oidc_login(
         {302: {"description": "Signed in; redirect to the original page (or /).",
             "headers": _REDIRECT_HDR}},
         _UNAUTH,
+        error_group(403, "The account is deactivated."),
     ),
 )
 async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
@@ -276,6 +285,12 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db)):
         if isinstance(groups, str):
             groups = [groups]
         role = "admin" if admin_group in groups else "user"
+
+    if user is not None and not user.is_active:
+        raise HTTPException(
+            status_code=403,
+            detail="This account has been deactivated. Contact an administrator.",
+        )
 
     if user is None:
         user = User(

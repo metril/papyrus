@@ -26,9 +26,12 @@ async def pin_length(db: AsyncSession) -> int:
 
 
 def eligible_users():
-    """Users who may sign in at a kiosk: everyone except kiosk service users (the User model
-    has no separate active flag)."""
-    return select(User).where(User.id.notin_(select(Kiosk.service_user_id)))
+    """Users who may sign in at a kiosk: active, kiosk-enabled, and not a kiosk service user."""
+    return select(User).where(
+        User.is_active.is_(True),
+        User.kiosk_enabled.is_(True),
+        User.id.notin_(select(Kiosk.service_user_id)),
+    )
 
 
 async def get_eligible_user(db: AsyncSession, user_id: uuid.UUID, lock: bool = False):

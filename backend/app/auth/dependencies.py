@@ -81,6 +81,11 @@ async def get_current_user(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token user not found",
             )
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="This account has been deactivated",
+            )
         # Attach token permissions to request state for downstream checks
         request.state.token_permissions = token.permissions
         request.state.token_id = token.id
@@ -97,7 +102,7 @@ async def get_current_user(
         if session_uuid is not None:
             result = await db.execute(select(User).where(User.id == session_uuid))
             user = result.scalar_one_or_none()
-            if user:
+            if user and user.is_active:
                 request.state.token_permissions = None  # Full access via session
                 request.state.token_id = None
                 return user
